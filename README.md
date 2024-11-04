@@ -6,27 +6,29 @@ a self-hosted version of [postbaby.org](https://www.postbaby.org)
 
 This was created out of necessity for a sticky-note solution which would facilitate rapid arrangement, editing, and color-coding - with low workflow friction, thanks to its intuitive key-bindings.
 
-- Works equally well on both, landscape, portrait-oriented monitors, and mobile devices.
-- This app's data lives solely on your browser's localstorage. Please keep this in mind, before clearing your browser's cache.
-- This distribution has everything the [postbaby.org](https://www.postbaby.org) has, except the multiple **tabs** feature.
+🖼️ Works equally well on both, landscape, portrait-oriented monitors, and mobile devices.
+
+💻 This app's data lives solely on your browser's localstorage - While this makes data retrieval very fast, please be aware of this, if you decide to clear your browser's cache.
+
+❓ This distribution has everything the [postbaby.org](https://www.postbaby.org) has, except the multiple **tabs** feature.
 
 # Install
-- Clone the repository, and simply open index.html in a browser. No web-server required.
+- Clone the repository, and simply open `index.html` in a browser. No web-server required.
 
 # Desktop Usage Instructions
-- Right-click on blank canvas or press 'N' to create a new item.
-- Right-click on an existing item (or tab) to delete it, or drag item to toilet roll to delete.
-- Left-click on an existing item (or tab) to cycle through its colors.
-- Double-click on an existing item (or tab) to edit its text.
-- Press 'C' to clear all items in current tab.
-- Press 'CTRL + C' to clear all tabs.
-- Press the 'ESC' or the 'TAB' key to stop editing an item.
-- Press 'CTRL + ALT + H' to re-enable first-time-run flag, and re-populate welcome items.
+- `Right-click` on blank canvas or press `n` to create a new item.
+- `Right-click` on an existing item (or tab) to delete it, or drag item to toilet roll to delete.
+- `Left-click` on an existing item (or tab) to cycle through its colors.
+- `Double-click` on an existing item (or tab) to edit its text.
+- Press `c` to clear all items in current tab.
+- Press `CTRL + c` to clear all tabs.
+- Press the `ESC` or the `TAB` key to stop editing an item.
+- Press `CTRL + ALT + H` to re-enable first-time-run flag, and re-populate welcome items.
 
 # Mobile Usage Instructions
-- Long-press to create new item.
-- Long-press an existing item (or tab) to delete it.
-- Double tap to edit an existing item (or tab) text.
+- `Long-press` to create new item.
+- `Long-press` an existing item (or tab) to delete it.
+- `Double tap` to edit an existing item (or tab) text.
 - All keyboard shortcuts should work on a mobile device, if connected to a physical keyboard.
 
 # License
