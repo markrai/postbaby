@@ -1,0 +1,411 @@
+@font-face {
+    font-family: 'CherryBombOne';
+    src: url('cherrybombone.ttf') format('truetype');
+}
+
+
+@font-face {
+    font-family: 'Kalam';
+    src: url('kalam.ttf') format('truetype');
+}
+
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+
+#websiteGrid {
+    position: relative;
+    width: 80%;
+    height: 80vh;
+}
+
+/* Base style */
+.logo-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+    margin-top: auto;
+}
+
+/* Portrait Mode */
+@media (orientation: portrait) {
+    .logo-container {
+        margin-top: 50%;
+    }
+
+
+    .grid-item {
+        max-height: autopx;
+
+    }
+
+    .grid-item.editing {
+        max-height: 100px;
+        /* Limit the height when editing */
+        overflow: hidden;
+        /* Hide any overflow content */
+    }
+
+    .edit-textarea {
+        max-height: 200px;
+        /* Ensure textarea doesn't exceed grid-item's max-height */
+        overflow: auto;
+    }
+}
+
+/* Landscape Mode */
+@media (orientation: landscape) {
+    .logo-container {
+        margin-top: 5%;
+    }
+}
+
+
+
+
+.logo {
+    width: 600px;
+    height: auto;
+    margin: 0 auto;
+    /* Center horizontally */
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    pointer-events: none;
+    -webkit-user-drag: none;
+    -khtml-user-drag: none;
+    -moz-user-drag: none;
+    -o-user-drag: none;
+}
+
+html {
+    overflow: hidden
+}
+
+
+body {
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    margin: 0;
+    background-color: #ecede8;
+    font-family: Arial, sans-serif;
+    padding: 20px;
+    box-sizing: border-box;
+}
+
+.grid-container {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    grid-gap: 10px;
+    width: 80%;
+}
+
+
+.grid-item {
+    background-color: #4CAF50;
+    color: white;
+    border-radius: 15px;
+    padding: 20px;
+    text-align: center;
+    box-shadow: 0 4px 8px 0 rgba(0, 0, 0, 0.2), 0 6px 20px 0 rgba(0, 0, 0, 0.19);
+    box-sizing: border-box;
+    /* Add this to ensure padding is included in width and height */
+    max-height: auto;
+    /* Prevent the grid item from expanding excessively */
+    cursor: pointer;
+}
+
+.grid-item a {
+    color: black;
+    text-decoration: none;
+}
+
+.edit-textarea {
+    font-size: 16px;
+    padding: 10px;
+    border-radius: 10px;
+    border: 1px solid #ccc;
+    box-sizing: border-box;
+    resize: none;
+    width: 100%;
+    height: auto;
+    min-height: 40px;
+    max-height: 200px;
+    overflow: auto;
+}
+
+
+
+h1 {
+    font-family: 'CherryBombOne', Arial, sans-serif;
+    font-size: 100px;
+    color: #464444;
+}
+
+
+.version {
+    position: fixed;
+    bottom: 10px;
+    right: 10px;
+    color: rgb(164, 161, 161);
+    font-size: 15px;
+    opacity: 0.8;
+    font-family: 'Comfortaa', sans-serif;
+    z-index: -1;
+}
+
+.desktop-shortcuts {
+    position: fixed;
+    bottom: 10px;
+    left: 10px;
+    color: rgb(164, 161, 161);
+    font-size: 18px;
+    opacity: 0.8;
+    font-family: 'Kalam', sans-serif;
+    z-index: -1;
+}
+
+
+.mobile-shortcuts {
+    display: none;
+    position: fixed;
+    bottom: 10px;
+    left: 10px;
+    color: rgb(164, 161, 161);
+    font-size: 18px;
+    opacity: 0.8;
+    font-family: 'Kalam', sans-serif;
+    z-index: -1;
+}
+
+
+#addItemButton {
+    display: none;
+    /* Hide the button by default (desktop view) */
+    padding: 10px 20px;
+    font-size: 16px;
+    border: none;
+    border-radius: 5px;
+    background-color: #000000;
+    color: white;
+    cursor: pointer;
+    margin-bottom: 20px;
+}
+
+#addItemButton:hover {
+    background-color: #ffffff;
+    color: black;
+}
+
+/* The Modal (background) */
+.modal {
+    display: none;
+    /* Hidden by default */
+    position: fixed;
+    /* Stay in place */
+    z-index: 1000;
+    /* Sit on top */
+    left: 0;
+    top: 0;
+    width: 100%;
+    /* Full width */
+    height: 100%;
+    /* Full height */
+    background-color: rgba(0, 0, 0, 0.5);
+    /* Black with opacity */
+    justify-content: center;
+    align-items: center;
+}
+
+/* Modal Content Box */
+.modal-content {
+    background-color: #f9f9f9;
+    border-radius: 10px;
+    padding: 20px;
+    text-align: center;
+    width: 80%;
+    max-width: 400px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2), 0 6px 20px rgba(0, 0, 0, 0.19);
+}
+
+/* Modal Buttons */
+.modal-button {
+    background-color: #4CAF50;
+    /* Your existing button color */
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    font-size: 16px;
+    margin: 10px;
+    cursor: pointer;
+}
+
+.modal-button:hover {
+    background-color: #45a049;
+}
+
+/* Cancel Button */
+#cancelDelete {
+    background-color: #f44336;
+    /* Red for cancel */
+}
+
+#cancelDelete:hover {
+    background-color: #d32f2f;
+}
+
+
+.trash {
+    position: fixed;
+    bottom: 10px;
+    right: 10px;
+    color: rgb(164, 161, 161);
+    font-size: 15px;
+    opacity: 0.8;
+    z-index: 1000;
+    font-family: 'Comfortaa', sans-serif;
+    transition: transform 0.2s, opacity 0.2s;
+    pointer-events: none;
+    width: 150px;
+    height: 150px
+}
+
+
+.trash.active {
+    transform: scale(1.2);
+    opacity: 1;
+    pointer-events: auto;
+    cursor: pointer;
+}
+
+
+.grid-item span {
+    white-space: pre-wrap;
+}
+
+
+
+/* Media Query for Mobile (screen width less than 768px) */
+@media (max-width: 768px) {
+
+
+    @media (max-width: 480px) {
+        .grid-container {
+            grid-template-columns: 1fr 1fr;
+        }
+    }
+
+    #websiteGrid {
+        position: relative;
+        width: 90%;
+        height: auto;
+        /* Let the height adjust based on content */
+        align-self: flex-start;
+        margin-top: 20px;
+        /* Optional: Add a small margin if needed */
+    }
+
+
+
+    .desktop-shortcuts {
+        display: none;
+    }
+
+    .mobile-shortcuts {
+        display: block;
+        position: fixed;
+        bottom: 10px;
+        left: 10px;
+        color: rgb(164, 161, 161);
+        font-size: 12px;
+        opacity: 0.8;
+        font-family: 'Kalam', sans-serif;
+        z-index: -1;
+    }
+
+    .logo-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        width: 100%;
+        /* margin-top: 150%; Remove this line */
+        margin-top: 20px;
+        /* Adjust spacing as needed */
+    }
+
+    .logo {
+        max-width: 80%;
+        height: auto;
+        margin: 0 auto;
+    }
+
+
+    .trash {
+        display: none;
+        
+        width: 50px;
+        /* Set desired width for mobile view */
+        height: auto;
+        /* Maintains aspect ratio */
+        position: fixed;
+        /* Ensures it's fixed at the bottom right */
+        right: 10px;
+        /* Adjusts horizontal positioning */
+        bottom: 20px;
+        /* Adjusts vertical positioning */
+        z-index: 1000;
+        /* Ensures visibility on top of other elements */
+        pointer-events: none;
+        /* Allows items to be dragged over it */
+    }
+
+    .trash.active {
+        transform: scale(1.5);
+        opacity: 1;
+        pointer-events: auto;
+        cursor: pointer;
+    }
+
+
+    .grid-container {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        grid-gap: 10px;
+        width: 80%;
+        position: relative;
+    }
+
+    .grid-item {
+        padding: 15px;
+        /* Adjust padding for smaller screens */
+        font-size: 16px;
+    }
+
+    .version {
+        font-size: 10px;
+    }
+
+
+    .modal,
+    .modal * {
+        -webkit-user-select: none;
+        /* Safari */
+        -moz-user-select: none;
+        /* Firefox */
+        -ms-user-select: none;
+        /* IE10+/Edge */
+        user-select: none;
+        /* Standard */
+    }
+}
