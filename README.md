@@ -1,4 +1,7 @@
-# Postbaby (self-hosted)
+
+![postbabygithubtitle](https://github.com/user-attachments/assets/29979323-15ae-4324-817e-f89571606655)
+
+
 a self-hosted version of [postbaby.org](https://www.postbaby.org)
 
 This was created out of necessity for a sticky-note solution which would facilitate rapid arrangement, editing, and color-coding - with low workflow friction, thanks to its intuitive key-bindings.
