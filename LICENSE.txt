@@ -1,0 +1,19 @@
+Home Use License
+
+Copyright (c) [2024] [Mark Rai / Tenacity DC]
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to use the Software solely for personal, non-commercial home use, subject to the following conditions:
+
+Terms and Conditions
+
+Home Use Only: This license permits the use of the Software exclusively for personal activities within a home setting. Any use of the Software outside of a personal home environment, such as in workplaces, institutions, or any public or commercial context, is strictly prohibited.
+
+Modification: You may modify the Software for personal home use, but any modified versions are still subject to this license and cannot be used outside a home setting or for any commercial purposes.
+
+Redistribution: Redistribution of the Software or any derivative works is permitted only if it remains under this Personal Use License, with appropriate credit given to the original author(s). Redistribution for any commercial purpose is strictly prohibited.
+
+Attribution: Any copy of the Software or modified version must include the original copyright notice and this license.
+
+No Warranty: THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+By using this Software, you agree to the terms and conditions outlined in this Personal Use License.

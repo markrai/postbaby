@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+
+<title>postbaby</title>
+<link rel="icon" type="image/x-icon" href="favicon.ico">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" type="text/css" href="style.css">
+
+<meta property="og:title" content="postbaby">
+<meta property="og:description" content="Easily create, edit, and manage items with shortcuts for quick actions!">
+<meta property="og:image" content="https://www.postbaby.org/logotext.png">
+<meta property="og:url" content="https://www.postbaby.org/">
+<meta property="og:type" content="website">
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="postbaby">
+<meta name="twitter:description" content="Easily create, edit, and manage items with shortcuts for quick actions!">
+<meta name="twitter:image" content="https://www.postbaby.org/logotext.png">
+
+<body>
+    <div class="logo-container">
+        <img src="logotext.png" alt="logo" class="logo" draggable="false">
+    </div>
+
+    <button id="addItemButton">Add Item</button>
+    <div class="grid-container" id="websiteGrid">
+    </div>
+
+    <div class="version">
+        <br> v1.35
+    </div>
+
+    <div class="desktop-shortcuts">
+        <br>
+        create new: n or <i>right-click on canvas</i>
+        <br>
+        change color: <i>single-click item</i>
+        <br>
+        edit item: <i>double-click item</i>
+        <br>
+        delete item: <i>right-click item or drag to toilet-roll</i>
+        <br>
+        clear everything: <i>c</i>
+    </div>
+
+
+    <div class="mobile-shortcuts">
+        <br>
+        create new: <i> long-press on canvas</i>
+        <br>
+        edit item: <i> double-tap on item</i>
+        <br>
+        delete item:<i> long-press on item</i>
+        <br>
+    </div>
+
+    <div id="confirmModal" class="modal">
+        <div class="modal-content">
+            <p>Are you sure you want to delete all items? This action cannot be undone.</p>
+            <button id="confirmDelete" class="modal-button">Yes, Delete</button>
+            <button id="cancelDelete" class="modal-button">Cancel</button>
+        </div>
+    </div>
+    <img src="tp.png" alt="trash" id="trash" class="trash" draggable="false">
+    <script src="script.js"></script>
+    <script src="strings.js"></script>
+</body>
+</html>
