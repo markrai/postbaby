@@ -1,4 +1,4 @@
-# postbaby (self-hosted)
+# Postbaby (self-hosted)
 a self-hosted version of [postbaby.org](https://www.postbaby.org)
 
 This was created out of necessity for a sticky-note solution which would facilitate rapid arrangement, editing, and color-coding - with low workflow friction, thanks to its intuitive key-bindings.
@@ -8,7 +8,7 @@ This was created out of necessity for a sticky-note solution which would facilit
 - This distribution has everything the [postbaby.org](https://www.postbaby.org) has, except the multiple **tabs** feature.
 
 # Install
-- Clone the repository, and simly open index.html in a browser. No web-server required.
+- Clone the repository, and simply open index.html in a browser. No web-server required.
 
 # Desktop Usage Instructions
 - Right-click on blank canvas or press 'N' to create a new item.

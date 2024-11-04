@@ -1,4 +1,4 @@
-Home Use License
+Personal Home Use License
 
 Copyright (c) [2024] [Mark Rai / Tenacity DC]
 
@@ -16,4 +16,4 @@ Attribution: Any copy of the Software or modified version must include the origi
 
 No Warranty: THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-By using this Software, you agree to the terms and conditions outlined in this Personal Use License.
+By using this Software, you agree to the terms and conditions outlined in this Personal Home Use License.
