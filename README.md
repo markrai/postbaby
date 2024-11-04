@@ -1,4 +1,4 @@
-# postbaby (self-hosted)
+# Postbaby (self-hosted)
 a self-hosted version of [postbaby.org](https://www.postbaby.org)
 
 This was created out of necessity for a sticky-note solution which would facilitate rapid arrangement, editing, and color-coding - with low workflow friction, thanks to its intuitive key-bindings.
