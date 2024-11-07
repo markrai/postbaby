@@ -29,6 +29,7 @@ This was created out of necessity for a sticky-note solution with rapid arrangem
 - `Long-press` to create new item.
 - `Long-press` an existing item (or tab) to delete it.
 - `Double tap` to edit an existing item (or tab) text.
+- `Single tap` an existing item (or tab) to change its color.
 - All keyboard shortcuts should work on a mobile device, if connected to a physical keyboard.
 
 # License
