@@ -24,6 +24,7 @@ This was created out of necessity for a sticky-note solution with rapid arrangem
 - Press `CTRL + c` to clear all tabs.
 - Press the `ESC` or the `TAB` key to stop editing an item.
 - Press `CTRL + ALT + H` to re-enable first-time-run flag, and re-populate welcome items.
+- Press keys `1-9` to jump to corresponding tab.
 
 # 📱 Mobile Usage Instructions
 - `Long-press` to create new item.
