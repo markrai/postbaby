@@ -10,7 +10,7 @@ This was created out of necessity for a sticky-note solution with rapid arrangem
 
 💻 This app's data lives solely on your browser's localstorage - While this makes data retrieval very fast, please be aware of this, if you decide to clear your browser's cache.
 
-❓ This distribution has everything the [postbaby.org](https://www.postbaby.org) has, except the multiple **tabs** feature.
+❓ This distribution (v1.35) has everything the [postbaby.org](https://www.postbaby.org) (v1.5) has, except the multiple **tabs** and **grids** features.
 
 # ⚡Install
 - Clone the repository, and simply open `index.html` in a browser. No web-server required.
@@ -38,11 +38,11 @@ Please see the accompanying LICENSE document contained within this repository.
 
 # 🔮 Future Plans
 - Multiple Selection
-- Grids
 - OAuth
 
-# 🙏🏼 Donate
-❤️ it? Buy me a [☕](https://buymeacoffee.com/markrai) 
+# 🧑🏻 Social & Donate
+- Official forum: https://www.reddit.com/r/postbaby/
+- ❤️ it? Buy me a [☕](https://buymeacoffee.com/markrai) 
 
 ![image](https://github.com/user-attachments/assets/e6327d1f-15db-467c-ad9d-ab6af0bc2666)
 ![image](https://github.com/user-attachments/assets/00195e6b-11f9-40cb-93c9-20ed2917a6b3)
