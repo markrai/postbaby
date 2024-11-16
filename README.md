@@ -10,7 +10,7 @@ This was created out of necessity for a sticky-note solution with rapid arrangem
 
 💻 This app's data lives solely on your browser's localstorage - While this makes data retrieval very fast, please be aware of this, if you decide to clear your browser's cache.
 
-❓ This distribution (v1.35) has everything the [postbaby.org](https://www.postbaby.org) (v1.51) has, except the multiple **tabs** and **grids** features.
+❓ This distribution (v1.35) has everything the [postbaby.org](https://www.postbaby.org) (v1.52) has, except the multiple **tabs** and **grids** features.
 
 # ⚡Install
 - Clone the repository, and simply open `index.html` in a browser. No web-server required.
@@ -32,6 +32,10 @@ This was created out of necessity for a sticky-note solution with rapid arrangem
 - `Double tap` to edit an existing item (or tab) text.
 - `Single tap` an existing item (or tab) to change its color.
 - All desktop keyboard shortcuts should work on a mobile device, if connected to a physical keyboard.
+
+# 🐛 Known Issues
+- In mobile view, dragging a note to the trash element does not invoke deletion (11/16/2024)
+- Some iOS users have complained that long-press on mobile does not invoke the creation of a new item. (11/16/2024)
 
 # 📜 License
 Please see the accompanying LICENSE document contained within this repository.
