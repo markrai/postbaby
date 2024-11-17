@@ -35,7 +35,7 @@ This was created out of necessity for a sticky-note solution with rapid arrangem
 
 # 🐛 Known Issues
 - In mobile view, dragging a note to the trash element does not invoke deletion (11/16/2024)
-- Some iOS users have complained that long-press on mobile does not invoke the creation of a new item. (11/16/2024)
+- Safari browser on iOS does not provide a satisfactory experince. This is currently being worked on (11/17/2024)
 
 # 📜 License
 Please see the accompanying LICENSE document contained within this repository.
