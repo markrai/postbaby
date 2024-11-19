@@ -38,6 +38,25 @@ This was created out of necessity for a sticky-note solution with rapid arrangem
 - In mobile view, dragging a note to the trash element does not invoke deletion (11/16/2024)
 - On the live version, browsers on iOS devices are currently not supported, and I am working hard to formulate a fix (11/19/2024)
 
+# ✅ Supported Devices on Live Version
+
+| **Browser**        | **Platform**    |  Supported       |
+|--------------------|-----------------|------------------|
+| Chrome             | Windows         |           ✅    |
+| Firefox            | Windows         |           ✅    |
+| Brave              | Windows         |           ✅    |
+| Edge               | Windows         |           ✅    |
+| Chrome             | Android         |           ✅    |
+| Firefox            | Android         |           ✅    |
+| Brave              | Android         |           ✅    |
+| Edge               | Android         |           ✅    |
+| Safari             | MacOS           |           ✅    |
+| All                | iOS             |           ❌    |
+
+
+
+
+
 # 📜 License
 Please see the accompanying LICENSE document contained within this repository.
 
