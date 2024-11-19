@@ -25,6 +25,7 @@ This was created out of necessity for a sticky-note solution with rapid arrangem
 - Press the `ESC` or the `TAB` key to stop editing an item.
 - Press `CTRL + ALT + H` to re-enable first-time-run flag, and re-populate welcome items.
 - Press keys `1-9` to jump to corresponding tab.
+- Press the `tab` key to cycle between tabs. Press `tab` + `Shift` key to cycle in reverse.
 
 # 📱 Mobile Usage Instructions
 - `Long-press` to create new item.
@@ -35,7 +36,7 @@ This was created out of necessity for a sticky-note solution with rapid arrangem
 
 # 🐛 Known Issues
 - In mobile view, dragging a note to the trash element does not invoke deletion (11/16/2024)
-- Safari browser on iOS does not provide a satisfactory experince. This is currently being worked on (11/17/2024)
+- On the live version, browsers on iOS devices are currently not supported, and I am working hard to formulate a fix (11/19/2024)
 
 # 📜 License
 Please see the accompanying LICENSE document contained within this repository.
