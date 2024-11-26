@@ -10,7 +10,7 @@ This was created out of necessity for a sticky-note solution with rapid arrangem
 
 💻 This app's data lives solely on your browser's localstorage - While this makes data retrieval very fast, please be aware of this, if you decide to clear your browser's cache.
 
-❓ This distribution (v1.35) has everything the [postbaby.org](https://www.postbaby.org) (v1.52) has, except the multiple **tabs** and **grids** features.
+❓ This distribution (v1.35) has everything the [postbaby.org](https://www.postbaby.org) (v1.52) has, except the multiple **tabs** , **grids**, and **default color option** features.
 
 # ⚡Install
 - Clone the repository, and simply open `index.html` in a browser. No web-server required.
