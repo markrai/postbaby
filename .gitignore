@@ -15,4 +15,3 @@ postbaby-backend/data/*.db-shm
 *.tar
 desktop/src-tauri/gen/
 /src/script.js
-*.bat

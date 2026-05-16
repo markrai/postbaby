@@ -85,7 +85,7 @@ Use this when you want to build the image on another machine and only run it on 
 
 On a machine with Docker:
 
-- Windows: run [`../generate_tar.bat`](../generate_tar.bat)
+- Windows: run [`../tools/generate_tar.bat`](../tools/generate_tar.bat)
 - Or manually run:
 
 ```powershell
