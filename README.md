@@ -1,8 +1,6 @@
 ![postbabygithubtitle](https://github.com/user-attachments/assets/29979323-15ae-4324-817e-f89571606655)
 
-a self-hosted and browser-local version of [postbaby.org](https://www.postbaby.org)
-
-This repo now carries the unified v2 Postbaby codebase.
+a self-hosted version of [postbaby.org](https://www.postbaby.org)
 
 This was created out of necessity for a sticky-note solution with rapid arrangement, editing, and color-coding capability, thanks to its intuitive key-bindings.
 
