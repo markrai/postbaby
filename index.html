@@ -1,35 +1,95 @@
 <!DOCTYPE html>
-<html>
+<html lang="en" data-theme="light">
 
-<title>postbaby</title>
-<link rel="icon" type="image/x-icon" href="favicon.ico">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link rel="stylesheet" type="text/css" href="style.css">
+<head>
+    <link rel="manifest" href="./manifest.json">
+    <meta charset="UTF-8">
+    <meta name="description"
+        content="Create, edit, and manage virtual sticky notes!. Intuitive keyboard shortcuts and helpful grid overlays to help you organized on the go!">
+    <title>PostBaby - Create, Edit, and Organize Notes Effortlessly</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-<meta property="og:title" content="postbaby">
-<meta property="og:description" content="Easily create, edit, and manage items with shortcuts for quick actions!">
-<meta property="og:image" content="https://www.postbaby.org/logotext.png">
-<meta property="og:url" content="https://www.postbaby.org/">
-<meta property="og:type" content="website">
+    <!--
+        Default markup uses light mode (data-theme on <html>). This script
+        applies the saved theme before stylesheets paint so there is no flash
+        of the wrong theme; only an explicit localStorage value of "dark"
+        selects dark mode.
+    -->
+    <script>
+        (function () {
+            try {
+                var t = localStorage.getItem('theme');
+                if (t !== 'dark' && t !== 'light') {
+                    if (t != null) localStorage.removeItem('theme');
+                    t = 'light';
+                }
+                document.documentElement.setAttribute('data-theme', t);
+            } catch (e) {
+                document.documentElement.setAttribute('data-theme', 'light');
+            }
+        })();
+    </script>
 
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="postbaby">
-<meta name="twitter:description" content="Easily create, edit, and manage items with shortcuts for quick actions!">
-<meta name="twitter:image" content="https://www.postbaby.org/logotext.png">
+    <link rel="stylesheet" type="text/css" href="./css/theme.css">
+    <link rel="stylesheet" type="text/css" href="./css/style.css">
+    <link rel="stylesheet" type="text/css" href="./css/grids.css">
+    <link rel="stylesheet" type="text/css" href="./css/mobile.css">
+    <link rel="stylesheet" type="text/css" href="./css/calendar.css">
+    <link rel="stylesheet" type="text/css" href="./css/ios.css">
+
+    <!-- Open Graph and Twitter Metadata -->
+    <meta property="og:title" content="postbaby">
+    <meta property="og:description"
+        content="Easily create, edit, and manage online stickies with shortcuts for quick actions!">
+    <meta property="og:image" content="https://www.postbaby.org/img/logotexttransparent.png">
+    <meta property="og:url" content="https://www.postbaby.org/">
+    <meta property="og:type" content="website">
+
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="postbaby">
+    <meta name="twitter:description"
+        content="Easily create, edit, and manage online stickies with shortcuts for quick actions!">
+    <meta name="twitter:image" content="https://www.postbaby.org/img/logotexttransparent.png">
+</head>
 
 <body>
+
+    <div id="mobileNotification" class="mobile-notification">
+        For a full-featured experience, check us out on a desktop! 😉
+    </div>
+
+
+    <div id="iosnotification" class="ios-notification">
+        <div class="ios-notification-content">
+            <p>We see that you are using either an iPhone or an iPad - We are currently working hard to support these!
+            </p>
+            <p>Until then, check us out on your MacOS, Windows, Linux, or Android device 😉</p>
+            <button id="iosOkButton" class="ios-notification-button">OK</button>
+        </div>
+    </div>
+
+
+    <!-- Tab Bar -->
+    <div id="tabBar">
+        <!-- Existing tabs will be dynamically inserted here -->
+        <div class="tab add-tab" id="addTab">+</div>
+    </div>
+
+    <!-- Logo Container -->
     <div class="logo-container">
-        <img src="logotext.png" alt="logo" class="logo" draggable="false">
+        <img src="./img/logotexttransparent.png" alt="logo" class="logo" draggable="false">
     </div>
 
-    <button id="addItemButton">Add Item</button>
-    <div class="grid-container" id="websiteGrid">
+    <!-- Tab Content -->
+    <div id="tabContent">
+        <!-- Tab panes will be dynamically inserted here -->
     </div>
 
-    <div class="version">
-        <br> v1.35
-    </div>
+    <!-- Version Information (text set by js/version.js) -->
+    <div class="version"></div>
 
+    <!-- Desktop Shortcuts -->
     <div class="desktop-shortcuts">
         <br>
         create new: n or <i>right-click on canvas</i>
@@ -40,29 +100,273 @@
         <br>
         delete item: <i>right-click item or drag to toilet-roll</i>
         <br>
-        clear everything: <i>c</i>
+        next shape: <i>ctrl + right-click item</i>
+        <br>
+        previous shape: <i>shift + ctrl + right-click item</i>
+        <br>
+        clear current tab: <i>c</i>
+        <br>
+        delete selected items: <i>Delete</i>
+        <br>
+        switch tabs: <i>tab / shift+tab</i>
+        <br>
+        jump tabs: <i>keys 1-9</i>
+        <br>
+        toggle between grids: <i>g</i>
+        <br>
+        multiple selection: <i>drag on empty canvas</i>
+        <br>
+        draw line: <i>shift + mouse-drag</i>
+        <br>
+        draw arrow: <i>ctrl + mouse-drag</i>
+        <br>
+        reset welcome notes: <i>ctrl + alt + h</i>
+        <br>
+        settings: <i>left-click on trash icon</i>
     </div>
 
-
+    <!-- Mobile Shortcuts -->
     <div class="mobile-shortcuts">
         <br>
         create new: <i> long-press on canvas</i>
         <br>
-        edit item: <i> double-tap on item</i>
+        edit: <i> double-tap on item or tab</i>
         <br>
-        delete item:<i> long-press on item</i>
+        delete:<i> long-press on item or tab</i>
         <br>
+        change color:<i> single tap on item or tab</i>
+        <br>
+        settings: <i>single tap trash icon</i>
     </div>
 
+    <!-- Delete Confirmation Modal -->
     <div id="confirmModal" class="modal">
         <div class="modal-content">
             <p>Are you sure you want to delete all items? This action cannot be undone.</p>
-            <button id="confirmDelete" class="modal-button">Yes, Delete</button>
+            <button id="confirmDelete" class="modal-button">Yes, Proceed</button>
             <button id="cancelDelete" class="modal-button">Cancel</button>
         </div>
     </div>
-    <img src="tp.png" alt="trash" id="trash" class="trash" draggable="false">
-    <script src="script.js"></script>
-    <script src="strings.js"></script>
+
+
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="modal">
+        <div class="modal-content">
+            <span class="close-settings" tabindex="0" aria-label="Close Settings Modal">&times;</span>
+            <p class="modal-title">Settings</p>
+
+            <!-- Dark Mode -->
+            <div class="settings-option">
+                <span>Dark Mode</span>
+                <label class="switch">
+                    <input type="checkbox" id="toggleDarkMode">
+                    <span class="slider round"></span>
+                </label>
+            </div>
+
+            <div class="settings-option">
+                <span>Disable Color Change</span>
+                <label class="switch">
+                    <input type="checkbox" id="toggleDisableColorChange">
+                    <span class="slider round"></span>
+                </label>
+            </div>
+
+            <div class="settings-option">
+                <span>Disable Note Resize</span>
+                <label class="switch">
+                    <input type="checkbox" id="toggleDisableNoteResize">
+                    <span class="slider round"></span>
+                </label>
+            </div>
+
+            <!-- Full Screen -->
+            <div class="settings-option">
+                <span>Full Screen</span>
+                <label class="switch">
+                    <input type="checkbox" id="toggleFullscreen">
+                    <span class="slider round"></span>
+                </label>
+            </div>
+
+            <!-- Corporate Mode -->
+            <div class="settings-option">
+                <span>Corporate Mode</span>
+                <label class="switch">
+                    <input type="checkbox" id="toggleLogo">
+                    <span class="slider round"></span>
+                </label>
+            </div>
+
+            <!-- Hide Instructions -->
+            <div class="settings-option">
+                <span>Hide Instructions</span>
+                <label class="switch">
+                    <input type="checkbox" id="toggleInstructions">
+                    <span class="slider round"></span>
+                </label>
+            </div>
+
+            <!-- Use Grids Dropdown -->
+            <div class="settings-option">
+                <span>Use Grids (Tab Specific)</span>
+                <select id="useGrids">
+                    <option value="none">None</option>
+                    <option value="kanban">Kanban Board</option>
+                    <option value="eisenhower">Eisenhower Matrix</option>
+                    <option value="priority">Priority Matrix</option>
+                    <option value="smartgoals">SMART Goals</option>
+                    <option value="swot">SWOT Analysis</option>
+                    <option value="calendar">Calendar</option>
+                    <option value="nowlater">Now & Later</option>
+                    <option value="week">Week</option>
+                </select>
+            </div>
+
+            <!-- Default Color Option -->
+            <div class="settings-option">
+                <span>Default Color for New Items (Global)</span>
+                <label class="switch">
+                    <input type="checkbox" id="toggleDefaultColor">
+                    <span class="slider round"></span>
+                </label>
+                <input type="color" id="defaultColorPicker" value="#4CAF50" disabled>
+            </div>
+
+            <!-- Save and Load Buttons -->
+            <div class="settings-save-load">
+                <button id="saveDataButton" class="modal-button">Export Data</button>
+                <button id="loadDataButton" class="modal-button">Import Data</button>
+            </div>
+
+            <div class="settings-sync-panel">
+                <p class="settings-sync-title">Sync</p>
+                <span class="settings-sync-copy">Browser storage stays primary. When you sign in, Postbaby keeps your account-backed snapshots in sync automatically across your browsers and devices on this server.</span>
+                <form id="logoutForm" class="settings-sync-logout" method="post" action="/logout">
+                    <button type="submit" class="modal-button">Log Out</button>
+                </form>
+                <span id="syncStateStatus" class="settings-sync-status">Saved locally</span>
+                <span id="syncVersionStatus" class="settings-sync-status">Server version: not yet synced</span>
+            </div>
+
+            <br>
+
+            <!-- Hidden File Input for Loading Data -->
+            <input type="file" id="loadDataInput" accept=".json" style="display: none;">
+
+
+            <span class="questions">Questions/Comments:
+                <a href="mailto:markraidc@gmail.com" class="accent-link">markraidc@gmail.com</a>
+            </span>
+        </div>
+    </div>
+
+    <!-- Grid Labels for Kanban -->
+    <div id="gridLabels-kanban" class="grid-labels grid-labels-kanban">
+        <div class="grid-label-kanban">Backlog</div>
+        <div class="grid-label-kanban">To Do</div>
+        <div class="grid-label-kanban">Doing</div>
+        <div class="grid-label-kanban">Done</div>
+    </div>
+
+    <!-- Grid Labels for Eisenhower Matrix -->
+    <div id="gridLabels-eisenhower" class="grid-labels grid-labels-eisenhower">
+        <div class="grid-label-eisenhower"><span>Urgent & Important</span></div>
+        <div class="grid-label-eisenhower"><span>Important & Not Urgent</span></div>
+        <div class="grid-label-eisenhower"><span>Urgent & Not Important</span></div>
+        <div class="grid-label-eisenhower"><span>Not Urgent & Not Important</span></div>
+    </div>
+
+    <!-- Grid Labels for Priority Matrix -->
+    <div id="gridLabels-priority" class="grid-labels grid-labels-priority">
+        <div class="grid-label-eisenhower"><span>Do First</span></div>
+        <div class="grid-label-eisenhower"><span>Schedule</span></div>
+        <div class="grid-label-eisenhower"><span>Delegate</span></div>
+        <div class="grid-label-eisenhower"><span>Avoid</span></div>
+    </div>
+
+    <!-- Grid Labels for SMART Goals -->
+    <div id="gridLabels-smartgoals" class="grid-labels grid-labels-smartgoals">
+        <div class="grid-label-smartgoals">Specific</div>
+        <div class="grid-label-smartgoals">Measurable</div>
+        <div class="grid-label-smartgoals">Achievable</div>
+        <div class="grid-label-smartgoals">Relevant</div>
+        <div class="grid-label-smartgoals">Time-Bound</div>
+    </div>
+
+    <!-- Grid Labels for SWOT Analysis -->
+    <div id="gridLabels-swot" class="grid-labels grid-labels-swot">
+        <div class="grid-label-swot"><span>Strengths</span></div>
+        <div class="grid-label-swot"><span>Weaknesses</span></div>
+        <div class="grid-label-swot"><span>Opportunities</span></div>
+        <div class="grid-label-swot"><span>Threats</span></div>
+    </div>
+
+    <!-- Grid Labels for Calendar -->
+    <div id="gridLabels-calendar" class="grid-labels grid-labels-calendar">
+        <!-- Calendar will be dynamically generated here -->
+    </div>
+
+    <!-- Grid Underlay -->
+    <div id="gridUnderlay" class="grid-none"></div>
+
+    <div id="gridLines-week" class="grid-lines-week"></div>
+
+    <!-- Grid Time Labels for Week (MUST come right after #gridUnderlay) -->
+    <div id="gridTimeLabels-week" class="grid-time-labels">
+        <div class="grid-time-label"></div>
+        <div class="grid-time-label">6 AM</div>
+        <div class="grid-time-label">7 AM</div>
+        <div class="grid-time-label">8 AM</div>
+        <div class="grid-time-label">9 AM</div>
+        <div class="grid-time-label">10 AM</div>
+        <div class="grid-time-label">11 AM</div>
+        <div class="grid-time-label">12 PM</div>
+        <div class="grid-time-label">1 PM</div>
+        <div class="grid-time-label">2 PM</div>
+        <div class="grid-time-label">3 PM</div>
+        <div class="grid-time-label">4 PM</div>
+        <div class="grid-time-label">5 PM</div>
+        <div class="grid-time-label">6 PM</div>
+        <div class="grid-time-label">7 PM</div>
+        <div class="grid-time-label">8 PM</div>
+    </div>
+    
+
+    <!-- Grid Labels for Now & Later -->
+    <div id="gridLabels-nowlater" class="grid-labels grid-labels-nowlater">
+        <div class="grid-label-nowlater">Now</div>
+        <div class="grid-label-nowlater">Later</div>
+    </div>
+
+    <!-- Grid Labels for Week -->
+    <div id="gridLabels-week" class="grid-labels grid-labels-week">
+        <div class="grid-label-week">Monday</div>
+        <div class="grid-label-week">Tuesday</div>
+        <div class="grid-label-week">Wednesday</div>
+        <div class="grid-label-week">Thursday</div>
+        <div class="grid-label-week">Friday</div>
+        <div class="grid-label-week">Saturday</div>
+        <div class="grid-label-week">Sunday</div>
+    </div>
+
+    
+
+    <!-- Trash Icon -->
+    <img src="./img/tp.png" alt="trash" id="trash" class="trash" draggable="false">
+
+    <!-- Scripts -->
+    <script src="./runtime-config.js"></script>
+    <script src="./js/version.js"></script>
+    <script src="./js/utils.js"></script>
+    <script src="./js/strings.js"></script>
+    <script src="./js/indexeddb-storage.js"></script>
+    <script src="./js/storage-adapter.js"></script>
+    <script src="./js/persistence.js"></script>
+    <script src="./js/selectors.js"></script>
+    <script src="./js/modal.js"></script>
+    <script src="./js/script.js" defer></script>
 </body>
+
+
 </html>

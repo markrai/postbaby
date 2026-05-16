@@ -1,0 +1,161 @@
+/*
+ * Theme tokens.
+ *
+ * Light is the default (on :root). Dark overrides live under [data-theme="dark"].
+ * All other stylesheets consume these via var(--token) so switching data-theme
+ * re-themes every surface at once.
+ */
+
+:root {
+    color-scheme: light;
+
+    /* Page + chrome */
+    --bg-page: #ecede8;
+    --text-primary: #222;
+    --text-muted: rgb(164, 161, 161);
+    --text-heading: #464444;
+
+    /* Tab bar */
+    --bg-tab-bar: #f1f1f1;
+    --border-tab-bar: #ccc;
+    --bg-tab: #e2e2e2;
+    --bg-tab-add: #d4d4d4;
+    --bg-tab-add-hover: #c0c0c0;
+    --border-tab-active: #ffffff11;
+    --border-tab-active-bottom: #000000;
+
+    /* Modals */
+    --bg-modal-overlay: rgba(0, 0, 0, 0.5);
+    --bg-modal: #f9f9f9;
+    --bg-modal-settings: #e2e2e2;
+    --shadow-modal: 0 4px 8px rgba(0, 0, 0, 0.2), 0 6px 20px rgba(0, 0, 0, 0.19);
+    --close-settings: #aaa;
+    --close-settings-hover: #000;
+
+    /* Controls */
+    --slider-track: #ccc;
+    --slider-thumb: #ffffff;
+    --slider-track-on: green;
+    --slider-focus-ring: #4CAF50;
+    --primary: #4CAF50;
+    --primary-hover: #45a049;
+    --danger: #f44336;
+    --danger-hover: #d32f2f;
+    --link-accent: #9a0c28;
+
+    /* Editor + notes */
+    --note-default-bg: #4CAF50;
+    --note-default-text: #ffffff;
+    --note-link: #000;
+    --note-selected-outline: #000;
+    --textarea-bg: #ffffff;
+    --textarea-border: #ccc;
+    --textarea-scrollbar-hover: #aaa;
+
+    /* Grid overlays (lines, labels) */
+    --grid-line: rgba(0, 0, 0, 0.8);
+    --grid-line-soft: rgba(0, 0, 0, 0.5);
+    --grid-line-hairline: rgba(0, 0, 0, 0.2);
+    --grid-label-text: #000;
+    --grid-label-text-shadow: 1px 1px 2px rgba(255, 255, 255, 0.7);
+
+    /* Calendar */
+    --calendar-day-header-bg: rgba(0, 0, 0, 0.1);
+    --calendar-date-bg: rgba(255, 255, 255, 0.8);
+    --calendar-date-border: rgba(0, 0, 0, 0.1);
+    --calendar-date-hover: rgba(0, 0, 0, 0.1);
+    --calendar-current-day: rgba(212, 205, 205, 0.5);
+
+    /* Buttons (mobile add) */
+    --btn-dark-bg: #000000;
+    --btn-dark-bg-hover: #ffffff;
+    --btn-dark-fg-hover: #000;
+
+    /* iOS notification */
+    --ios-overlay: rgba(0, 0, 0, 0.8);
+    --ios-card: #333;
+    --ios-card-fg: #fff;
+    --ios-accent: #007aff;
+    --ios-accent-hover: #005bb5;
+
+    /* Mobile toast */
+    --mobile-toast-bg: #303030;
+    --mobile-toast-fg: #eaeaea;
+}
+
+[data-theme="dark"] {
+    color-scheme: dark;
+
+    /* Page + chrome */
+    --bg-page: #1a1b1a;
+    --text-primary: #e6e6e1;
+    --text-muted: rgb(140, 140, 140);
+    --text-heading: #cfcfcf;
+
+    /* Tab bar */
+    --bg-tab-bar: #242523;
+    --border-tab-bar: #3a3b38;
+    --bg-tab: #3a3b38;
+    --bg-tab-add: #2f302e;
+    --bg-tab-add-hover: #45463f;
+    --border-tab-active: #ffffff22;
+    --border-tab-active-bottom: #e6e6e1;
+
+    /* Modals */
+    --bg-modal-overlay: rgba(0, 0, 0, 0.7);
+    --bg-modal: #2a2b29;
+    --bg-modal-settings: #2f302e;
+    --shadow-modal: 0 4px 8px rgba(0, 0, 0, 0.5), 0 6px 20px rgba(0, 0, 0, 0.45);
+    --close-settings: #888;
+    --close-settings-hover: #fff;
+
+    /* Controls */
+    --slider-track: #555;
+    --slider-thumb: #e6e6e1;
+    --slider-track-on: #4CAF50;
+    --slider-focus-ring: #7bd17f;
+    --primary: #4CAF50;
+    --primary-hover: #3d9141;
+    --danger: #e0574b;
+    --danger-hover: #b83c32;
+    --link-accent: #ff6b86;
+
+    /* Editor + notes */
+    --note-default-bg: #4CAF50;
+    --note-default-text: #ffffff;
+    --note-link: #ffffff;
+    --note-selected-outline: #ffffff;
+    --textarea-bg: #1f201e;
+    --textarea-border: #4a4b47;
+    --textarea-scrollbar-hover: #666;
+
+    /* Grid overlays (inverted so lines/labels show on dark) */
+    --grid-line: rgba(255, 255, 255, 0.7);
+    --grid-line-soft: rgba(255, 255, 255, 0.45);
+    --grid-line-hairline: rgba(255, 255, 255, 0.2);
+    --grid-label-text: #e6e6e1;
+    --grid-label-text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.7);
+
+    /* Calendar */
+    --calendar-day-header-bg: rgba(255, 255, 255, 0.08);
+    --calendar-date-bg: rgba(255, 255, 255, 0.06);
+    --calendar-date-border: rgba(255, 255, 255, 0.1);
+    --calendar-date-hover: rgba(255, 255, 255, 0.12);
+    --calendar-current-day: rgba(212, 205, 205, 0.25);
+
+    /* Buttons (mobile add) */
+    --btn-dark-bg: #e6e6e1;
+    --btn-dark-bg-hover: #000000;
+    --btn-dark-fg-hover: #ffffff;
+
+    /* iOS notification */
+    --ios-overlay: rgba(0, 0, 0, 0.85);
+    --ios-card: #1f201e;
+    --ios-card-fg: #e6e6e1;
+    --ios-accent: #3a8dff;
+    --ios-accent-hover: #1f6fe0;
+
+    /* Mobile toast */
+    --mobile-toast-bg: #3a3b38;
+    --mobile-toast-fg: #eaeaea;
+}

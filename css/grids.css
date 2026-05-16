@@ -1,0 +1,614 @@
+/* Grid Underlay Common Styles */
+#gridUnderlay {
+    position: fixed;
+    top: 50px; /* Adjust to Tab Bar's height */
+    left: 0;
+    width: 100%;
+    height: calc(100% - 50px); /* Adjust to exclude Tab Bar */
+    z-index: 1;
+    pointer-events: none;
+    background-repeat: no-repeat;
+    background-size: 100% 100%;
+    opacity: 0.3;
+    transition: background-image 0.5s ease, opacity 0.5s ease;
+}
+
+/* No Grid */
+.grid-none {
+    background: none;
+}
+
+/* Kanban Grid: Vertical Columns */
+.grid-kanban {
+    background-image: repeating-linear-gradient(
+            to right,
+            var(--grid-line-soft),
+            var(--grid-line-soft) 1px,
+            transparent 1px,
+            transparent 25%
+    );
+}
+
+/* Eisenhower Matrix Grid: Using Pseudo-Elements */
+.grid-eisenhower {
+    position: fixed; /* Ensure the gridUnderlay is positioned correctly */
+    top: 50px; /* Same as gridUnderlay's top */
+    left: 0;
+    width: 100%;
+    height: calc(100% - 50px);
+    pointer-events: none;
+    z-index: 1;
+}
+
+.grid-eisenhower::before,
+.grid-eisenhower::after {
+    content: '';
+    position: absolute;
+    background-color: var(--grid-line);
+}
+
+.grid-eisenhower::before {
+    top: 50%; /* Vertically center the horizontal line */
+    left: 0;
+    height: 1px; /* Thickness of the horizontal line */
+    width: 100%;
+}
+
+.grid-eisenhower::after {
+    top: 0;
+    left: 50%; /* Horizontally center the vertical line */
+    width: 1px; /* Thickness of the vertical line */
+    height: 100%;
+}
+
+/* Priority Matrix Grid: Using Pseudo-Elements */
+.grid-priority {
+    position: fixed;
+    top: 50px; /* Same as gridUnderlay's top */
+    left: 0;
+    width: 100%;
+    height: calc(100% - 50px);
+    pointer-events: none;
+    z-index: 1;
+}
+
+.grid-priority::before,
+.grid-priority::after {
+    content: '';
+    position: absolute;
+    background-color: var(--grid-line);
+}
+
+.grid-priority::before {
+    top: 50%; /* Vertically center the horizontal line */
+    left: 0;
+    height: 1px; /* Thickness of the horizontal line */
+    width: 100%;
+}
+
+.grid-priority::after {
+    top: 0;
+    left: 50%; /* Horizontally center the vertical line */
+    width: 1px; /* Thickness of the vertical line */
+    height: 100%;
+}
+
+
+
+/* Optional: Adjust grid opacity for smaller screens */
+@media (max-width: 768px) {
+    #gridUnderlay {
+        opacity: 1.0;
+    }
+}
+
+/* Additional Styles for Tab Panes */
+.tab-pane {
+    /* Ensure tab panes are hidden by default */
+    display: none;
+}
+
+.tab-pane.active {
+    display: block;
+}
+
+/* Ensure the grid items inside tab panes are positioned correctly */
+.tab-pane .grid-container {
+    position: relative;
+    width: 80%;
+    height: 80vh;
+}
+
+/* Grid Labels for Kanban */
+.grid-labels-kanban {
+    position: fixed;
+    top: 50px; /* Adjust to match the Tab Bar's height */
+    left: 0;
+    width: 100%;
+    height: calc(100% - 50px); /* Exclude Tab Bar height */
+    display: none; /* Hidden by default */
+    grid-template-columns: repeat(4, 1fr); /* Four equal columns */
+    z-index: 1; /* Same as #gridUnderlay */
+    pointer-events: none;
+}
+
+/* Show Kanban labels when Kanban grid is active */
+#gridUnderlay.grid-kanban ~ #gridLabels-kanban {
+    display: grid;
+}
+
+/* Individual Kanban Grid Labels */
+.grid-label-kanban {
+    display: flex;
+    justify-content: center; /* Horizontally center the text */
+    align-items: flex-start; /* Align text to the top vertically */
+    opacity: 0.3; /* Same opacity as grid lines */
+    font-size: 18px; /* Adjust as needed */
+    color: var(--grid-label-text);
+    user-select: none; /* Prevent text selection */
+    font-family: 'Kalam', sans-serif; /* Consistent font */
+    padding-top: 30px; /* Optional: Add some padding from the top */
+    text-shadow: var(--grid-label-text-shadow);
+    font-weight: bold; /* Makes the text bold */
+}
+
+/* Backlog Section */
+.grid-labels-kanban .grid-label-kanban:nth-child(1) {
+    background-color: rgba(169, 169, 169, 0.2); /* Dark Gray with 20% opacity */
+}
+
+/* To Do Section */
+.grid-labels-kanban .grid-label-kanban:nth-child(2) {
+    background-color: rgba(30, 144, 255, 0.2); /* Dodger Blue with 20% opacity */
+}
+
+/* Doing Section */
+.grid-labels-kanban .grid-label-kanban:nth-child(3) {
+    background-color: rgba(255, 215, 0, 0.2); /* Gold with 20% opacity */
+}
+
+/* Done Section */
+.grid-labels-kanban .grid-label-kanban:nth-child(4) {
+    background-color: rgba(40, 167, 69, 0.2); /* Green with 20% opacity */
+}
+
+/* Grid Labels for Eisenhower Matrix */
+.grid-labels-eisenhower {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr); /* Two columns */
+    grid-template-rows: repeat(2, 1fr);    /* Two rows */
+    position: fixed;
+    top: 50px; /* Adjusted to place below the tab bar */
+    left: 0;
+    width: 100%;
+    height: calc(100% - 50px);
+    pointer-events: none;
+    z-index: 1;
+}
+
+.grid-label-eisenhower span {
+    display: inline-block;
+    margin-top: 150px;
+}
+
+/* Urgent & Important Section */
+.grid-labels-eisenhower .grid-label-eisenhower:nth-child(1) {
+    background-color: rgba(255, 0, 0, 0.2); /* Red with 20% opacity */
+}
+
+/* Not Urgent & Important Section */
+.grid-labels-eisenhower .grid-label-eisenhower:nth-child(2) {
+    background-color: rgba(0, 0, 255, 0.2); /* Blue with 20% opacity */
+}
+
+/* Urgent & Not Important Section */
+.grid-labels-eisenhower .grid-label-eisenhower:nth-child(3) {
+    background-color: rgba(255, 255, 0, 0.2); /* Yellow with 20% opacity */
+}
+
+/* Not Urgent & Not Important Section */
+.grid-labels-eisenhower .grid-label-eisenhower:nth-child(4) {
+    background-color: rgba(128, 128, 128, 0.2); /* Gray with 20% opacity */
+}
+
+
+
+/* Grid Labels for Priority Matrix */
+.grid-labels-priority {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr); /* Two columns */
+    grid-template-rows: repeat(2, 1fr);    /* Two rows */
+    position: fixed;
+    top: 50px; /* Adjusted to place below the tab bar */
+    left: 0;
+    width: 100%;
+    height: calc(100% - 50px);
+    pointer-events: none;
+    z-index: 1;
+}
+
+/* Do First Section */
+.grid-labels-priority .grid-label-eisenhower:nth-child(1) {
+    background-color: rgba(255, 0, 0, 0.2); /* Red with 20% opacity */
+}
+
+/* Schedule Section */
+.grid-labels-priority .grid-label-eisenhower:nth-child(2) {
+    background-color: rgba(0, 0, 255, 0.2); /* Blue with 20% opacity */
+}
+
+/* Delegate Section */
+.grid-labels-priority .grid-label-eisenhower:nth-child(3) {
+    background-color: rgba(255, 165, 0, 0.2); /* Orange with 20% opacity */
+}
+
+/* Avoid Section */
+.grid-labels-priority .grid-label-eisenhower:nth-child(4) {
+    background-color: rgba(128, 128, 128, 0.2); /* Gray with 20% opacity */
+}
+
+/* Show Eisenhower Matrix labels when its grid is active */
+#gridUnderlay.grid-eisenhower ~ #gridLabels-eisenhower {
+    display: grid;
+}
+
+/* Individual Eisenhower Matrix Grid Labels */
+.grid-label-eisenhower {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    text-align: center; /* Ensure text aligns to the center within the label */
+    opacity: 0.3; /* Same opacity as grid lines */
+    font-size: 20px; /* Adjust as needed */
+    color: var(--grid-label-text);
+    user-select: none; /* Prevent text selection */
+    font-family: 'Kalam', sans-serif; /* Consistent font */
+    padding-top: 10px; /* Optional: Add padding */
+}
+
+/* Grid SMART Goals Styles */
+.grid-smartgoals {
+    background-color: #f0f8ff; /* Light background for SMART Goals grid */
+    /* Add any specific background or grid lines as needed */
+}
+
+/* Grid Labels Container for SMART Goals */
+.grid-labels-smartgoals {
+    position: fixed;
+    top: 50px; /* Adjust to match the Tab Bar's height */
+    left: 0;
+    width: 100%;
+    height: calc(100% - 50px); /* Exclude Tab Bar height */
+    display: none; /* Hidden by default */
+    grid-template-columns: repeat(1, 1fr); /* Single column */
+    grid-template-rows: repeat(5, 1fr); /* Five rows for each SMART goal */
+    z-index: 1; /* Same as #gridUnderlay */
+    pointer-events: none; /* Allows interactions through the labels */
+}
+
+/* Individual SMART Goals Grid Labels */
+.grid-label-smartgoals {
+    display: flex;
+    justify-content: left;
+    padding-left: min(50px);
+    align-items: center;     /* Vertically center the text */
+    opacity: 0.3;            /* Same opacity as grid lines */
+    font-size: 18px;         /* Adjust as needed */
+    color: var(--grid-label-text);
+    user-select: none;       /* Prevent text selection */
+    font-family: 'Kalam', sans-serif; /* Consistent font */
+    border-bottom: 1px solid var(--grid-line-soft);
+}
+
+
+/* Applying unique background colors to each of the five SMART goals sections */
+
+/* Specific Section */
+.grid-labels-smartgoals .grid-label-smartgoals:nth-child(1) {
+    background-color: rgba(31, 117, 128, 0.2); /* 20% opacity */
+}
+
+/* Measurable Section */
+.grid-labels-smartgoals .grid-label-smartgoals:nth-child(2) {
+    background-color: rgba(255, 215, 128, 0.2); /* 20% opacity */
+}
+
+/* Achievable Section */
+.grid-labels-smartgoals .grid-label-smartgoals:nth-child(3) {
+    background-color: rgba(255, 69, 128, 0.2); /* 20% opacity */
+}
+
+/* Relevant Section */
+.grid-labels-smartgoals .grid-label-smartgoals:nth-child(4) {
+    background-color: rgba(255, 140, 128, 0.2); /* 20% opacity */
+}
+
+/* Time-bound Section */
+.grid-labels-smartgoals .grid-label-smartgoals:nth-child(5) {
+    background-color: rgba(0, 255, 128, 0.2); /* 20% opacity */
+}
+
+/* SWOT Grid Lines */
+.grid-swot {
+    position: fixed; /* Ensure the gridUnderlay is positioned correctly */
+    top: 50px; /* Same as gridUnderlay's top */
+    left: 0;
+    width: 100%;
+    height: calc(100% - 50px);
+    pointer-events: none;
+    z-index: 1;
+    background-color: transparent; /* Ensure no background color interferes */
+}
+
+.grid-swot::before,
+.grid-swot::after {
+    content: '';
+    position: absolute;
+    background-color: var(--grid-line);
+}
+
+.grid-swot::before {
+    top: 50%; /* Vertically center the horizontal line */
+    left: 0;
+    height: 1px; /* Thickness of the horizontal line */
+    width: 100%;
+}
+
+.grid-swot::after {
+    top: 0;
+    left: 50%; /* Horizontally center the vertical line */
+    width: 1px; /* Thickness of the vertical line */
+    height: 100%;
+}
+
+
+
+
+/* Grid Labels for SWOT Analysis */
+.grid-labels-swot {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr); /* Two columns */
+    grid-template-rows: repeat(2, 1fr);    /* Two rows */
+    position: fixed;
+    top: 50px; /* Adjusted to place below the tab bar */
+    left: 0;
+    width: 100%;
+    height: calc(100% - 50px);
+    pointer-events: none;
+    z-index: 1;
+}
+
+/* Individual SWOT Grid Labels */
+.grid-label-swot {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start; /* Align text to the top */
+    opacity: 0.3; /* Same opacity as grid lines */
+    font-size: 20px; /* Adjust as needed */
+    color: var(--grid-label-text);
+    user-select: none; /* Prevent text selection */
+    font-family: 'Kalam', sans-serif; /* Consistent font */
+    padding-top: 150px; /* Optional: Add padding */
+}
+
+/* Strengths Section */
+.grid-labels-swot .grid-label-swot:nth-child(1) {
+    background-color: rgba(72, 191, 145, 0.2); /* Green with 20% opacity */
+}
+
+/* Weaknesses Section */
+.grid-labels-swot .grid-label-swot:nth-child(2) {
+    background-color: rgba(86, 135, 245, 0.2); /* Blue with 20% opacity */
+}
+
+/* Opportunities Section */
+.grid-labels-swot .grid-label-swot:nth-child(3) {
+    background-color: rgba(255, 201, 71, 0.2); /* Yellow with 20% opacity */
+}
+
+/* Threats Section */
+.grid-labels-swot .grid-label-swot:nth-child(4) {
+    background-color: rgba(255, 133, 133, 0.2); /* Red with 20% opacity */
+}
+
+/* Show SWOT labels when its grid is active */
+#gridUnderlay.grid-swot ~ #gridLabels-swot {
+    display: grid;
+}
+
+
+/* Now & Later Grid: Horizontal Line */
+.grid-nowlater {
+    background: none; /* No background pattern */
+    position: fixed; /* Ensure proper positioning */
+    top: 50px; /* Same as gridUnderlay's top */
+    left: 0;
+    width: 100%;
+    height: calc(100% - 50px);
+    pointer-events: none;
+    z-index: 1; /* Above other grid labels but below tabBar */
+}
+
+.grid-nowlater::before {
+    content: '';
+    position: absolute;
+    top: 50%; /* Middle of the grid */
+    left: 0;
+    width: 100%;
+    height: 1px; /* Thickness of the horizontal line */
+    background-color: var(--grid-line);
+}
+
+/* Grid Labels for Now & Later */
+.grid-labels-nowlater {
+    display: none; /* Hidden by default */
+    grid-template-rows: 1fr 1fr; /* Two rows: Now and Later */
+    grid-template-columns: 1fr; /* Single column */
+    position: fixed;
+    top: 50px; /* Align with Tab Bar */
+    left: 0;
+    width: 100%;
+    height: calc(100% - 50px);
+    pointer-events: none;
+    z-index: 1; /* Below Tab Bar (z-index: 2) */
+}
+
+/* Show Now & Later labels when Now & Later grid is active */
+#gridUnderlay.grid-nowlater ~ #gridLabels-nowlater {
+    display: grid;
+}
+
+/* Grid Labels for Now & Later */
+.grid-label-nowlater {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    opacity: 0.3; /* Semi-transparent */
+    font-size: 24px; /* Adjust as needed */
+    color: var(--grid-label-text);
+    user-select: none; /* Prevent text selection */
+    font-family: 'Kalam', sans-serif; /* Consistent font */
+    text-shadow: var(--grid-label-text-shadow);
+    font-weight: bold; /* Bold text */
+    width: 100%;
+    height: 100%;
+}
+
+/* Now Section */
+.grid-labels-nowlater .grid-label-nowlater:nth-child(1) {
+    background-color: rgba(255, 0, 0, 0.2); /* Red tint */
+}
+
+/* Later Section */
+.grid-labels-nowlater .grid-label-nowlater:nth-child(2) {
+    background-color: rgba(0, 0, 255, 0.2); /* Blue tint */
+}
+
+/* Grid Labels for Week */
+.grid-labels-week {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr); /* 7 columns for each day of the week */
+    position: fixed;
+    top: 50px; /* Adjusted to place below the tab bar */
+    left: 0;
+    width: 100%;
+    height: calc(100% - 50px);
+    pointer-events: none;
+    z-index: 1;
+}
+
+/* Individual Week Grid Labels */
+.grid-label-week {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    opacity: 0.3;
+    font-size: 18px;
+    color: var(--grid-label-text);
+    user-select: none;
+    font-family: 'Kalam', sans-serif;
+    padding-top: 30px;
+    text-shadow: var(--grid-label-text-shadow);
+    font-weight: bold;
+}
+
+
+/* Specific styles for each day of the week */
+.grid-labels-week .grid-label-week:nth-child(1) { background-color: rgba(255, 204, 204, 0.5); } /* Monday */
+.grid-labels-week .grid-label-week:nth-child(2) { background-color: rgba(204, 255, 204, 0.5); } /* Tuesday */
+.grid-labels-week .grid-label-week:nth-child(3) { background-color: rgba(204, 204, 255, 0.5); } /* Wednesday */
+.grid-labels-week .grid-label-week:nth-child(4) { background-color: rgba(255, 255, 204, 0.5); } /* Thursday */
+.grid-labels-week .grid-label-week:nth-child(5) { background-color: rgba(255, 204, 255, 0.5); } /* Friday */
+.grid-labels-week .grid-label-week:nth-child(6) { background-color: rgba(204, 255, 255, 0.5); } /* Saturday */
+.grid-labels-week .grid-label-week:nth-child(7) { background-color: rgba(255, 204, 204, 0.5); } /* Sunday */
+
+/* Week Grid: 7 Columns for Days of the Week */
+.grid-week {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    background-color: transparent;
+}
+
+
+
+.grid-time-labels {
+    position: fixed;
+    top: 80px; /* Below day-of-week headers */
+    left: 0;
+    width: 60px;
+    height: calc(100% - 80px); /* Adjust height minus header */
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 10px 0;
+    pointer-events: none;
+    z-index: 1;
+}
+
+.grid-time-label {
+    font-family: 'Kalam', sans-serif;
+    font-size: 14px;
+    color: var(--grid-label-text);
+    opacity: 0.3;
+    text-align: right;
+    padding-right: 8px;
+    height: calc((100% - 20px) / 16); /* 16 hourly slots */
+    box-sizing: border-box;
+    user-select: none;
+}
+
+#gridTimeLabels-week {
+    display: none;
+}
+
+#gridUnderlay.grid-week ~ #gridTimeLabels-week {
+    display: flex;
+}
+
+.week-grid-item {
+    font-size: 12px; /* smaller font size for week grid items */
+    height: auto;
+    padding: 10px;
+}
+
+.week-grid-item.editing {
+    border-radius: 10px; /* Match the textarea border-radius */
+    width: 200px;
+    min-height: 20px;
+    height: auto; /* Allow the container to grow */
+    max-height: none; /* Prevent height restriction */
+}
+
+#gridLines-week {
+    position: absolute;
+    width: 100%;
+    left: 0;
+    top: 0;
+    pointer-events: none;
+    z-index: 1;
+}
+
+.week-hour-line {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    background-color: var(--grid-line-hairline);
+    transform: scaleY(0.5);
+    transform-origin: top;
+}
+
+.grid-label-week.current-day {
+    outline: 3px solid rgba(255, 0, 0, 0.6);
+    outline-offset: -2px;
+    z-index: 2;
+}
+
+.current-time-line {
+    position: absolute;
+    height: 3px;
+    background-color: transparent;
+    border-top: 3px dashed rgba(255, 0, 0, 0.5);
+    pointer-events: none;
+    z-index: 10000;
+}

@@ -1,0 +1,184 @@
+/* Media Query for Mobile (screen width less than 768px) */
+@media (max-width: 768px) {
+
+    .tab-pane .grid-container {
+        width: 90%;
+        height: auto;
+        margin-top: 20px;
+    }
+
+
+    .grid-label {
+        font-size: 16px;
+    }
+
+    .grid-label-eisenhower {
+        font-size: 16px;
+    }
+
+    .grid-label-swot {
+        font-size: 16px;
+    }
+
+    /* Adjust the default grid-container for mobile */
+    #websiteGrid-default {
+        position: relative;
+        width: 90%;
+        height: auto;
+        /* Let the height adjust based on content */
+        align-self: flex-start;
+        margin-top: 20px;
+        /* Optional: Add a small margin if needed */
+    }
+
+    .desktop-shortcuts {
+        display: none;
+    }
+
+    .mobile-shortcuts {
+        display: block;
+        position: fixed;
+        bottom: 10px;
+        left: 10px;
+        color: var(--text-muted);
+        font-size: 12px;
+        opacity: 0.8;
+        font-family: 'Kalam', sans-serif;
+        z-index: -1;
+    }
+
+    .logo-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        width: 100%;
+        flex: 1;
+        /* Allows the container to take up remaining vertical space */
+        margin-top: 0;
+        /* Removes the top margin */
+        margin-bottom: 20px;
+        /* Optional: Adds space below the logo */
+    }
+
+    .logo {
+        max-width: 80%;
+        height: auto;
+        margin: 0 auto;
+    }
+
+    .trash {
+
+        visibility: visible;
+        width: 50px;
+        /* Set desired width for mobile view */
+        height: auto;
+        /* Maintains aspect ratio */
+        position: fixed;
+        /* Ensures it's fixed at the bottom right */
+        right: 10px;
+        /* Adjusts horizontal positioning */
+        bottom: 20px;
+        /* Adjusts vertical positioning */
+        /* Ensures visibility on top of other elements */
+        pointer-events: auto;
+        /* Allows items to be dragged over it */
+        z-index: 1;
+    }
+
+    .trash.active {
+        transform: none;
+        opacity: 1;
+        pointer-events: auto;
+        cursor: pointer;
+        z-index: -1;
+    }
+
+    .grid-container {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        grid-gap: 10px;
+        width: 80%;
+        position: relative;
+    }
+
+    .grid-item {
+        padding: 15px;
+        /* Adjust padding for smaller screens */
+        font-size: 16px;
+    }
+
+    .grid-item-resize-handle {
+        display: none;
+    }
+
+    .version {
+        font-size: 10px;
+    }
+
+
+    /* Prevent text selection in modal */
+    .modal,
+    .modal * {
+        -webkit-user-select: none;
+        /* Safari */
+        -moz-user-select: none;
+        /* Firefox */
+        -ms-user-select: none;
+        /* IE10+/Edge */
+        user-select: none;
+        /* Standard */
+    }
+
+    .tab {
+        -webkit-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+    }
+}
+
+
+.mobile-notification {
+    display: none; /* Hidden by default */
+    position: fixed;
+    top: 80%; /* Center vertically */
+    left: 50%; /* Center horizontally */
+    transform: translate(-50%, -50%); /* Adjust position to account for element's own dimensions */
+    background-color: var(--mobile-toast-bg);
+    color: var(--mobile-toast-fg);
+    padding: 10px 20px; /* Padding for content */
+    border-radius: 20px; /* Rounded corners */
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); /* Subtle shadow for depth */
+    z-index: 1000; /* Ensure it's above other elements */
+    font-family: Arial, sans-serif; /* Font styling */
+    font-size: 14px; /* Font size */
+    text-align: center; /* Center the text inside */
+    animation: fadeOut 4s ease forwards 2s; /* Fades out after 3 seconds */
+}
+    
+@keyframes fadeOut {
+    from {
+        opacity: 1;
+    }
+    to {
+        opacity: 0;
+        visibility: hidden;
+    }
+}
+
+@media (max-width: 480px) {
+    .grid-container {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .grid-label {
+        font-size: 14px; /* Even smaller font on very small screens */
+    }
+
+    .desktop-shortcuts {
+        display: none;
+    }    
+}

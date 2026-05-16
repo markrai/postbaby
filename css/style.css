@@ -1,0 +1,977 @@
+@font-face {
+    font-family: 'CherryBombOne';
+    src: url('/fonts/cherrybombone.ttf') format('truetype');
+}
+
+@font-face {
+    font-family: 'Kalam';
+    src: url('/fonts/kalam.ttf') format('truetype');
+}
+
+
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+/* Tab Bar Styles */
+#tabBar {
+    display: flex;
+    border-bottom: 1px solid var(--border-tab-bar);
+    padding: 5px;
+    background-color: var(--bg-tab-bar);
+    overflow-x: auto;
+    width: 100%;
+    height: 50px; /* Explicit height */
+    z-index: 2; /* above gridUnderlay */
+
+}
+
+.tab {
+    padding: 10px 20px;
+    margin-right: 5px;
+    cursor: pointer;
+    color: #000;
+    background-color: var(--bg-tab);
+    border-radius: 5px 5px 0 0;
+    user-select: none;
+    white-space: nowrap;
+    flex-shrink: 0;
+    opacity: 0.40;
+    max-width: 200px;
+    /* Set a maximum width; adjust as needed */
+    overflow: hidden;
+    transition:
+            background-color 0.5s ease,
+            opacity 0.5s ease,
+            max-width 0.5s ease,
+            padding 0.5s ease,
+            margin-right 0.5s ease,
+            border-radius 0.5s ease;
+}
+
+.tab.active {
+    opacity: 1;
+    border-top: 2px dotted var(--border-tab-active);
+    border-left: 2px dotted var(--border-tab-active);
+    border-right: 2px dotted var(--border-tab-active);
+    border-bottom: 1px solid var(--border-tab-active-bottom);
+}
+
+.tab.add-tab {
+    background-color: var(--bg-tab-add);
+}
+
+.tab.add-tab:hover {
+    background-color: var(--bg-tab-add-hover);
+}
+
+/* Tab Content Styles */
+.tab-pane {
+    display: none;
+    padding: 10px;
+    position: relative;
+    width: 100%;
+}
+
+.tab-pane.active {
+    display: block;
+}
+
+/* Logo Container */
+.logo-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+    margin-top: auto;
+}
+
+/* Portrait Mode */
+@media (orientation: portrait) {
+    .logo-container {
+        margin-top: 50%;
+    }
+
+    .grid-item {
+        height: auto;
+        min-height: 100px; /* Ensure a minimum height */
+    }
+
+    .grid-item.editing {
+        border-radius: 10px; /* Match the textarea border-radius */
+        width: 200px;
+        min-height: 100px;
+        height: auto; /* Allow the container to grow */
+        max-height: none; /* Prevent height restriction */
+        overflow: visible; /* Ensure expanded content is shown */
+    }
+
+    .edit-textarea {
+        font-size: 16px;
+        padding: 10px;
+        border: 1px solid var(--textarea-border);
+        border-radius: 10px;
+        box-sizing: border-box;
+        resize: none;
+        width: 100%;
+        height: auto; /* Adjust dynamically based on content */
+        min-height: 40px;
+        max-height: 200px; /* Limit the height */
+        overflow: auto; /* Enable scrolling for long content */
+    }
+}
+
+/* Landscape Mode */
+@media (orientation: landscape) {
+    .logo-container {
+        margin-top: 5%;
+    }
+}
+
+.logo {
+    width: 300px;
+    height: auto;
+    margin: 0 auto;
+    user-select: none;
+    padding-top: 150px;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    pointer-events: none;
+    -webkit-user-drag: none;
+    -khtml-user-drag: none;
+    -moz-user-drag: none;
+    -o-user-drag: none;
+    opacity: 80%;
+    transition: opacity 0.5s ease;
+}
+
+.logo.grid-active {
+    opacity: 20%;
+}
+
+/* Toggle Switch Styles */
+.switch {
+    position: relative;
+    display: inline-block;
+    width: 40px;
+    height: 20px;
+    margin-right: 10px;
+}
+
+.switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: var(--slider-track);
+    transition: .4s;
+    border-radius: 20px;
+}
+
+.slider:before {
+    position: absolute;
+    content: "";
+    height: 16px;
+    width: 16px;
+    left: 2px;
+    bottom: 2px;
+    background-color: var(--slider-thumb);
+    transition: .4s;
+    border-radius: 50%;
+}
+
+/* Color of the head of the toggle switch in settings */
+input:checked + .slider:before {
+    background-color: var(--slider-thumb);
+}
+
+/* Color of the track of the toggle switch in settings */
+input:checked + .slider {
+    background-color: var(--slider-track-on);
+}
+
+input:focus + .slider {
+    box-shadow: 0 0 1px var(--slider-focus-ring);
+}
+
+input:checked + .slider:before {
+    transform: translateX(26px);
+}
+
+/* Additional styling for the settings modal */
+#settingsModal .modal-content {
+    font-size: 14px;
+    text-align: left;
+    background-color: var(--bg-modal-settings);
+}
+
+#settingsModal .modal-content p {
+    font-family: 'Kalam', sans-serif;
+    text-align: center;
+    font-size: 18px;
+    font-weight: bold;
+}
+
+.settings-option {
+    font-family: 'Kalam', sans-serif;
+    
+}
+
+.questions {
+    font-size: 10px;
+}
+
+html {
+    overflow: hidden;
+}
+
+body {
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    min-height: 100vh;
+    margin: 0;
+    background-color: var(--bg-page);
+    color: var(--text-primary);
+    font-family: Arial, sans-serif;
+    padding: 20px;
+    box-sizing: border-box;
+    transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.grid-container {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    grid-gap: 10px;
+    width: 80%;
+    position: relative;
+}
+
+.grid-item {
+    --note-fill: var(--note-default-bg);
+    z-index: 2;
+    background-color: transparent;
+    color: var(--note-default-text);
+    border-radius: 15px;
+    padding: 20px;
+    text-align: left;
+    box-sizing: border-box;
+    cursor: pointer;
+    position: absolute;
+    min-height: auto;
+    isolation: isolate;
+    overflow: visible;
+    transition:
+            background-color 0.5s ease,
+            opacity 0.5s ease,
+            padding 0.5s ease,
+            margin-right 0.5s ease,
+            border-radius 0.5s ease;
+}
+
+.grid-item.grid-item--explicit-size:not(.editing) {
+    overflow: hidden;
+}
+
+.grid-item.resizing {
+    transition: none;
+}
+
+.grid-item::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-color: var(--note-fill);
+    border-radius: inherit;
+    box-shadow: 0 4px 8px 0 rgba(0, 0, 0, 0.2),
+    0 6px 20px 0 rgba(0, 0, 0, 0.19);
+    pointer-events: none;
+    z-index: 0;
+    transition:
+            background-color 0.5s ease,
+            border-radius 0.5s ease,
+            clip-path 0.3s ease,
+            transform 0.3s ease;
+}
+
+.grid-item > * {
+    position: relative;
+    z-index: 1;
+}
+
+.grid-item:not(.editing) {
+    /* Use intrinsic sizing so the width is based on the content */
+    width: -webkit-max-content;
+    width: -moz-max-content;
+    width: max-content;
+  }
+
+.grid-item[data-shape="square"]:not(.editing),
+.grid-item[data-shape="circle"]:not(.editing),
+.grid-item[data-shape="diamond"]:not(.editing) {
+    min-width: 140px;
+    min-height: 140px;
+    aspect-ratio: 1 / 1;
+}
+
+.grid-item[data-shape="triangle"]:not(.editing),
+.grid-item[data-shape="upsideDownTriangle"]:not(.editing) {
+    min-width: 170px;
+    min-height: 150px;
+}
+
+.grid-item[data-shape="hexagon"]:not(.editing) {
+    min-width: 170px;
+    min-height: 135px;
+}
+
+.grid-item[data-shape="oval"]:not(.editing) {
+    min-height: 110px;
+}
+
+.grid-item.grid-item--explicit-size[data-shape="oval"]:not(.editing) {
+    min-height: 0;
+    overflow: visible;
+}
+
+.grid-item[data-size-mode="width-reference"]:not(.editing) {
+    min-width: 0;
+    min-height: 0;
+    overflow: visible;
+}
+
+.grid-item[data-shape="circle"]:not(.editing) {
+    padding: 30px;
+}
+
+.grid-item[data-shape="square"]:not(.editing) {
+    padding: 26px;
+    border-radius: 0;
+}
+
+.grid-item[data-shape="triangle"]:not(.editing) {
+    padding: 30px 30px 24px;
+}
+
+.grid-item[data-shape="diamond"]:not(.editing) {
+    padding: 34px;
+}
+
+.grid-item[data-shape="upsideDownTriangle"]:not(.editing) {
+    padding: 22px 30px 34px;
+}
+
+.grid-item[data-shape="hexagon"]:not(.editing) {
+    padding: 26px 34px;
+}
+
+.grid-item[data-shape="oval"]:not(.editing) {
+    padding: 24px 34px;
+}
+
+.grid-item[data-shape="square"]:not(.editing)::before {
+    border-radius: 0;
+}
+
+.grid-item[data-shape="circle"]:not(.editing)::before {
+    border-radius: 50%;
+}
+
+.grid-item[data-shape="triangle"]:not(.editing)::before,
+.grid-item[data-shape="upsideDownTriangle"]:not(.editing)::before {
+    border-radius: 0;
+}
+
+.grid-item[data-shape="oval"]:not(.editing)::before {
+    border-radius: 999px;
+}
+
+@supports (clip-path: polygon(50% 0%, 0% 100%, 100% 100%)) {
+    .grid-item[data-shape="triangle"]:not(.editing)::before {
+        clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
+    }
+
+    .grid-item[data-shape="diamond"]:not(.editing)::before {
+        clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+    }
+
+    .grid-item[data-shape="upsideDownTriangle"]:not(.editing)::before {
+        clip-path: polygon(0% 0%, 100% 0%, 50% 100%);
+    }
+
+    .grid-item[data-shape="hexagon"]:not(.editing)::before {
+        clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);
+    }
+}
+  
+
+/* Grid Labels Container */
+.grid-labels {
+    position: fixed;
+    top: 50px; /* Adjust to match the Tab Bar's height */
+    left: 0;
+    width: 100%;
+    height: calc(100% - 50px); /* Adjust to exclude the Tab Bar */
+    display: grid;
+    grid-template-columns: repeat(4, 1fr); /* Four equal columns */
+    z-index: 1; /* Same as #gridUnderlay */
+    pointer-events: none; /* Allows interactions through the labels */
+}
+
+/* Individual Grid Labels */
+.grid-label {
+    display: flex;
+    justify-content: center; /* Horizontally center the text */
+    align-items: center;     /* Vertically center the text */
+    opacity: 0.3;            /* Same opacity as grid lines */
+    font-size: 18px;         /* Adjust font size as needed */
+    color: var(--grid-label-text);
+    user-select: none;       /* Prevent text selection */
+    font-family: 'Kalam', sans-serif; /* Consistent font */
+}
+
+/* Apply fixed width and transitions only during edit mode */
+.grid-item.editing {
+    background-color: var(--note-fill);
+    border-radius: 10px; 
+    width: 200px;
+    /* Set desired fixed width */
+    /* Optional: Ensure min-height is maintained */
+    min-height: 100px;
+    box-shadow: 0 4px 8px 0 rgba(0, 0, 0, 0.2),
+    0 6px 20px 0 rgba(0, 0, 0, 0.19);
+    /* Add transitions specific to edit mode */
+    transition:
+            background-color 0.5s ease,
+            opacity 0.5s ease,
+            padding 0.5s ease,
+            margin-right 0.5s ease,
+            border-radius 0.5s ease;
+}
+
+.grid-item.editing::before {
+    display: none;
+}
+
+.grid-item a {
+    color: var(--note-link);
+    text-decoration: none;
+}
+
+.grid-item-resize-handle {
+    --resize-handle-notch-angle: 135deg;
+    position: absolute;
+    right: 4px;
+    bottom: 4px;
+    width: 16px;
+    height: 16px;
+    cursor: nwse-resize;
+    opacity: 0.45;
+    pointer-events: auto;
+    z-index: 2;
+    background:
+            linear-gradient(
+                    var(--resize-handle-notch-angle),
+                    transparent 62%,
+                    rgba(0, 0, 0, 0.6) 62% 74%,
+                    transparent 74%
+            );
+}
+
+.grid-item[data-shape="circle"]:not(.editing) .grid-item-resize-handle {
+    right: calc(15% - 4px);
+    bottom: calc(15% - 4px);
+}
+
+.grid-item[data-shape="diamond"]:not(.editing) .grid-item-resize-handle {
+    right: calc(25% - 4px);
+    bottom: calc(25% - 4px);
+}
+
+.grid-item[data-shape="triangle"]:not(.editing) .grid-item-resize-handle {
+    right: calc(16% - 4px);
+    bottom: calc(12% - 4px);
+}
+
+.grid-item[data-shape="upsideDownTriangle"]:not(.editing) .grid-item-resize-handle {
+    right: calc(34% - 4px);
+    bottom: calc(24% - 4px);
+}
+
+.grid-item[data-shape="hexagon"]:not(.editing) .grid-item-resize-handle {
+    --resize-handle-notch-angle: 120deg;
+    right: calc(18% - 4px);
+    bottom: calc(20% - 4px);
+}
+
+.grid-item-resize-handle:hover {
+    opacity: 0.85;
+}
+
+.edit-textarea {
+    font-size: 16px;
+    padding: 10px;
+
+    padding-right: 15px; /* Extra space to accommodate the scrollbar */
+
+    border: 1px solid var(--textarea-border);
+    border-radius: 10px; /* Match grid-item corners */
+    box-sizing: border-box; /* Consistent padding and size */
+    resize: none; /* Prevent user resizing */
+    width: 100%;
+    height: auto;
+    min-height: 40px; /* Ensure a minimum height */
+    max-height: 200px; /* Limit maximum height */
+    overflow: auto; /* Scrollbar for overflow */
+    background-color: var(--textarea-bg);
+    color: var(--text-primary);
+}
+
+
+.edit-textarea::-webkit-scrollbar {
+    width: 8px;
+    border-radius: 20px; /* Match the border-radius of the container */
+}
+
+
+
+.edit-textarea::-webkit-scrollbar-thumb:hover {
+    background: var(--textarea-scrollbar-hover);
+}
+
+
+
+
+
+
+
+
+.edit-tab-input {
+    border: none;
+    outline: none;
+    font-size: 16px;
+    background-color: transparent;
+    color: inherit;
+}
+
+h1 {
+    font-family: 'CherryBombOne', Arial, sans-serif;
+    font-size: 100px;
+    color: var(--text-heading);
+}
+
+.version {  
+    position: fixed;  
+    bottom: 5px;  
+    right: 10px;  
+    color: var(--text-muted);
+    font-size: 10px;  
+    opacity: 0.8;  
+    font-family: 'Comfortaa', sans-serif;  
+    z-index: -1;  
+}
+
+.desktop-shortcuts {
+    position: fixed;
+    bottom: 10px;
+    left: 10px;
+    color: var(--text-muted);
+    font-size: 12px;
+    opacity: 0.8;
+    font-family: 'Kalam', sans-serif;
+    z-index: -1;
+}
+
+.mobile-shortcuts {
+    display: none;
+    position: fixed;
+    bottom: 10px;
+    left: 10px;
+    color: var(--text-muted);
+    font-size: 18px;
+    opacity: 0.8;
+    font-family: 'Kalam', sans-serif;
+    z-index: -1;
+}
+
+/* Updated Add Item Button Styles */
+.addItemButton {
+    display: none;
+    /* Hide the button by default (desktop view) */
+    padding: 10px 20px;
+    font-size: 16px;
+    border: none;
+    border-radius: 5px;
+    background-color: var(--btn-dark-bg);
+    color: var(--bg-page);
+    cursor: pointer;
+    margin-bottom: 20px;
+    transition: background-color 0.3s, color 0.3s;
+}
+
+.addItemButton:hover {
+    background-color: var(--btn-dark-bg-hover);
+    color: var(--btn-dark-fg-hover);
+}
+
+.modal-title {
+    text-align: center;
+    font-size: 20px;
+    font-weight: bold;
+    margin-bottom: 20px;
+}
+
+.settings-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 10px 0;
+}
+
+/* The Modal (background) */
+.modal {
+    display: none;
+    /* Hidden by default */
+    position: fixed;
+    /* Stay in place */
+    z-index: 1001;
+    /* Sit on top */
+    left: 0;
+    top: 0;
+    width: 100%;
+    /* Full width */
+    height: 100%;
+    /* Full height */
+    background-color: var(--bg-modal-overlay);
+    /* Black with opacity */
+    justify-content: center;
+    align-items: center;
+}
+
+/* Modal Content Box */
+.modal-content {
+    background-color: var(--bg-modal);
+    color: var(--text-primary);
+    border-radius: 10px;
+    padding: 20px;
+    text-align: center;
+    width: 80%;
+    max-width: 400px;
+    box-shadow: var(--shadow-modal);
+}
+
+/* Modal Buttons */
+.modal-button {
+    background-color: var(--primary);
+    color: #ffffff;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    font-size: 16px;
+    margin: 10px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+
+.modal-button:hover {
+    background-color: var(--primary-hover);
+}
+
+/* Cancel Button */
+#cancelDelete {
+    background-color: var(--danger);
+}
+
+#cancelDelete:hover {
+    background-color: var(--danger-hover);
+}
+
+/* Style for the close (X) button in the settings modal */
+.close-settings {
+    color: var(--close-settings);
+    position: absolute;
+    top: 10px;
+    right: 15px;
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.close-settings:hover,
+.close-settings:focus {
+    color: var(--close-settings-hover);
+    text-decoration: none;
+    cursor: pointer;
+}
+
+/* Themed accent link (used inside settings, e.g. mailto) */
+.accent-link {
+    color: var(--link-accent);
+    text-decoration: none;
+}
+
+.accent-link:hover {
+    text-decoration: underline;
+}
+
+/* Ensure modal-content has position: relative */
+.modal-content {
+    position: relative;
+    /* Add any existing styles you have for modal-content */
+}
+
+/* Trash Styles */
+.trash {
+    position: fixed;
+    bottom: 10px;
+    right: 10px;
+    color: var(--text-muted);
+    font-size: 15px;
+    opacity: 0.8;
+    z-index: 0;
+    font-family: 'Comfortaa', sans-serif;
+    transition: transform 0.2s, opacity 0.2s;
+    pointer-events: auto;
+    width: 100px;
+    height: 100px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.trash.active {
+    transform: scale(1.2);
+    opacity: 1;
+    pointer-events: auto;
+    cursor: pointer;
+    z-index: 1000; /* Increase z-index when active */
+}
+
+.grid-item-text {
+    display: block;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: break-word;
+}
+
+.grid-item-text-shaper {
+    display: none;
+    width: 50%;
+    height: var(--shape-text-flow-height, 0px);
+    shape-margin: 2px;
+}
+
+.grid-item-text-content {
+    white-space: inherit;
+}
+
+.grid-item[data-shape="triangle"]:not(.editing) .grid-item-text,
+.grid-item[data-shape="upsideDownTriangle"]:not(.editing) .grid-item-text {
+    min-height: var(--shape-text-flow-height, 0px);
+}
+
+.grid-item[data-shape="triangle"]:not(.editing) .grid-item-text-shaper,
+.grid-item[data-shape="upsideDownTriangle"]:not(.editing) .grid-item-text-shaper {
+    display: block;
+}
+
+.grid-item[data-shape="triangle"]:not(.editing) .grid-item-text-shaper--left {
+    float: left;
+    shape-outside: polygon(0 0, 60% 0, 12% 100%, 0 100%);
+}
+
+.grid-item[data-shape="triangle"]:not(.editing) .grid-item-text-shaper--right {
+    float: right;
+    shape-outside: polygon(40% 0, 100% 0, 100% 100%, 88% 100%);
+}
+
+.grid-item[data-shape="upsideDownTriangle"]:not(.editing) .grid-item-text-shaper--left {
+    float: left;
+    shape-outside: polygon(0 0, 18% 0, 78% 100%, 0 100%);
+}
+
+.grid-item[data-shape="upsideDownTriangle"]:not(.editing) .grid-item-text-shaper--right {
+    float: right;
+    shape-outside: polygon(82% 0, 100% 0, 100% 100%, 22% 100%);
+}
+
+/* Toast Styles */
+.toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background-color: var(--primary);
+    color: #ffffff;
+    padding: 15px 20px;
+    border-radius: 5px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    animation: fadein 0.5s, fadeout 0.5s 2.5s;
+    z-index: 1001;
+}
+
+@keyframes fadein {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes fadeOut {
+    from {
+        opacity: 1;
+        transform: translateX(0);
+    }
+
+    to {
+        opacity: 0;
+        transform: translateX(-20px);
+    }
+}
+
+/* Deleting Animation for Tabs */
+@keyframes shake {
+    0% {
+        transform: translateX(0);
+    }
+
+    25% {
+        transform: translateX(-5px);
+    }
+
+    50% {
+        transform: translateX(5px);
+    }
+
+    75% {
+        transform: translateX(-5px);
+    }
+
+    100% {
+        transform: translateX(0);
+    }
+}
+
+.tab.deleting {
+    opacity: 0;
+    max-width: 0;
+    padding: 0;
+    margin-right: 0;
+    border-radius: 0;
+    flex-shrink: 1;
+}
+
+
+/* Style the color picker when disabled */
+#defaultColorPicker:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Optional: Adjust the size and appearance of the color picker */
+#defaultColorPicker {
+    width: 30px;
+    height: 30px;
+    cursor: pointer;
+    border: none;
+    padding: 0;
+}
+
+/* Add to your style.css */
+
+/* Container for Save and Load Buttons */
+.settings-save-load {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 20px;
+}
+
+/* Ensure buttons take equal space and have some spacing */
+.settings-save-load .modal-button {
+    flex: 1;
+    margin: 0 5px;
+    font-size: 12px;
+}
+
+.settings-sync-panel {
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px dashed var(--border-tab-bar);
+    font-family: 'Kalam', sans-serif;
+}
+
+.settings-sync-title {
+    margin-bottom: 6px;
+}
+
+.settings-sync-copy {
+    display: block;
+    margin-bottom: 10px;
+    font-size: 11px;
+    line-height: 1.3;
+    opacity: 0.8;
+}
+
+.settings-sync-label {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 12px;
+}
+
+.settings-sync-input {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--textarea-border);
+    border-radius: 8px;
+    background-color: var(--textarea-bg);
+    color: var(--text-primary);
+    margin-bottom: 10px;
+}
+
+.settings-sync-toggle {
+    margin-top: 0;
+    margin-bottom: 12px;
+}
+
+.settings-sync-status {
+    display: block;
+    margin-top: 8px;
+    font-size: 11px;
+    opacity: 0.8;
+}
+
+.settings-sync-logout {
+    margin-top: 10px;
+}
+
+.settings-sync-logout .modal-button {
+    width: 100%;
+    margin: 0;
+}
+
+.grid-item.selected {
+    outline: 2px dashed var(--note-selected-outline);
+}
+
+.grid-selection-marquee {
+    position: absolute;
+    border: 1px dashed var(--note-selected-outline);
+    background: color-mix(in srgb, var(--note-selected-outline) 18%, transparent);
+    pointer-events: none;
+    z-index: 1200;
+}
