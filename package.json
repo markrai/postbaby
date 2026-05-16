@@ -1,0 +1,14 @@
+{
+  "name": "postbaby-browser-tests",
+  "private": true,
+  "scripts": {
+    "build:public-js": "node scripts/build-public-js.mjs",
+    "test:browser": "playwright test",
+    "test:browser:headed": "playwright test --headed",
+    "verify:public-js": "node scripts/build-public-js.mjs --check"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.54.0",
+    "javascript-obfuscator": "^4.1.1"
+  }
+}

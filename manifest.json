@@ -1,0 +1,23 @@
+{
+    "name": "postbaby",
+    "short_name": "postbaby",
+    "start_url": "/index.html",
+    "background_color": "#ffffff",
+    "theme_color": "#2c2d2c",
+    "icons": [
+      {
+        "src": "./img/icon-192x192.png",
+        "sizes": "192x192",
+        "type": "image/png"
+      },
+      {
+        "src": "./img/icon-512x512.png",
+        "sizes": "512x512",
+        "type": "image/png"
+      }
+    ],
+    "scope": "/",
+    "orientation": "any",
+    "prefer_related_applications": false
+  }
+  

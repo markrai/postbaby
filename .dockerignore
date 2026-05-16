@@ -1,0 +1,15 @@
+.git
+.idea/
+.vscode/
+docs/draft/
+postbaby-backend/data/
+postbaby-data/
+.env
+.env.*
+!.env.example
+**/*.log
+**/*.tmp
+**/*.temp
+**/*.swp
+.DS_Store
+Thumbs.db
