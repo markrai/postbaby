@@ -33,6 +33,24 @@ func TestNewHandlerServesRootWithoutAuthInStaticLocalMode(t *testing.T) {
 	assertNoStore(t, rec)
 }
 
+func TestNewHandlerServesAppShellWithoutAuthInCloudMultiUserMode(t *testing.T) {
+	t.Parallel()
+
+	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+
+	for _, target := range []string{"/", "/index.html"} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		rec := httptest.NewRecorder()
+
+		env.handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected %s to serve app shell, got %d", target, rec.Code)
+		}
+		assertNoStore(t, rec)
+	}
+}
+
 func TestNewHandlerServesStaticAssetsWithoutAuth(t *testing.T) {
 	t.Parallel()
 
@@ -65,9 +83,13 @@ func TestRuntimeConfigServedWithoutAuth(t *testing.T) {
 
 	body := rec.Body.String()
 	for _, want := range []string{
+		`"deploymentMode":"static_local"`,
 		`"authAvailable":false`,
-		`"syncAvailable":false`,
 		`"authRequired":false`,
+		`"isAuthenticated":false`,
+		`"syncAvailable":false`,
+		`"syncRequiresAuth":false`,
+		`"setupAvailable":false`,
 		`"apiBase":""`,
 	} {
 		if !strings.Contains(body, want) {
@@ -76,6 +98,83 @@ func TestRuntimeConfigServedWithoutAuth(t *testing.T) {
 	}
 
 	assertNoStore(t, rec)
+}
+
+func TestRuntimeConfigServedWithoutAuthInCloudMultiUserMode(t *testing.T) {
+	t.Parallel()
+
+	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	req := httptest.NewRequest(http.MethodGet, "/runtime-config.js", nil)
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected runtime config status 200, got %d", rec.Code)
+	}
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		`"deploymentMode":"cloud_multi_user"`,
+		`"authAvailable":false`,
+		`"authRequired":false`,
+		`"isAuthenticated":false`,
+		`"syncAvailable":false`,
+		`"syncRequiresAuth":false`,
+		`"setupAvailable":false`,
+		`"apiBase":""`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected runtime config body to contain %q, got %q", want, body)
+		}
+	}
+
+	assertNoStore(t, rec)
+}
+
+func TestRuntimeConfigReflectsAuthenticationStateInSelfHostedMode(t *testing.T) {
+	t.Parallel()
+
+	env := newServerTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	user := createInitialUser(t, env)
+
+	unauthReq := httptest.NewRequest(http.MethodGet, "/runtime-config.js", nil)
+	unauthRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(unauthRec, unauthReq)
+
+	if unauthRec.Code != http.StatusOK {
+		t.Fatalf("expected unauthenticated runtime config status 200, got %d", unauthRec.Code)
+	}
+
+	unauthBody := unauthRec.Body.String()
+	for _, want := range []string{
+		`"deploymentMode":"selfhosted_single_user"`,
+		`"authAvailable":true`,
+		`"authRequired":true`,
+		`"isAuthenticated":false`,
+		`"syncAvailable":true`,
+		`"syncRequiresAuth":true`,
+		`"setupAvailable":true`,
+		`"apiBase":""`,
+	} {
+		if !strings.Contains(unauthBody, want) {
+			t.Fatalf("expected unauthenticated runtime config body to contain %q, got %q", want, unauthBody)
+		}
+	}
+
+	authReq := httptest.NewRequest(http.MethodGet, "/runtime-config.js", nil)
+	authReq.AddCookie(createSessionCookie(t, env, user.ID))
+	authRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(authRec, authReq)
+
+	if authRec.Code != http.StatusOK {
+		t.Fatalf("expected authenticated runtime config status 200, got %d", authRec.Code)
+	}
+	if body := authRec.Body.String(); !strings.Contains(body, `"isAuthenticated":true`) {
+		t.Fatalf("expected authenticated runtime config body to contain isAuthenticated true, got %q", body)
+	}
+	assertNoStore(t, unauthRec)
+	assertNoStore(t, authRec)
 }
 
 func TestStaticLocalModeDisablesAuthRoutes(t *testing.T) {
@@ -90,6 +189,22 @@ func TestStaticLocalModeDisablesAuthRoutes(t *testing.T) {
 
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("expected %s to return 404 in static mode, got %d", target, rec.Code)
+		}
+	}
+}
+
+func TestCloudMultiUserModeDisablesAuthRoutes(t *testing.T) {
+	t.Parallel()
+
+	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+
+	for _, target := range []string{"/setup", "/login", "/logout"} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		rec := httptest.NewRecorder()
+		env.handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("expected %s to return 404 in cloud mode, got %d", target, rec.Code)
 		}
 	}
 }

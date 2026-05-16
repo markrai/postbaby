@@ -18,9 +18,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
-	if cfg.DeploymentMode == config.DeploymentModeCloudMultiUser {
-		log.Fatalf("deployment mode %q is not implemented yet", cfg.DeploymentMode)
-	}
 
 	if err := cfg.EnsureDBDir(); err != nil {
 		log.Fatalf("prepare database directory: %v", err)

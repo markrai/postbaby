@@ -35,10 +35,14 @@ type authPageData struct {
 }
 
 type runtimeConfig struct {
-	AuthAvailable bool   `json:"authAvailable"`
-	SyncAvailable bool   `json:"syncAvailable"`
-	AuthRequired  bool   `json:"authRequired"`
-	APIBase       string `json:"apiBase"`
+	DeploymentMode   string `json:"deploymentMode"`
+	AuthAvailable    bool   `json:"authAvailable"`
+	AuthRequired     bool   `json:"authRequired"`
+	IsAuthenticated  bool   `json:"isAuthenticated"`
+	SyncAvailable    bool   `json:"syncAvailable"`
+	SyncRequiresAuth bool   `json:"syncRequiresAuth"`
+	SetupAvailable   bool   `json:"setupAvailable"`
+	APIBase          string `json:"apiBase"`
 }
 
 func NewHandler(apiHandler http.Handler, authManager *auth.Manager, staticDir string, deploymentMode config.DeploymentMode) http.Handler {
@@ -53,9 +57,15 @@ func NewHandler(apiHandler http.Handler, authManager *auth.Manager, staticDir st
 	mux := http.NewServeMux()
 	mux.Handle("/api/", server.apiHandler)
 	mux.HandleFunc("/runtime-config.js", server.handleRuntimeConfig)
-	mux.HandleFunc("/setup", server.handleSetup)
-	mux.HandleFunc("/login", server.handleLogin)
-	mux.HandleFunc("/logout", server.handleLogout)
+	if server.setupEnabled() {
+		mux.HandleFunc("/setup", server.handleSetup)
+	}
+	if server.loginEnabled() {
+		mux.HandleFunc("/login", server.handleLogin)
+	}
+	if server.logoutEnabled() {
+		mux.HandleFunc("/logout", server.handleLogout)
+	}
 	mux.HandleFunc("/", server.handleRoot)
 	return mux
 }
@@ -69,12 +79,13 @@ func (s *Server) handleRuntimeConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, err := json.Marshal(runtimeConfig{
-		AuthAvailable: s.authEnabled(),
-		SyncAvailable: s.syncEnabled(),
-		AuthRequired:  s.authRequired(),
-		APIBase:       "",
-	})
+	config, err := s.currentRuntimeConfig(w, r)
+	if err != nil {
+		http.Error(w, "failed to build runtime config", http.StatusInternalServerError)
+		return
+	}
+
+	payload, err := json.Marshal(config)
 	if err != nil {
 		http.Error(w, "failed to encode runtime config", http.StatusInternalServerError)
 		return
@@ -108,19 +119,21 @@ func (s *Server) handleAppShell(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.authEnabled() {
-		http.ServeFile(w, r, filepath.Join(s.staticDir, "index.html"))
+	if !s.appShellAuthRequired() {
+		s.serveAppShellFile(w, r)
 		return
 	}
 
-	setupRequired, err := s.authManager.SetupRequired(r.Context())
-	if err != nil {
-		http.Error(w, "failed to check setup status", http.StatusInternalServerError)
-		return
-	}
-	if setupRequired {
-		http.Redirect(w, r, "/setup", http.StatusSeeOther)
-		return
+	if s.setupEnabled() {
+		setupRequired, err := s.authManager.SetupRequired(r.Context())
+		if err != nil {
+			http.Error(w, "failed to check setup status", http.StatusInternalServerError)
+			return
+		}
+		if setupRequired {
+			http.Redirect(w, r, "/setup", http.StatusSeeOther)
+			return
+		}
 	}
 
 	if _, err := s.authManager.AuthenticateRequest(r.Context(), w, r); err != nil {
@@ -133,13 +146,13 @@ func (s *Server) handleAppShell(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.ServeFile(w, r, filepath.Join(s.staticDir, "index.html"))
+	s.serveAppShellFile(w, r)
 }
 
 func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	httpcache.SetNoStore(w)
 
-	if !s.authEnabled() {
+	if !s.setupEnabled() {
 		http.NotFound(w, r)
 		return
 	}
@@ -253,19 +266,21 @@ func (s *Server) handleSetupPost(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	httpcache.SetNoStore(w)
 
-	if !s.authEnabled() {
+	if !s.loginEnabled() {
 		http.NotFound(w, r)
 		return
 	}
 
-	setupRequired, err := s.authManager.SetupRequired(r.Context())
-	if err != nil {
-		http.Error(w, "failed to check setup status", http.StatusInternalServerError)
-		return
-	}
-	if setupRequired {
-		http.Redirect(w, r, "/setup", http.StatusSeeOther)
-		return
+	if s.setupEnabled() {
+		setupRequired, err := s.authManager.SetupRequired(r.Context())
+		if err != nil {
+			http.Error(w, "failed to check setup status", http.StatusInternalServerError)
+			return
+		}
+		if setupRequired {
+			http.Redirect(w, r, "/setup", http.StatusSeeOther)
+			return
+		}
 	}
 
 	if r.Method == http.MethodGet {
@@ -337,7 +352,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	httpcache.SetNoStore(w)
 
-	if !s.authEnabled() {
+	if !s.logoutEnabled() {
 		http.NotFound(w, r)
 		return
 	}
@@ -358,14 +373,16 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	setupRequired, err := s.authManager.SetupRequired(r.Context())
-	if err != nil {
-		http.Error(w, "failed to check setup status", http.StatusInternalServerError)
-		return
-	}
-	if setupRequired {
-		http.Redirect(w, r, "/setup", http.StatusSeeOther)
-		return
+	if s.setupEnabled() {
+		setupRequired, err := s.authManager.SetupRequired(r.Context())
+		if err != nil {
+			http.Error(w, "failed to check setup status", http.StatusInternalServerError)
+			return
+		}
+		if setupRequired {
+			http.Redirect(w, r, "/setup", http.StatusSeeOther)
+			return
+		}
 	}
 
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
@@ -383,7 +400,62 @@ func (s *Server) redirectAuthenticatedOrLogin(w http.ResponseWriter, r *http.Req
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
-func (s *Server) authEnabled() bool {
+func (s *Server) currentRuntimeConfig(w http.ResponseWriter, r *http.Request) (runtimeConfig, error) {
+	config := runtimeConfig{
+		DeploymentMode:   string(s.deploymentMode),
+		AuthAvailable:    s.authAvailable(),
+		AuthRequired:     s.appShellAuthRequired(),
+		IsAuthenticated:  false,
+		SyncAvailable:    s.syncEnabled(),
+		SyncRequiresAuth: s.syncRequiresAuth(),
+		SetupAvailable:   s.setupEnabled(),
+		APIBase:          "",
+	}
+
+	if !s.authAvailable() {
+		return config, nil
+	}
+
+	if _, err := s.authManager.AuthenticateRequest(r.Context(), w, r); err != nil {
+		if errors.Is(err, auth.ErrUnauthorized) {
+			return config, nil
+		}
+		return runtimeConfig{}, err
+	}
+
+	config.IsAuthenticated = true
+	return config, nil
+}
+
+func (s *Server) serveAppShellFile(w http.ResponseWriter, r *http.Request) {
+	req := r.Clone(r.Context())
+	if r.URL != nil {
+		clonedURL := *r.URL
+		clonedURL.Path = "/"
+		clonedURL.RawPath = ""
+		req.URL = &clonedURL
+	}
+
+	http.ServeFile(w, req, filepath.Join(s.staticDir, "index.html"))
+}
+
+func (s *Server) authAvailable() bool {
+	return s.deploymentMode == config.DeploymentModeSelfHostedSingleUser
+}
+
+func (s *Server) appShellAuthRequired() bool {
+	return s.deploymentMode == config.DeploymentModeSelfHostedSingleUser
+}
+
+func (s *Server) setupEnabled() bool {
+	return s.deploymentMode == config.DeploymentModeSelfHostedSingleUser
+}
+
+func (s *Server) loginEnabled() bool {
+	return s.deploymentMode == config.DeploymentModeSelfHostedSingleUser
+}
+
+func (s *Server) logoutEnabled() bool {
 	return s.deploymentMode == config.DeploymentModeSelfHostedSingleUser
 }
 
@@ -391,7 +463,7 @@ func (s *Server) syncEnabled() bool {
 	return s.deploymentMode == config.DeploymentModeSelfHostedSingleUser
 }
 
-func (s *Server) authRequired() bool {
+func (s *Server) syncRequiresAuth() bool {
 	return s.deploymentMode == config.DeploymentModeSelfHostedSingleUser
 }
 

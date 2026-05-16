@@ -40,6 +40,28 @@ func TestHealthReturnsOK(t *testing.T) {
 	}
 }
 
+func TestHealthReturnsOKInCloudMultiUserMode(t *testing.T) {
+	t.Parallel()
+
+	env := newTestEnv(t, config.DeploymentModeCloudMultiUser)
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp struct {
+		OK bool `json:"ok"`
+	}
+	decodeResponse(t, rec, &resp)
+	if !resp.OK {
+		t.Fatal("expected ok response")
+	}
+}
+
 func TestDocumentRequiresAuthentication(t *testing.T) {
 	t.Parallel()
 
@@ -400,15 +422,20 @@ type testEnv struct {
 func TestDocumentRoutesReturnNotFoundWhenSyncDisabled(t *testing.T) {
 	t.Parallel()
 
-	env := newTestEnv(t, config.DeploymentModeStaticLocal)
+	for _, deploymentMode := range []config.DeploymentMode{
+		config.DeploymentModeStaticLocal,
+		config.DeploymentModeCloudMultiUser,
+	} {
+		env := newTestEnv(t, deploymentMode)
 
-	for _, target := range []string{"/api/document?appId=demo", "/api/document/meta?appId=demo"} {
-		req := httptest.NewRequest(http.MethodGet, target, nil)
-		rec := httptest.NewRecorder()
-		env.handler.ServeHTTP(rec, req)
+		for _, target := range []string{"/api/document?appId=demo", "/api/document/meta?appId=demo"} {
+			req := httptest.NewRequest(http.MethodGet, target, nil)
+			rec := httptest.NewRecorder()
+			env.handler.ServeHTTP(rec, req)
 
-		assertErrorResponse(t, rec, http.StatusNotFound, "not_found")
-		assertNoStore(t, rec)
+			assertErrorResponse(t, rec, http.StatusNotFound, "not_found")
+			assertNoStore(t, rec)
+		}
 	}
 }
 
