@@ -1,0 +1,93 @@
+/* Calendar Grid Styles */
+.grid-calendar {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr); /* 7 days a week */
+    grid-template-rows: auto; /* Rows will adjust based on the number of weeks */
+    gap: 1px; /* Space between cells */
+    margin-top: 0; /* Ensure no extra margin at the top */
+    padding-top: 0; /* Ensure no extra padding at the top */
+    color: red;
+}
+
+.calendar-grid-item {
+    font-size: 12px; /* smaller font size for calendar grid items */
+    height: auto;
+    padding: 10px;
+}
+
+
+.calendar-grid-item.editing {
+    border-radius: 10px; /* Match the textarea border-radius */
+    width: 200px;
+    min-height: 20px;
+    height: auto; /* Allow the container to grow */
+    max-height: none; /* Prevent height restriction */
+}
+
+
+/* Calendar Labels Container */
+.grid-labels-calendar {
+    display: none; /* Hidden by default */
+    grid-template-columns: repeat(7, 1fr);
+    grid-template-rows: auto;
+    width: 100%;
+    pointer-events: none;
+    padding-top: 24px;
+    margin-bottom: 0;
+    color: red;
+}
+
+/* Show Calendar Labels when Calendar grid is active */
+#gridUnderlay.grid-calendar ~ #gridLabels-calendar {
+    display: grid;
+}
+
+/* Day of the Week Headers */
+.grid-label-calendar-day {
+    background-color: var(--calendar-day-header-bg);
+    text-align: center;
+    font-weight: bold;
+    font-family: 'Kalam', sans-serif;
+    color: var(--grid-label-text);
+    max-height: 25px; /* Reduce height further */
+    margin-top: -5px; /* Adjust positioning to bring it closer to the calendar grid */
+}
+
+/* Calendar Date Cells */
+.grid-label-calendar-date {
+    background-color: var(--calendar-date-bg);
+    text-align: left;
+    padding: 15px 0;
+    padding-left: 10px;
+    font-family: 'Kalam', sans-serif;
+    color: var(--grid-label-text);
+    cursor: pointer;
+    transition: background-color 0.3s ease-in-out;
+    border: 1px solid var(--calendar-date-border);
+}
+
+.grid-labels-calendar, .grid-calendar {
+    grid-auto-rows: 1fr;
+}
+
+
+/* Hover Effect on Date Cells */
+.grid-label-calendar-date:hover {
+    background-color: var(--calendar-date-hover);
+}
+
+/* Current Day Highlight */
+.grid-label-calendar-date.current-day {
+    background-color: var(--calendar-current-day);
+}
+
+/* Responsive Adjustments */
+@media (max-width: 768px) {
+    .grid-calendar {
+        gap: 0.5px;
+    }
+    .grid-label-calendar-day, .grid-label-calendar-date {
+        padding: 6px 0; /* Compact padding on smaller screens */
+        font-size: 14px;
+    }
+}

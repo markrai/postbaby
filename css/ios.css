@@ -1,0 +1,41 @@
+.ios-notification {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: var(--ios-overlay);
+    color: var(--ios-card-fg);
+    display: none; /* Hidden by default */
+    justify-content: center;
+    align-items: center;
+    z-index: 9999; /* Ensure it appears on top */
+}
+
+.ios-notification-content {
+    text-align: center;
+    padding: 20px;
+    background: var(--ios-card);
+    border-radius: 8px;
+    max-width: 80%;
+    margin: auto;
+}
+
+.ios-notification p {
+    font-size: 1.2em;
+    margin-bottom: 20px;
+}
+
+.ios-notification-button {
+    background-color: var(--ios-accent);
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    padding: 10px 20px;
+    font-size: 1em;
+    cursor: pointer;
+}
+
+.ios-notification-button:hover {
+    background-color: var(--ios-accent-hover);
+}
