@@ -1,0 +1,15 @@
+# After importing the image tar from generate_tar.bat (tag: postbaby:local).
+services:
+  postbaby:
+    image: postbaby:local
+    ports:
+      - "${POSTBABY_PORT:-9170}:8080"
+    environment:
+      POSTBABY_DEPLOYMENT_MODE: ${POSTBABY_DEPLOYMENT_MODE:-selfhosted_single_user}
+      POSTBABY_COOKIE_SECURE: ${POSTBABY_COOKIE_SECURE:-false}
+      POSTBABY_SESSION_TTL: ${POSTBABY_SESSION_TTL:-720h}
+    volumes:
+      - type: bind
+        source: ${POSTBABY_DATA_DIR:-./postbaby-data}
+        target: /app/data
+    restart: unless-stopped
