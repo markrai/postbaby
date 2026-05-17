@@ -17,6 +17,7 @@ type IdentityStore interface {
 	UsersExist(ctx context.Context) (bool, error)
 	BootstrapOwnerKey(ctx context.Context) (string, error)
 	CreateInitialUser(ctx context.Context, username, passwordHash, ownerKey string) (User, error)
+	CreateUser(ctx context.Context, username, passwordHash, ownerKey string) (User, error)
 	GetUserByUsername(ctx context.Context, username string) (User, error)
 	CreateSession(ctx context.Context, userID int64, tokenHash string, expiresAt time.Time) (Session, error)
 	GetSessionUserByTokenHash(ctx context.Context, tokenHash string) (SessionUser, error)

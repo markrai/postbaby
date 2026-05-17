@@ -178,6 +178,44 @@ func TestCreateInitialUserOnlyAllowsFirstAccount(t *testing.T) {
 	}
 }
 
+func TestCreateUserAllowsAdditionalAccounts(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+
+	if _, err := docStore.CreateInitialUser(ctx, "owner", "argon-hash", "owner-key"); err != nil {
+		t.Fatalf("create initial user: %v", err)
+	}
+
+	user, err := docStore.CreateUser(ctx, "guest", "argon-hash-2", "guest-owner-key")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	if user.IsAdmin {
+		t.Fatalf("expected hosted user to be non-admin, got %+v", user)
+	}
+	if user.OwnerKey != "guest-owner-key" {
+		t.Fatalf("expected owner key to be preserved, got %q", user.OwnerKey)
+	}
+}
+
+func TestCreateUserRejectsDuplicateUsername(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+
+	if _, err := docStore.CreateUser(ctx, "owner", "argon-hash", "owner-key"); err != nil {
+		t.Fatalf("create first user: %v", err)
+	}
+
+	if _, err := docStore.CreateUser(ctx, "OWNER", "argon-hash-2", "owner-key-2"); !errors.Is(err, ErrUsernameTaken) {
+		t.Fatalf("expected username taken, got %v", err)
+	}
+}
+
 func TestSessionLifecycle(t *testing.T) {
 	t.Parallel()
 

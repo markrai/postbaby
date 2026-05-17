@@ -60,6 +60,9 @@ func NewHandler(apiHandler http.Handler, authManager *auth.Manager, staticDir st
 	if server.setupEnabled() {
 		mux.HandleFunc("/setup", server.handleSetup)
 	}
+	if server.signupEnabled() {
+		mux.HandleFunc("/signup", server.handleSignup)
+	}
 	if server.loginEnabled() {
 		mux.HandleFunc("/login", server.handleLogin)
 	}
@@ -291,14 +294,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to authenticate request", http.StatusInternalServerError)
 			return
 		}
-		renderAuthPage(w, http.StatusOK, authPageData{
-			Title:             "Postbaby Login",
-			Heading:           "Sign in to Postbaby",
-			Body:              "Use the local account configured on this server.",
-			Action:            "/login",
-			SubmitLabel:       "Sign in",
-			PasswordMinLength: auth.PasswordMinLength(),
-		})
+		renderAuthPage(w, http.StatusOK, s.loginPageData(""))
 		return
 	}
 
@@ -319,15 +315,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	username := strings.TrimSpace(r.FormValue("username"))
 	password := r.FormValue("password")
-	page := authPageData{
-		Title:             "Postbaby Login",
-		Heading:           "Sign in to Postbaby",
-		Body:              "Use the local account configured on this server.",
-		Action:            "/login",
-		SubmitLabel:       "Sign in",
-		Username:          username,
-		PasswordMinLength: auth.PasswordMinLength(),
-	}
+	page := s.loginPageData(username)
 
 	if username == "" || password == "" {
 		page.Error = "Enter both username and password."
@@ -343,6 +331,93 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 
 		http.Error(w, "failed to sign in", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
+	httpcache.SetNoStore(w)
+
+	if !s.signupEnabled() {
+		http.NotFound(w, r)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		if _, err := s.authManager.AuthenticateRequest(r.Context(), w, r); err == nil {
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		} else if err != nil && !errors.Is(err, auth.ErrUnauthorized) {
+			http.Error(w, "failed to authenticate request", http.StatusInternalServerError)
+			return
+		}
+		renderAuthPage(w, http.StatusOK, s.signupPageData(""))
+	case http.MethodPost:
+		s.handleSignupPost(w, r)
+	default:
+		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleSignupPost(w http.ResponseWriter, r *http.Request) {
+	if !isTrustedFormPost(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form submission", http.StatusBadRequest)
+		return
+	}
+
+	username := strings.TrimSpace(r.FormValue("username"))
+	password := r.FormValue("password")
+	confirmPassword := r.FormValue("confirmPassword")
+	page := s.signupPageData(username)
+
+	if username == "" {
+		page.Error = "Enter a username."
+		renderAuthPage(w, http.StatusBadRequest, page)
+		return
+	}
+	if password == "" {
+		page.Error = "Enter a password."
+		renderAuthPage(w, http.StatusBadRequest, page)
+		return
+	}
+	if len(password) < auth.PasswordMinLength() {
+		page.Error = "Choose a longer password."
+		renderAuthPage(w, http.StatusBadRequest, page)
+		return
+	}
+	if confirmPassword == "" {
+		page.Error = "Confirm the password."
+		renderAuthPage(w, http.StatusBadRequest, page)
+		return
+	}
+	if password != confirmPassword {
+		page.Error = "Passwords do not match."
+		renderAuthPage(w, http.StatusBadRequest, page)
+		return
+	}
+
+	user, err := s.authManager.CreateUser(r.Context(), username, password)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrUsernameTaken):
+			page.Error = "Could not create that account. Try signing in or choose a different username."
+			renderAuthPage(w, http.StatusConflict, page)
+		default:
+			http.Error(w, "failed to create account", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	if err := s.authManager.CreateSession(r.Context(), w, user.ID); err != nil {
+		http.Error(w, "failed to start session", http.StatusInternalServerError)
 		return
 	}
 
@@ -385,7 +460,12 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	http.Redirect(w, r, "/login", http.StatusSeeOther)
+	if s.appShellAuthRequired() {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func (s *Server) redirectAuthenticatedOrLogin(w http.ResponseWriter, r *http.Request) {
@@ -440,7 +520,8 @@ func (s *Server) serveAppShellFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authAvailable() bool {
-	return s.deploymentMode == config.DeploymentModeSelfHostedSingleUser
+	return s.deploymentMode == config.DeploymentModeSelfHostedSingleUser ||
+		s.deploymentMode == config.DeploymentModeCloudMultiUser
 }
 
 func (s *Server) appShellAuthRequired() bool {
@@ -451,20 +532,55 @@ func (s *Server) setupEnabled() bool {
 	return s.deploymentMode == config.DeploymentModeSelfHostedSingleUser
 }
 
+func (s *Server) signupEnabled() bool {
+	return s.deploymentMode == config.DeploymentModeCloudMultiUser
+}
+
 func (s *Server) loginEnabled() bool {
-	return s.deploymentMode == config.DeploymentModeSelfHostedSingleUser
+	return s.authAvailable()
 }
 
 func (s *Server) logoutEnabled() bool {
-	return s.deploymentMode == config.DeploymentModeSelfHostedSingleUser
+	return s.authAvailable()
 }
 
 func (s *Server) syncEnabled() bool {
-	return s.deploymentMode == config.DeploymentModeSelfHostedSingleUser
+	return s.deploymentMode == config.DeploymentModeSelfHostedSingleUser ||
+		s.deploymentMode == config.DeploymentModeCloudMultiUser
 }
 
 func (s *Server) syncRequiresAuth() bool {
-	return s.deploymentMode == config.DeploymentModeSelfHostedSingleUser
+	return s.syncEnabled()
+}
+
+func (s *Server) loginPageData(username string) authPageData {
+	body := "Use the local account configured on this server."
+	if s.deploymentMode == config.DeploymentModeCloudMultiUser {
+		body = "Sign in to turn on account-backed sync for this Postbaby board."
+	}
+
+	return authPageData{
+		Title:             "Postbaby Login",
+		Heading:           "Sign in to Postbaby",
+		Body:              body,
+		Action:            "/login",
+		SubmitLabel:       "Sign in",
+		Username:          username,
+		PasswordMinLength: auth.PasswordMinLength(),
+	}
+}
+
+func (s *Server) signupPageData(username string) authPageData {
+	return authPageData{
+		Title:             "Postbaby Signup",
+		Heading:           "Create a Postbaby account",
+		Body:              "Create an account to sync this Postbaby board across your browsers and devices.",
+		Action:            "/signup",
+		SubmitLabel:       "Create account",
+		Username:          username,
+		ShowConfirm:       true,
+		PasswordMinLength: auth.PasswordMinLength(),
+	}
 }
 
 func isTrustedFormPost(r *http.Request) bool {

@@ -95,6 +95,20 @@ func (m *Manager) CreateInitialUser(ctx context.Context, username, password stri
 	return m.store.CreateInitialUser(ctx, username, passwordHash, ownerKey)
 }
 
+func (m *Manager) CreateUser(ctx context.Context, username, password string) (store.User, error) {
+	passwordHash, err := HashPassword(password)
+	if err != nil {
+		return store.User{}, err
+	}
+
+	ownerKey, err := randomOwnerKey()
+	if err != nil {
+		return store.User{}, err
+	}
+
+	return m.store.CreateUser(ctx, username, passwordHash, ownerKey)
+}
+
 func (m *Manager) Login(ctx context.Context, w http.ResponseWriter, username, password string) (store.User, error) {
 	user, err := m.store.GetUserByUsername(ctx, username)
 	if err != nil {

@@ -412,6 +412,93 @@ func TestDocumentLoadAfterSavePreservesJSON(t *testing.T) {
 	assertJSONEqual(t, payload["data"], resp.Data)
 }
 
+func TestCloudMultiUserDocumentRoutesRequireAuthentication(t *testing.T) {
+	t.Parallel()
+
+	env := newTestEnv(t, config.DeploymentModeCloudMultiUser)
+
+	for _, target := range []string{"/api/document?appId=demo", "/api/document/meta?appId=demo"} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		rec := httptest.NewRecorder()
+		env.handler.ServeHTTP(rec, req)
+
+		assertErrorResponse(t, rec, http.StatusUnauthorized, "unauthorized")
+		assertNoStore(t, rec)
+	}
+}
+
+func TestCloudMultiUserDocumentRoutesUseAuthenticatedOwnerNamespace(t *testing.T) {
+	t.Parallel()
+
+	env := newTestEnv(t, config.DeploymentModeCloudMultiUser)
+	firstCookie := createAuthenticatedUserSession(t, env, "cloud-user-one")
+	secondCookie := createAuthenticatedUserSession(t, env, "cloud-user-two")
+
+	firstPut := performJSONRequest(t, env.handler, firstCookie, http.MethodPut, "/api/document", map[string]any{
+		"appId": "demo",
+		"data":  snapshot("tab-1", `[{"id":"tab-1","name":"1"}]`),
+	})
+	if firstPut.Code != http.StatusOK {
+		t.Fatalf("expected first user save status 200, got %d", firstPut.Code)
+	}
+
+	secondPut := performJSONRequest(t, env.handler, secondCookie, http.MethodPut, "/api/document", map[string]any{
+		"appId": "demo",
+		"data":  snapshot("tab-2", `[{"id":"tab-2","name":"2"}]`),
+	})
+	if secondPut.Code != http.StatusOK {
+		t.Fatalf("expected second user save status 200, got %d", secondPut.Code)
+	}
+
+	firstGetReq := httptest.NewRequest(http.MethodGet, "/api/document?appId=demo", nil)
+	firstGetReq.AddCookie(firstCookie)
+	firstGetRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(firstGetRec, firstGetReq)
+
+	secondGetReq := httptest.NewRequest(http.MethodGet, "/api/document?appId=demo", nil)
+	secondGetReq.AddCookie(secondCookie)
+	secondGetRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(secondGetRec, secondGetReq)
+
+	var firstDoc struct {
+		OK      bool              `json:"ok"`
+		AppID   string            `json:"appId"`
+		Data    map[string]string `json:"data"`
+		Version int64             `json:"version"`
+	}
+	decodeResponse(t, firstGetRec, &firstDoc)
+	if !firstDoc.OK || firstDoc.AppID != "demo" || firstDoc.Version != 1 || firstDoc.Data["activeTabId"] != "tab-1" {
+		t.Fatalf("unexpected first user document response: %+v", firstDoc)
+	}
+
+	var secondDoc struct {
+		OK      bool              `json:"ok"`
+		AppID   string            `json:"appId"`
+		Data    map[string]string `json:"data"`
+		Version int64             `json:"version"`
+	}
+	decodeResponse(t, secondGetRec, &secondDoc)
+	if !secondDoc.OK || secondDoc.AppID != "demo" || secondDoc.Version != 1 || secondDoc.Data["activeTabId"] != "tab-2" {
+		t.Fatalf("unexpected second user document response: %+v", secondDoc)
+	}
+
+	firstMetaReq := httptest.NewRequest(http.MethodGet, "/api/document/meta?appId=demo", nil)
+	firstMetaReq.AddCookie(firstCookie)
+	firstMetaRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(firstMetaRec, firstMetaReq)
+
+	var firstMeta struct {
+		OK      bool   `json:"ok"`
+		AppID   string `json:"appId"`
+		Exists  bool   `json:"exists"`
+		Version int64  `json:"version"`
+	}
+	decodeResponse(t, firstMetaRec, &firstMeta)
+	if !firstMeta.OK || firstMeta.AppID != "demo" || !firstMeta.Exists || firstMeta.Version != 1 {
+		t.Fatalf("unexpected first user document meta response: %+v", firstMeta)
+	}
+}
+
 type testEnv struct {
 	handler     http.Handler
 	store       *store.Store
@@ -422,20 +509,15 @@ type testEnv struct {
 func TestDocumentRoutesReturnNotFoundWhenSyncDisabled(t *testing.T) {
 	t.Parallel()
 
-	for _, deploymentMode := range []config.DeploymentMode{
-		config.DeploymentModeStaticLocal,
-		config.DeploymentModeCloudMultiUser,
-	} {
-		env := newTestEnv(t, deploymentMode)
+	env := newTestEnv(t, config.DeploymentModeStaticLocal)
 
-		for _, target := range []string{"/api/document?appId=demo", "/api/document/meta?appId=demo"} {
-			req := httptest.NewRequest(http.MethodGet, target, nil)
-			rec := httptest.NewRecorder()
-			env.handler.ServeHTTP(rec, req)
+	for _, target := range []string{"/api/document?appId=demo", "/api/document/meta?appId=demo"} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		rec := httptest.NewRecorder()
+		env.handler.ServeHTTP(rec, req)
 
-			assertErrorResponse(t, rec, http.StatusNotFound, "not_found")
-			assertNoStore(t, rec)
-		}
+		assertErrorResponse(t, rec, http.StatusNotFound, "not_found")
+		assertNoStore(t, rec)
 	}
 }
 
@@ -483,6 +565,27 @@ func newAuthenticatedTestEnv(t *testing.T, deploymentMode config.DeploymentMode)
 
 	env.cookie = cookies[0]
 	return env
+}
+
+func createAuthenticatedUserSession(t *testing.T, env *testEnv, username string) *http.Cookie {
+	t.Helper()
+
+	user, err := env.authManager.CreateUser(context.Background(), username, testPassword)
+	if err != nil {
+		t.Fatalf("create hosted user: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	if err := env.authManager.CreateSession(context.Background(), rec, user.ID); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	cookies := rec.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("expected session cookie")
+	}
+
+	return cookies[0]
 }
 
 func performJSONRequest(t *testing.T, handler http.Handler, cookie *http.Cookie, method, target string, payload any) *httptest.ResponseRecorder {

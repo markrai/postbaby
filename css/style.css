@@ -29,6 +29,43 @@
 
 }
 
+.tabbar-auth-controls {
+    position: fixed;
+    top: 10px;
+    right: 14px;
+    z-index: 8;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-family: 'Kalam', sans-serif;
+    font-size: 13px;
+    line-height: 1;
+}
+
+.tabbar-auth-links {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.tabbar-auth-link,
+.tabbar-auth-button {
+    color: var(--text-primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    background: none;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    cursor: pointer;
+}
+
+.tabbar-auth-link:hover,
+.tabbar-auth-button:hover {
+    opacity: 0.75;
+}
+
 .tab {
     padding: 10px 20px;
     margin-right: 5px;
@@ -953,15 +990,6 @@ h1 {
     margin-top: 8px;
     font-size: 11px;
     opacity: 0.8;
-}
-
-.settings-sync-logout {
-    margin-top: 10px;
-}
-
-.settings-sync-logout .modal-button {
-    width: 100%;
-    margin: 0;
 }
 
 .grid-item.selected {

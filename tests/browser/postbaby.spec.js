@@ -3983,10 +3983,11 @@ test.describe('Runtime auth and sync gating', () => {
     expect(debugState.shouldShowSyncUI).toBe(true);
     expect(debugState.shouldShowLogoutControl).toBe(true);
     expect(debugState.isBackgroundSyncActive).toBe(true);
+    await expect(page.locator('#logoutForm')).toBeVisible();
+    await expect(page.locator('#authLinks')).toBeHidden();
 
     await openSettingsModal(page);
     await expect(page.locator('.settings-sync-panel')).toBeVisible();
-    await expect(page.locator('#logoutForm')).toBeVisible();
     await page.locator('.close-settings').click();
   });
 
@@ -4024,14 +4025,56 @@ test.describe('Runtime auth and sync gating', () => {
     expect(debugState.shouldStartSyncImmediately).toBe(false);
     expect(debugState.shouldShowSyncUI).toBe(true);
     expect(debugState.shouldShowLogoutControl).toBe(false);
+    expect(debugState.shouldShowHostedAuthLinks).toBe(true);
     expect(debugState.isSyncAwaitingAuthentication).toBe(true);
     expect(debugState.isBackgroundSyncActive).toBe(false);
+    await expect(page.locator('#authLinks')).toBeVisible();
+    await expect(page.locator('#loginLink')).toHaveAttribute('href', '/login');
+    await expect(page.locator('#signupLink')).toHaveAttribute('href', '/signup');
+    await expect(page.locator('#logoutForm')).toBeHidden();
 
     await openSettingsModal(page);
     await expect(page.locator('.settings-sync-panel')).toBeVisible();
-    await expect(page.locator('#logoutForm')).toBeHidden();
     await expect(page.locator('#syncStateStatus')).toContainText('Sign in to sync across devices');
     await expect(page.locator('#syncVersionStatus')).toContainText('Server version: sign in to access sync');
+    await page.locator('.close-settings').click();
+  });
+
+  test('optional-auth authenticated runtime still auto-starts sync', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Optional Auth Signed In');
+    const syncRequests = [];
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await enableMockedSync(page, {
+      runtimeConfig: {
+        deploymentMode: 'cloud_multi_user',
+        authRequired: false,
+        isAuthenticated: true
+      }
+    });
+    page.on('request', (request) => {
+      const url = request.url();
+      if (url.includes('/api/document/meta') || url.includes('/api/document')) {
+        syncRequests.push(url);
+      }
+    });
+
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Optional Auth Signed In');
+    await expect.poll(() => syncRequests.some((url) => url.includes('/api/document/meta'))).toBe(true);
+
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    expect(debugState.runtimeConfig.authRequired).toBe(false);
+    expect(debugState.runtimeConfig.isAuthenticated).toBe(true);
+    expect(debugState.shouldStartSyncImmediately).toBe(true);
+    expect(debugState.shouldShowLogoutControl).toBe(true);
+    expect(debugState.shouldShowHostedAuthLinks).toBe(false);
+    expect(debugState.isBackgroundSyncActive).toBe(true);
+    await expect(page.locator('#authLinks')).toBeHidden();
+    await expect(page.locator('#logoutForm')).toBeVisible();
+
+    await openSettingsModal(page);
     await page.locator('.close-settings').click();
   });
 
@@ -4068,11 +4111,13 @@ test.describe('Runtime auth and sync gating', () => {
     expect(debugState.runtimeConfig.isAuthenticated).toBe(false);
     expect(debugState.shouldStartSyncImmediately).toBe(false);
     expect(debugState.shouldShowLogoutControl).toBe(false);
+    expect(debugState.shouldShowHostedAuthLinks).toBe(true);
     expect(debugState.isBackgroundSyncActive).toBe(false);
     expect(debugState.syncStatusMessage).toBe('Login expired - sign in again');
+    await expect(page.locator('#authLinks')).toBeVisible();
+    await expect(page.locator('#logoutForm')).toBeHidden();
 
     await openSettingsModal(page);
-    await expect(page.locator('#logoutForm')).toBeHidden();
     await expect(page.locator('#syncStateStatus')).toContainText('Login expired - sign in again');
     await page.locator('.close-settings').click();
   });

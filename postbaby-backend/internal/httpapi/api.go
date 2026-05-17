@@ -339,5 +339,6 @@ func (a *API) requireUser(w http.ResponseWriter, r *http.Request) (*store.User, 
 }
 
 func (a *API) syncEnabled() bool {
-	return a.deploymentMode == config.DeploymentModeSelfHostedSingleUser
+	return a.deploymentMode == config.DeploymentModeSelfHostedSingleUser ||
+		a.deploymentMode == config.DeploymentModeCloudMultiUser
 }

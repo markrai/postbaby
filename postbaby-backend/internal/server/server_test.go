@@ -116,11 +116,11 @@ func TestRuntimeConfigServedWithoutAuthInCloudMultiUserMode(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		`"deploymentMode":"cloud_multi_user"`,
-		`"authAvailable":false`,
+		`"authAvailable":true`,
 		`"authRequired":false`,
 		`"isAuthenticated":false`,
-		`"syncAvailable":false`,
-		`"syncRequiresAuth":false`,
+		`"syncAvailable":true`,
+		`"syncRequiresAuth":true`,
 		`"setupAvailable":false`,
 		`"apiBase":""`,
 	} {
@@ -130,6 +130,51 @@ func TestRuntimeConfigServedWithoutAuthInCloudMultiUserMode(t *testing.T) {
 	}
 
 	assertNoStore(t, rec)
+}
+
+func TestRuntimeConfigReflectsAuthenticationStateInCloudMultiUserMode(t *testing.T) {
+	t.Parallel()
+
+	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	user := createHostedUser(t, env, "cloud-user")
+
+	unauthReq := httptest.NewRequest(http.MethodGet, "/runtime-config.js", nil)
+	unauthRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(unauthRec, unauthReq)
+
+	if unauthRec.Code != http.StatusOK {
+		t.Fatalf("expected unauthenticated runtime config status 200, got %d", unauthRec.Code)
+	}
+
+	unauthBody := unauthRec.Body.String()
+	for _, want := range []string{
+		`"deploymentMode":"cloud_multi_user"`,
+		`"authAvailable":true`,
+		`"authRequired":false`,
+		`"isAuthenticated":false`,
+		`"syncAvailable":true`,
+		`"syncRequiresAuth":true`,
+		`"setupAvailable":false`,
+		`"apiBase":""`,
+	} {
+		if !strings.Contains(unauthBody, want) {
+			t.Fatalf("expected unauthenticated cloud runtime config body to contain %q, got %q", want, unauthBody)
+		}
+	}
+
+	authReq := httptest.NewRequest(http.MethodGet, "/runtime-config.js", nil)
+	authReq.AddCookie(createSessionCookie(t, env, user.ID))
+	authRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(authRec, authReq)
+
+	if authRec.Code != http.StatusOK {
+		t.Fatalf("expected authenticated cloud runtime config status 200, got %d", authRec.Code)
+	}
+	if body := authRec.Body.String(); !strings.Contains(body, `"isAuthenticated":true`) {
+		t.Fatalf("expected authenticated cloud runtime config body to contain isAuthenticated true, got %q", body)
+	}
+	assertNoStore(t, unauthRec)
+	assertNoStore(t, authRec)
 }
 
 func TestRuntimeConfigReflectsAuthenticationStateInSelfHostedMode(t *testing.T) {
@@ -193,20 +238,162 @@ func TestStaticLocalModeDisablesAuthRoutes(t *testing.T) {
 	}
 }
 
-func TestCloudMultiUserModeDisablesAuthRoutes(t *testing.T) {
+func TestCloudMultiUserModeDisablesSetupRoute(t *testing.T) {
 	t.Parallel()
 
 	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
 
-	for _, target := range []string{"/setup", "/login", "/logout"} {
-		req := httptest.NewRequest(http.MethodGet, target, nil)
-		rec := httptest.NewRecorder()
-		env.handler.ServeHTTP(rec, req)
+	req := httptest.NewRequest(http.MethodGet, "/setup", nil)
+	rec := httptest.NewRecorder()
+	env.handler.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("expected %s to return 404 in cloud mode, got %d", target, rec.Code)
-		}
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected /setup to return 404 in cloud mode, got %d", rec.Code)
 	}
+}
+
+func TestCloudMultiUserSignupPageAndFlow(t *testing.T) {
+	t.Parallel()
+
+	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/signup", nil)
+	getRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(getRec, getReq)
+
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected signup page status 200, got %d", getRec.Code)
+	}
+	assertNoStore(t, getRec)
+
+	form := url.Values{
+		"username":        {"cloud-user"},
+		"password":        {serverTestPassword},
+		"confirmPassword": {serverTestPassword},
+	}
+	postReq := httptest.NewRequest(http.MethodPost, "/signup", strings.NewReader(form.Encode()))
+	postReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	postReq.Header.Set("Origin", "http://example.com")
+	postReq.Host = "example.com"
+	postRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(postRec, postReq)
+
+	if postRec.Code != http.StatusSeeOther {
+		t.Fatalf("expected signup redirect, got %d", postRec.Code)
+	}
+	if location := postRec.Header().Get("Location"); location != "/" {
+		t.Fatalf("expected signup redirect to /, got %q", location)
+	}
+	assertNoStore(t, postRec)
+
+	cookies := postRec.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("expected session cookie after signup")
+	}
+
+	runtimeReq := httptest.NewRequest(http.MethodGet, "/runtime-config.js", nil)
+	runtimeReq.AddCookie(cookies[0])
+	runtimeRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(runtimeRec, runtimeReq)
+	if !strings.Contains(runtimeRec.Body.String(), `"isAuthenticated":true`) {
+		t.Fatalf("expected authenticated runtime config after signup, got %q", runtimeRec.Body.String())
+	}
+}
+
+func TestCloudMultiUserDuplicateSignupIsHandledSafely(t *testing.T) {
+	t.Parallel()
+
+	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	createHostedUser(t, env, "cloud-user")
+
+	form := url.Values{
+		"username":        {"cloud-user"},
+		"password":        {serverTestPassword},
+		"confirmPassword": {serverTestPassword},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/signup", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://example.com")
+	req.Host = "example.com"
+	rec := httptest.NewRecorder()
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected duplicate signup status 409, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Could not create that account. Try signing in or choose a different username.") {
+		t.Fatalf("expected generic duplicate signup error, got %q", body)
+	}
+	if strings.Contains(body, "already in use") {
+		t.Fatalf("expected duplicate signup to avoid username leak, got %q", body)
+	}
+	assertNoStore(t, rec)
+}
+
+func TestCloudMultiUserLoginPageAndFlow(t *testing.T) {
+	t.Parallel()
+
+	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	createHostedUser(t, env, "cloud-user")
+
+	getReq := httptest.NewRequest(http.MethodGet, "/login", nil)
+	getRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(getRec, getReq)
+
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected login page status 200, got %d", getRec.Code)
+	}
+	assertNoStore(t, getRec)
+
+	form := url.Values{
+		"username": {"cloud-user"},
+		"password": {serverTestPassword},
+	}
+	postReq := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	postReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	postReq.Header.Set("Origin", "http://example.com")
+	postReq.Host = "example.com"
+	postRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(postRec, postReq)
+
+	if postRec.Code != http.StatusSeeOther {
+		t.Fatalf("expected login redirect, got %d", postRec.Code)
+	}
+	if location := postRec.Header().Get("Location"); location != "/" {
+		t.Fatalf("expected login redirect to /, got %q", location)
+	}
+	if len(postRec.Result().Cookies()) == 0 {
+		t.Fatal("expected session cookie after login")
+	}
+	assertNoStore(t, postRec)
+}
+
+func TestCloudMultiUserLogoutClearsSessionAndRedirectsHome(t *testing.T) {
+	t.Parallel()
+
+	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	user := createHostedUser(t, env, "cloud-user")
+	cookie := createSessionCookie(t, env, user.ID)
+
+	req := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	req.Header.Set("Origin", "http://example.com")
+	req.Host = "example.com"
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected logout redirect, got %d", rec.Code)
+	}
+	if location := rec.Header().Get("Location"); location != "/" {
+		t.Fatalf("expected logout redirect to /, got %q", location)
+	}
+	logoutCookies := rec.Result().Cookies()
+	if len(logoutCookies) == 0 || logoutCookies[0].MaxAge != -1 {
+		t.Fatal("expected cleared session cookie on logout")
+	}
+	assertNoStore(t, rec)
 }
 
 func TestNewHandlerRedirectsRootToSetupWhenNoUsers(t *testing.T) {
@@ -451,6 +638,17 @@ func createInitialUser(t *testing.T, env *serverTestEnv) store.User {
 	user, err := env.authManager.CreateInitialUser(context.Background(), "owner", serverTestPassword)
 	if err != nil {
 		t.Fatalf("create initial user: %v", err)
+	}
+
+	return user
+}
+
+func createHostedUser(t *testing.T, env *serverTestEnv, username string) store.User {
+	t.Helper()
+
+	user, err := env.authManager.CreateUser(context.Background(), username, serverTestPassword)
+	if err != nil {
+		t.Fatalf("create hosted user: %v", err)
 	}
 
 	return user

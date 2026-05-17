@@ -160,6 +160,45 @@ func (s *Store) CreateInitialUser(ctx context.Context, username, passwordHash, o
 	}, nil
 }
 
+func (s *Store) CreateUser(ctx context.Context, username, passwordHash, ownerKey string) (User, error) {
+	started := time.Now()
+	ctx, cancel := withDBTimeout(ctx)
+	defer cancel()
+
+	createdAt := time.Now().UTC().Format(time.RFC3339)
+	result, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO users (username, password_hash, owner_key, is_admin, created_at)
+		VALUES (?, ?, ?, ?, ?)`,
+		username,
+		passwordHash,
+		ownerKey,
+		0,
+		createdAt,
+	)
+	if err != nil {
+		if isUniqueConstraintError(err, "users.username") {
+			return User{}, ErrUsernameTaken
+		}
+		return User{}, s.wrapDBError("create_user", started, fmt.Errorf("insert user: %w", err))
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return User{}, s.wrapDBError("create_user_last_id", started, fmt.Errorf("read inserted user id: %w", err))
+	}
+
+	s.logDBOperation("create_user", started, nil)
+	return User{
+		ID:           id,
+		Username:     username,
+		PasswordHash: passwordHash,
+		OwnerKey:     ownerKey,
+		IsAdmin:      false,
+		CreatedAt:    mustParseTimestamp(createdAt),
+	}, nil
+}
+
 func (s *Store) GetUserByUsername(ctx context.Context, username string) (User, error) {
 	started := time.Now()
 	ctx, cancel := withDBTimeout(ctx)

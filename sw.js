@@ -1,6 +1,6 @@
 // sw.js
 
-const PUBLIC_JS_REVISION = '58df9e7ef9c7';
+const PUBLIC_JS_REVISION = 'ccf288de4f25';
 const CACHE_NAME = 'postbaby-cache-v8-' + PUBLIC_JS_REVISION;
 const urlsToCache = [
   '/favicon.ico',
@@ -70,35 +70,26 @@ self.addEventListener('fetch', (event) => {
   }
 
   event.respondWith(
-    caches.match(event.request)
-      .then((response) => {
-        // Cache hit - return the response
-        if (response) {
-          return response;
-        }
+    fetch(event.request).then((response) => {
+      if (!response || response.status !== 200 || response.type !== 'basic') {
+        return response;
+      }
 
-        // Clone the request as it's a stream and can be consumed only once
-        const fetchRequest = event.request.clone();
+      const responseToCache = response.clone();
+      event.waitUntil(
+        caches.open(CACHE_NAME)
+          .then((cache) => cache.put(event.request, responseToCache))
+      );
 
-        return fetch(fetchRequest).then(
-          (response) => {
-            // Check for a valid response
-            if (!response || response.status !== 200 || response.type !== 'basic') {
-              return response;
-            }
+      return response;
+    }).catch(async () => {
+      const cachedResponse = await caches.match(event.request);
+      if (cachedResponse) {
+        return cachedResponse;
+      }
 
-            // Clone the response as it's a stream
-            const responseToCache = response.clone();
-
-            caches.open(CACHE_NAME)
-              .then((cache) => {
-                cache.put(event.request, responseToCache);
-              });
-
-            return response;
-          }
-        ).catch(() => Response.error());
-      })
+      return Response.error();
+    })
   );
 });
 

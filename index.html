@@ -76,6 +76,16 @@
         <div class="tab add-tab" id="addTab">+</div>
     </div>
 
+    <div id="topAuthControls" class="tabbar-auth-controls">
+        <div id="authLinks" class="tabbar-auth-links" hidden>
+            <a id="loginLink" class="tabbar-auth-link" href="/login">Sign In</a>
+            <a id="signupLink" class="tabbar-auth-link" href="/signup">Sign Up</a>
+        </div>
+        <form id="logoutForm" class="tabbar-auth-logout" method="post" action="/logout" hidden>
+            <button type="submit" class="tabbar-auth-button">Log Out</button>
+        </form>
+    </div>
+
     <!-- Logo Container -->
     <div class="logo-container">
         <img src="./img/logotexttransparent.png" alt="logo" class="logo" draggable="false">
@@ -242,9 +252,6 @@
             <div class="settings-sync-panel">
                 <p class="settings-sync-title">Sync</p>
                 <span class="settings-sync-copy">Browser storage stays primary. When you sign in, Postbaby keeps your account-backed snapshots in sync automatically across your browsers and devices on this server.</span>
-                <form id="logoutForm" class="settings-sync-logout" method="post" action="/logout">
-                    <button type="submit" class="modal-button">Log Out</button>
-                </form>
                 <span id="syncStateStatus" class="settings-sync-status">Saved locally</span>
                 <span id="syncVersionStatus" class="settings-sync-status">Server version: not yet synced</span>
             </div>
