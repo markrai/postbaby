@@ -442,6 +442,31 @@ func TestCloudMultiUserDocumentRoutesUseAuthenticatedOwnerNamespace(t *testing.T
 		t.Fatalf("expected first user save status 200, got %d", firstPut.Code)
 	}
 
+	secondGetBeforeSaveReq := httptest.NewRequest(http.MethodGet, "/api/document?appId=demo", nil)
+	secondGetBeforeSaveReq.AddCookie(secondCookie)
+	secondGetBeforeSaveRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(secondGetBeforeSaveRec, secondGetBeforeSaveReq)
+	assertErrorResponse(t, secondGetBeforeSaveRec, http.StatusNotFound, "document_not_found")
+
+	secondMetaBeforeSaveReq := httptest.NewRequest(http.MethodGet, "/api/document/meta?appId=demo", nil)
+	secondMetaBeforeSaveReq.AddCookie(secondCookie)
+	secondMetaBeforeSaveRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(secondMetaBeforeSaveRec, secondMetaBeforeSaveReq)
+
+	if secondMetaBeforeSaveRec.Code != http.StatusOK {
+		t.Fatalf("expected second user document meta status 200 before save, got %d", secondMetaBeforeSaveRec.Code)
+	}
+
+	var secondMetaBeforeSave struct {
+		OK     bool   `json:"ok"`
+		AppID  string `json:"appId"`
+		Exists bool   `json:"exists"`
+	}
+	decodeResponse(t, secondMetaBeforeSaveRec, &secondMetaBeforeSave)
+	if !secondMetaBeforeSave.OK || secondMetaBeforeSave.AppID != "demo" || secondMetaBeforeSave.Exists {
+		t.Fatalf("expected second user meta to report no existing document before save, got %+v", secondMetaBeforeSave)
+	}
+
 	secondPut := performJSONRequest(t, env.handler, secondCookie, http.MethodPut, "/api/document", map[string]any{
 		"appId": "demo",
 		"data":  snapshot("tab-2", `[{"id":"tab-2","name":"2"}]`),

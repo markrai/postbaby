@@ -227,7 +227,7 @@ func TestStaticLocalModeDisablesAuthRoutes(t *testing.T) {
 
 	env := newServerTestEnv(t, config.DeploymentModeStaticLocal)
 
-	for _, target := range []string{"/setup", "/login", "/logout"} {
+	for _, target := range []string{"/setup", "/signup", "/login", "/logout"} {
 		req := httptest.NewRequest(http.MethodGet, target, nil)
 		rec := httptest.NewRecorder()
 		env.handler.ServeHTTP(rec, req)
@@ -235,6 +235,19 @@ func TestStaticLocalModeDisablesAuthRoutes(t *testing.T) {
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("expected %s to return 404 in static mode, got %d", target, rec.Code)
 		}
+	}
+}
+
+func TestSelfHostedSingleUserModeDisablesSignupRoute(t *testing.T) {
+	t.Parallel()
+
+	env := newServerTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	req := httptest.NewRequest(http.MethodGet, "/signup", nil)
+	rec := httptest.NewRecorder()
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected /signup to return 404 in self-hosted mode, got %d", rec.Code)
 	}
 }
 
@@ -249,6 +262,22 @@ func TestCloudMultiUserModeDisablesSetupRoute(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected /setup to return 404 in cloud mode, got %d", rec.Code)
+	}
+}
+
+func TestCloudMultiUserSignupRejectsUnsupportedMethods(t *testing.T) {
+	t.Parallel()
+
+	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	req := httptest.NewRequest(http.MethodPut, "/signup", nil)
+	rec := httptest.NewRecorder()
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected signup unsupported method status 405, got %d", rec.Code)
+	}
+	if allow := rec.Header().Get("Allow"); allow != "GET, POST" {
+		t.Fatalf("expected Allow header %q, got %q", "GET, POST", allow)
 	}
 }
 
@@ -300,6 +329,71 @@ func TestCloudMultiUserSignupPageAndFlow(t *testing.T) {
 	}
 }
 
+func TestCloudMultiUserSignupValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		form        url.Values
+		wantStatus  int
+		wantMessage string
+	}{
+		{
+			name: "empty username",
+			form: url.Values{
+				"username":        {"   "},
+				"password":        {serverTestPassword},
+				"confirmPassword": {serverTestPassword},
+			},
+			wantStatus:  http.StatusBadRequest,
+			wantMessage: "Enter a username.",
+		},
+		{
+			name: "empty password",
+			form: url.Values{
+				"username":        {"cloud-user"},
+				"password":        {""},
+				"confirmPassword": {""},
+			},
+			wantStatus:  http.StatusBadRequest,
+			wantMessage: "Enter a password.",
+		},
+		{
+			name: "mismatched confirmation",
+			form: url.Values{
+				"username":        {"cloud-user"},
+				"password":        {serverTestPassword},
+				"confirmPassword": {"not-the-same"},
+			},
+			wantStatus:  http.StatusBadRequest,
+			wantMessage: "Passwords do not match.",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+			req := newFormRequest(http.MethodPost, "/signup", tc.form, "http://example.com", "example.com")
+			rec := httptest.NewRecorder()
+
+			env.handler.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("expected status %d, got %d", tc.wantStatus, rec.Code)
+			}
+			if body := rec.Body.String(); !strings.Contains(body, tc.wantMessage) {
+				t.Fatalf("expected response body to contain %q, got %q", tc.wantMessage, body)
+			}
+			if len(rec.Result().Cookies()) != 0 {
+				t.Fatal("expected signup validation failure to avoid creating a session")
+			}
+			assertNoStore(t, rec)
+		})
+	}
+}
+
 func TestCloudMultiUserDuplicateSignupIsHandledSafely(t *testing.T) {
 	t.Parallel()
 
@@ -327,6 +421,65 @@ func TestCloudMultiUserDuplicateSignupIsHandledSafely(t *testing.T) {
 	}
 	if strings.Contains(body, "already in use") {
 		t.Fatalf("expected duplicate signup to avoid username leak, got %q", body)
+	}
+	assertNoStore(t, rec)
+}
+
+func TestSetupRejectsCrossOriginPost(t *testing.T) {
+	t.Parallel()
+
+	env := newServerTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	req := newFormRequest(http.MethodPost, "/setup", url.Values{
+		"username":        {"owner"},
+		"password":        {serverTestPassword},
+		"confirmPassword": {serverTestPassword},
+	}, "http://evil.example", "example.com")
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected cross-origin setup POST to return 403, got %d", rec.Code)
+	}
+	assertNoStore(t, rec)
+}
+
+func TestSelfHostedLoginRejectsCrossOriginPost(t *testing.T) {
+	t.Parallel()
+
+	env := newServerTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	createInitialUser(t, env)
+
+	req := newFormRequest(http.MethodPost, "/login", url.Values{
+		"username": {"owner"},
+		"password": {serverTestPassword},
+	}, "http://evil.example", "example.com")
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected cross-origin self-hosted login POST to return 403, got %d", rec.Code)
+	}
+	assertNoStore(t, rec)
+}
+
+func TestSelfHostedLogoutRejectsCrossOriginPost(t *testing.T) {
+	t.Parallel()
+
+	env := newServerTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	user := createInitialUser(t, env)
+
+	req := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	req.Header.Set("Origin", "http://evil.example")
+	req.Host = "example.com"
+	req.AddCookie(createSessionCookie(t, env, user.ID))
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected cross-origin self-hosted logout POST to return 403, got %d", rec.Code)
 	}
 	assertNoStore(t, rec)
 }
@@ -369,6 +522,26 @@ func TestCloudMultiUserLoginPageAndFlow(t *testing.T) {
 	assertNoStore(t, postRec)
 }
 
+func TestCloudMultiUserLoginRejectsCrossOriginPost(t *testing.T) {
+	t.Parallel()
+
+	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	createHostedUser(t, env, "cloud-user")
+
+	req := newFormRequest(http.MethodPost, "/login", url.Values{
+		"username": {"cloud-user"},
+		"password": {serverTestPassword},
+	}, "http://evil.example", "example.com")
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected cross-origin cloud login POST to return 403, got %d", rec.Code)
+	}
+	assertNoStore(t, rec)
+}
+
 func TestCloudMultiUserLogoutClearsSessionAndRedirectsHome(t *testing.T) {
 	t.Parallel()
 
@@ -392,6 +565,45 @@ func TestCloudMultiUserLogoutClearsSessionAndRedirectsHome(t *testing.T) {
 	logoutCookies := rec.Result().Cookies()
 	if len(logoutCookies) == 0 || logoutCookies[0].MaxAge != -1 {
 		t.Fatal("expected cleared session cookie on logout")
+	}
+	assertNoStore(t, rec)
+}
+
+func TestCloudMultiUserSignupRejectsCrossOriginPost(t *testing.T) {
+	t.Parallel()
+
+	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	req := newFormRequest(http.MethodPost, "/signup", url.Values{
+		"username":        {"cloud-user"},
+		"password":        {serverTestPassword},
+		"confirmPassword": {serverTestPassword},
+	}, "http://evil.example", "example.com")
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected cross-origin cloud signup POST to return 403, got %d", rec.Code)
+	}
+	assertNoStore(t, rec)
+}
+
+func TestCloudMultiUserLogoutRejectsCrossOriginPost(t *testing.T) {
+	t.Parallel()
+
+	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	user := createHostedUser(t, env, "cloud-user")
+
+	req := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	req.Header.Set("Origin", "http://evil.example")
+	req.Host = "example.com"
+	req.AddCookie(createSessionCookie(t, env, user.ID))
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected cross-origin cloud logout POST to return 403, got %d", rec.Code)
 	}
 	assertNoStore(t, rec)
 }
@@ -688,4 +900,16 @@ func writeTestFile(t *testing.T, path, contents string) {
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatalf("write test file: %v", err)
 	}
+}
+
+func newFormRequest(method, target string, form url.Values, origin, host string) *http.Request {
+	req := httptest.NewRequest(method, target, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if origin != "" {
+		req.Header.Set("Origin", origin)
+	}
+	if host != "" {
+		req.Host = host
+	}
+	return req
 }
