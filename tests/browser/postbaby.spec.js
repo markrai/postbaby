@@ -744,6 +744,20 @@ async function enableMockedSync(page, options = {}) {
   const metaPayload = options.metaPayload || { ok: true, exists: false, version: 0, updatedAt: TIMESTAMP };
   const documentPayload = options.documentPayload || buildServerPayload('Server Snapshot', metaPayload.version || 1);
   const onSave = options.onSave || null;
+  const runtimeConfig = Object.assign({
+    deploymentMode: 'selfhosted_single_user',
+    authAvailable: true,
+    authRequired: true,
+    isAuthenticated: true,
+    syncAvailable: true,
+    syncRequiresAuth: true,
+    setupAvailable: false,
+    apiBase: ''
+  }, options.runtimeConfig || {});
+  const metaStatus = options.metaStatus || 200;
+  const metaBody = options.metaBody || metaPayload;
+  const documentStatus = options.documentStatus || 200;
+  const documentBody = options.documentBody || documentPayload;
 
   await page.route('**/runtime-config.js', async (route) => {
     await route.fulfill({
@@ -752,25 +766,18 @@ async function enableMockedSync(page, options = {}) {
       headers: {
         'Cache-Control': 'no-store'
       },
-      body: [
-        'window.POSTBABY_RUNTIME = {',
-        '  authAvailable: true,',
-        '  syncAvailable: true,',
-        '  authRequired: true,',
-        '  apiBase: ""',
-        '};'
-      ].join('\n')
+      body: `window.POSTBABY_RUNTIME = ${JSON.stringify(runtimeConfig)};\n`
     });
   });
 
   await page.route(/\/api\/document\/meta(?:\?.*)?$/, async (route) => {
     await route.fulfill({
-      status: 200,
+      status: metaStatus,
       contentType: 'application/json; charset=utf-8',
       headers: {
         'Cache-Control': 'no-store'
       },
-      body: JSON.stringify(metaPayload)
+      body: JSON.stringify(metaBody)
     });
   });
 
@@ -778,12 +785,12 @@ async function enableMockedSync(page, options = {}) {
     const request = route.request();
     if (request.method() === 'GET') {
       await route.fulfill({
-        status: 200,
+        status: documentStatus,
         contentType: 'application/json; charset=utf-8',
         headers: {
           'Cache-Control': 'no-store'
         },
-        body: JSON.stringify(documentPayload)
+        body: JSON.stringify(documentBody)
       });
       return;
     }
@@ -3932,6 +3939,142 @@ test.describe('Static local-only behavior', () => {
     expect(debugState.storage.themeFromCache).toBe('dark');
     expect(debugState.sync.runtimeConfig.syncAvailable).toBe(false);
     expect(debugState.sync.shouldStartSyncImmediately).toBe(false);
+  });
+});
+
+test.describe('Runtime auth and sync gating', () => {
+  test('static local runtime keeps the sync panel hidden', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Static Local Runtime');
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Static Local Runtime');
+
+    await expect(page.locator('.settings-sync-panel')).toBeHidden();
+
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    expect(debugState.runtimeConfig.authAvailable).toBe(false);
+    expect(debugState.runtimeConfig.syncAvailable).toBe(false);
+    expect(debugState.shouldStartSyncImmediately).toBe(false);
+    expect(debugState.shouldShowSyncUI).toBe(false);
+  });
+
+  test('self-hosted authenticated runtime auto-starts sync and shows logout controls', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Self-Hosted Runtime');
+    const syncRequests = [];
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await enableMockedSync(page);
+    page.on('request', (request) => {
+      const url = request.url();
+      if (url.includes('/api/document/meta') || url.includes('/api/document')) {
+        syncRequests.push(url);
+      }
+    });
+
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Self-Hosted Runtime');
+    await expect.poll(() => syncRequests.some((url) => url.includes('/api/document/meta'))).toBe(true);
+
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    expect(debugState.shouldStartSyncImmediately).toBe(true);
+    expect(debugState.shouldShowSyncUI).toBe(true);
+    expect(debugState.shouldShowLogoutControl).toBe(true);
+    expect(debugState.isBackgroundSyncActive).toBe(true);
+
+    await openSettingsModal(page);
+    await expect(page.locator('.settings-sync-panel')).toBeVisible();
+    await expect(page.locator('#logoutForm')).toBeVisible();
+    await page.locator('.close-settings').click();
+  });
+
+  test('optional-auth runtime stays local-only until the user is authenticated', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Optional Auth Preview');
+    const syncRequests = [];
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await enableMockedSync(page, {
+      runtimeConfig: {
+        deploymentMode: 'cloud_multi_user',
+        authRequired: false,
+        isAuthenticated: false
+      }
+    });
+    page.on('request', (request) => {
+      const url = request.url();
+      if (url.includes('/api/document/meta') || url.includes('/api/document')) {
+        syncRequests.push(url);
+      }
+    });
+
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Optional Auth Preview');
+    await page.waitForTimeout(250);
+    expect(syncRequests).toEqual([]);
+
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    expect(debugState.runtimeConfig.authAvailable).toBe(true);
+    expect(debugState.runtimeConfig.authRequired).toBe(false);
+    expect(debugState.runtimeConfig.isAuthenticated).toBe(false);
+    expect(debugState.runtimeConfig.syncAvailable).toBe(true);
+    expect(debugState.runtimeConfig.syncRequiresAuth).toBe(true);
+    expect(debugState.shouldStartSyncImmediately).toBe(false);
+    expect(debugState.shouldShowSyncUI).toBe(true);
+    expect(debugState.shouldShowLogoutControl).toBe(false);
+    expect(debugState.isSyncAwaitingAuthentication).toBe(true);
+    expect(debugState.isBackgroundSyncActive).toBe(false);
+
+    await openSettingsModal(page);
+    await expect(page.locator('.settings-sync-panel')).toBeVisible();
+    await expect(page.locator('#logoutForm')).toBeHidden();
+    await expect(page.locator('#syncStateStatus')).toContainText('Sign in to sync across devices');
+    await expect(page.locator('#syncVersionStatus')).toContainText('Server version: sign in to access sync');
+    await page.locator('.close-settings').click();
+  });
+
+  test('optional-auth unauthorized sync responses do not redirect away from the board', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Optional Auth Unauthorized');
+    const dialogs = [];
+
+    attachDialogHandler(page, [], dialogs);
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await enableMockedSync(page, {
+      runtimeConfig: {
+        deploymentMode: 'cloud_multi_user',
+        authRequired: false,
+        isAuthenticated: true
+      },
+      metaStatus: 401,
+      metaBody: {
+        ok: false,
+        error: {
+          code: 'unauthorized',
+          message: 'unauthorized'
+        }
+      }
+    });
+
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Optional Auth Unauthorized');
+    await expect(page).toHaveURL(/\/index\.html$/);
+    expect(dialogs).toEqual([]);
+
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    expect(debugState.runtimeConfig.authRequired).toBe(false);
+    expect(debugState.runtimeConfig.isAuthenticated).toBe(false);
+    expect(debugState.shouldStartSyncImmediately).toBe(false);
+    expect(debugState.shouldShowLogoutControl).toBe(false);
+    expect(debugState.isBackgroundSyncActive).toBe(false);
+    expect(debugState.syncStatusMessage).toBe('Login expired - sign in again');
+
+    await openSettingsModal(page);
+    await expect(page.locator('#logoutForm')).toBeHidden();
+    await expect(page.locator('#syncStateStatus')).toContainText('Login expired - sign in again');
+    await page.locator('.close-settings').click();
   });
 });
 
