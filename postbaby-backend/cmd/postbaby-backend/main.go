@@ -8,6 +8,7 @@ import (
 
 	"postbaby-backend/internal/auth"
 	"postbaby-backend/internal/config"
+	"postbaby-backend/internal/entitlement"
 	"postbaby-backend/internal/httpapi"
 	appserver "postbaby-backend/internal/server"
 	"postbaby-backend/internal/store"
@@ -42,8 +43,9 @@ func main() {
 		CookieSecure: cfg.CookieSecure,
 		SessionTTL:   cfg.SessionTTL,
 	})
-	apiHandler := httpapi.NewHandler(sqliteStore, authManager, cfg.DeploymentMode)
-	handler := appserver.NewHandler(apiHandler, authManager, staticDir, cfg.DeploymentMode)
+	entitlementManager := entitlement.NewManager(sqliteStore)
+	apiHandler := httpapi.NewHandler(sqliteStore, authManager, entitlementManager, cfg.DeploymentMode)
+	handler := appserver.NewHandler(apiHandler, authManager, entitlementManager, staticDir, cfg.DeploymentMode)
 
 	server := &http.Server{
 		Addr:              cfg.Addr,

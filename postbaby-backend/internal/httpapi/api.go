@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,16 +12,20 @@ import (
 
 	"postbaby-backend/internal/auth"
 	"postbaby-backend/internal/config"
+	"postbaby-backend/internal/entitlement"
 	"postbaby-backend/internal/httpcache"
 	"postbaby-backend/internal/store"
 )
 
 const MaxDocumentBodyBytes int64 = 4 << 20
 
+var errEntitlementRequired = errors.New("entitlement required")
+
 type API struct {
-	store          store.DocumentStore
-	authManager    *auth.Manager
-	deploymentMode config.DeploymentMode
+	store              store.DocumentStore
+	authManager        *auth.Manager
+	entitlementManager *entitlement.Manager
+	deploymentMode     config.DeploymentMode
 }
 
 type errorResponse struct {
@@ -69,11 +74,12 @@ type putDocumentResponse struct {
 
 type frontendSnapshot map[string]string
 
-func NewHandler(docStore store.DocumentStore, authManager *auth.Manager, deploymentMode config.DeploymentMode) http.Handler {
+func NewHandler(docStore store.DocumentStore, authManager *auth.Manager, entitlementManager *entitlement.Manager, deploymentMode config.DeploymentMode) http.Handler {
 	api := &API{
-		store:          docStore,
-		authManager:    authManager,
-		deploymentMode: deploymentMode,
+		store:              docStore,
+		authManager:        authManager,
+		entitlementManager: entitlementManager,
+		deploymentMode:     deploymentMode,
 	}
 
 	mux := http.NewServeMux()
@@ -131,7 +137,7 @@ func (a *API) handleDocumentMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := a.requireUser(w, r)
+	user, err := a.requireSyncUser(w, r)
 	if err != nil {
 		return
 	}
@@ -167,7 +173,7 @@ func (a *API) handleDocumentMeta(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleGetDocument(w http.ResponseWriter, r *http.Request) {
-	user, err := a.requireUser(w, r)
+	user, err := a.requireSyncUser(w, r)
 	if err != nil {
 		return
 	}
@@ -199,7 +205,7 @@ func (a *API) handleGetDocument(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handlePutDocument(w http.ResponseWriter, r *http.Request) {
-	user, err := a.requireUser(w, r)
+	user, err := a.requireSyncUser(w, r)
 	if err != nil {
 		return
 	}
@@ -338,7 +344,37 @@ func (a *API) requireUser(w http.ResponseWriter, r *http.Request) (*store.User, 
 	return user, nil
 }
 
+func (a *API) requireSyncUser(w http.ResponseWriter, r *http.Request) (*store.User, error) {
+	user, err := a.requireUser(w, r)
+	if err != nil {
+		return nil, err
+	}
+
+	syncUsable, err := a.syncUsableForUser(r.Context(), user)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "failed to evaluate account entitlement")
+		return nil, err
+	}
+	if !syncUsable {
+		writeError(w, http.StatusForbidden, "entitlement_required", "hosted sync is not enabled for this account")
+		return nil, errEntitlementRequired
+	}
+
+	return user, nil
+}
+
 func (a *API) syncEnabled() bool {
 	return a.deploymentMode == config.DeploymentModeSelfHostedSingleUser ||
 		a.deploymentMode == config.DeploymentModeCloudMultiUser
+}
+
+func (a *API) syncUsableForUser(ctx context.Context, user *store.User) (bool, error) {
+	if a.deploymentMode == config.DeploymentModeSelfHostedSingleUser {
+		return true, nil
+	}
+	if a.deploymentMode != config.DeploymentModeCloudMultiUser {
+		return false, nil
+	}
+
+	return a.entitlementManager.HostedSyncGranted(ctx, user.ID)
 }

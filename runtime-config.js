@@ -4,8 +4,13 @@
         authAvailable: false,
         authRequired: false,
         isAuthenticated: false,
+        billingAvailable: false,
         syncAvailable: false,
         syncRequiresAuth: false,
+        syncUsable: false,
+        entitlement: {
+            hostedSync: false
+        },
         setupAvailable: false,
         apiBase: ""
     };

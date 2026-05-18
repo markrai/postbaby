@@ -352,10 +352,36 @@ func (s *Store) init(ctx context.Context) error {
 
 	_, err = s.db.ExecContext(
 		ctx,
+		`CREATE TABLE IF NOT EXISTS account_entitlements (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			entitlement_key TEXT NOT NULL,
+			status TEXT NOT NULL,
+			source TEXT NOT NULL,
+			valid_until TEXT,
+			updated_at TEXT NOT NULL,
+			UNIQUE(user_id, entitlement_key),
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+	)
+	if err != nil {
+		return s.wrapDBError("db_init_create_account_entitlements", started, fmt.Errorf("create account_entitlements table: %w", err))
+	}
+
+	_, err = s.db.ExecContext(
+		ctx,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
 	)
 	if err != nil {
 		return s.wrapDBError("db_init_create_sessions_expires_idx", started, fmt.Errorf("create sessions expires_at index: %w", err))
+	}
+
+	_, err = s.db.ExecContext(
+		ctx,
+		`CREATE INDEX IF NOT EXISTS idx_account_entitlements_user_id ON account_entitlements(user_id)`,
+	)
+	if err != nil {
+		return s.wrapDBError("db_init_create_account_entitlements_user_idx", started, fmt.Errorf("create account_entitlements user_id index: %w", err))
 	}
 
 	s.logDBOperation("db_init_create_schema", started, nil)

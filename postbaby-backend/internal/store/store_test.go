@@ -15,7 +15,7 @@ func TestOpenCreatesSchema(t *testing.T) {
 
 	docStore := openTestStore(t)
 
-	for _, tableName := range []string{"documents", "users", "sessions"} {
+	for _, tableName := range []string{"documents", "users", "sessions", "account_entitlements"} {
 		var found string
 		err := docStore.db.QueryRowContext(
 			context.Background(),
@@ -250,6 +250,147 @@ func TestSessionLifecycle(t *testing.T) {
 
 	if _, err := docStore.GetSessionUserByTokenHash(ctx, "token-hash"); !errors.Is(err, ErrSessionNotFound) {
 		t.Fatalf("expected session not found, got %v", err)
+	}
+}
+
+func TestGetAccountEntitlementReturnsNotFoundWhenMissing(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+
+	if _, err := docStore.GetAccountEntitlement(ctx, 999, EntitlementKeyHostedSync); !errors.Is(err, ErrEntitlementNotFound) {
+		t.Fatalf("expected entitlement not found, got %v", err)
+	}
+}
+
+func TestPutAndGetAccountEntitlement(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	user, err := docStore.CreateUser(ctx, "entitled-user", "argon-hash", "entitled-owner-key")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	validUntil := time.Date(2026, time.May, 18, 15, 0, 0, 0, time.UTC)
+	saved, err := docStore.PutAccountEntitlement(
+		ctx,
+		user.ID,
+		EntitlementKeyHostedSync,
+		EntitlementStatusActive,
+		EntitlementSourceManual,
+		&validUntil,
+	)
+	if err != nil {
+		t.Fatalf("put account entitlement: %v", err)
+	}
+
+	if saved.UserID != user.ID || saved.EntitlementKey != EntitlementKeyHostedSync || saved.Status != EntitlementStatusActive || saved.Source != EntitlementSourceManual {
+		t.Fatalf("unexpected saved entitlement: %+v", saved)
+	}
+	if saved.ValidUntil == nil || !saved.ValidUntil.Equal(validUntil) {
+		t.Fatalf("expected valid_until %v, got %+v", validUntil, saved.ValidUntil)
+	}
+
+	loaded, err := docStore.GetAccountEntitlement(ctx, user.ID, EntitlementKeyHostedSync)
+	if err != nil {
+		t.Fatalf("get account entitlement: %v", err)
+	}
+
+	if loaded.UserID != user.ID || loaded.EntitlementKey != EntitlementKeyHostedSync || loaded.Status != EntitlementStatusActive || loaded.Source != EntitlementSourceManual {
+		t.Fatalf("unexpected loaded entitlement: %+v", loaded)
+	}
+	if loaded.ValidUntil == nil || !loaded.ValidUntil.Equal(validUntil) {
+		t.Fatalf("expected loaded valid_until %v, got %+v", validUntil, loaded.ValidUntil)
+	}
+}
+
+func TestPutAccountEntitlementUpdatesExistingRow(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	user, err := docStore.CreateUser(ctx, "upsert-user", "argon-hash", "upsert-owner-key")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	firstValidUntil := time.Date(2026, time.May, 18, 15, 0, 0, 0, time.UTC)
+	if _, err := docStore.PutAccountEntitlement(
+		ctx,
+		user.ID,
+		EntitlementKeyHostedSync,
+		EntitlementStatusPastDue,
+		EntitlementSourceManual,
+		&firstValidUntil,
+	); err != nil {
+		t.Fatalf("put first account entitlement: %v", err)
+	}
+
+	if _, err := docStore.PutAccountEntitlement(
+		ctx,
+		user.ID,
+		EntitlementKeyHostedSync,
+		EntitlementStatusActive,
+		EntitlementSourceAdmin,
+		nil,
+	); err != nil {
+		t.Fatalf("put replacement account entitlement: %v", err)
+	}
+
+	loaded, err := docStore.GetAccountEntitlement(ctx, user.ID, EntitlementKeyHostedSync)
+	if err != nil {
+		t.Fatalf("get updated account entitlement: %v", err)
+	}
+
+	if loaded.Status != EntitlementStatusActive || loaded.Source != EntitlementSourceAdmin {
+		t.Fatalf("expected updated entitlement status/source, got %+v", loaded)
+	}
+	if loaded.ValidUntil != nil {
+		t.Fatalf("expected valid_until to be cleared, got %+v", loaded.ValidUntil)
+	}
+}
+
+func TestAccountEntitlementsSchemaEnforcesUniqueUserAndEntitlementKey(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	user, err := docStore.CreateUser(ctx, "unique-entitlement-user", "argon-hash", "unique-entitlement-owner")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	_, err = docStore.db.ExecContext(
+		ctx,
+		`INSERT INTO account_entitlements (user_id, entitlement_key, status, source, valid_until, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		user.ID,
+		EntitlementKeyHostedSync,
+		EntitlementStatusActive,
+		EntitlementSourceManual,
+		nil,
+		"2026-05-17T12:00:00Z",
+	)
+	if err != nil {
+		t.Fatalf("insert first entitlement row: %v", err)
+	}
+
+	_, err = docStore.db.ExecContext(
+		ctx,
+		`INSERT INTO account_entitlements (user_id, entitlement_key, status, source, valid_until, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		user.ID,
+		EntitlementKeyHostedSync,
+		EntitlementStatusCanceled,
+		EntitlementSourceAdmin,
+		nil,
+		"2026-05-17T12:00:01Z",
+	)
+	if err == nil {
+		t.Fatal("expected unique constraint error for duplicate entitlement row")
 	}
 }
 

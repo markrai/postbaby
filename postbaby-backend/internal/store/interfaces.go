@@ -25,7 +25,13 @@ type IdentityStore interface {
 	TouchSession(ctx context.Context, sessionID int64, lastSeenAt time.Time) error
 }
 
+type EntitlementStore interface {
+	GetAccountEntitlement(ctx context.Context, userID int64, entitlementKey string) (AccountEntitlement, error)
+	PutAccountEntitlement(ctx context.Context, userID int64, entitlementKey, status, source string, validUntil *time.Time) (AccountEntitlement, error)
+}
+
 var (
 	_ DocumentStore = (*Store)(nil)
 	_ IdentityStore = (*Store)(nil)
+	_ EntitlementStore = (*Store)(nil)
 )

@@ -10,16 +10,18 @@ import (
 
 	"postbaby-backend/internal/auth"
 	"postbaby-backend/internal/config"
+	"postbaby-backend/internal/entitlement"
 	"postbaby-backend/internal/httpcache"
 	"postbaby-backend/internal/store"
 )
 
 type Server struct {
-	authManager    *auth.Manager
-	staticDir      string
-	staticHandler  http.Handler
-	apiHandler     http.Handler
-	deploymentMode config.DeploymentMode
+	authManager        *auth.Manager
+	entitlementManager *entitlement.Manager
+	staticDir          string
+	staticHandler      http.Handler
+	apiHandler         http.Handler
+	deploymentMode     config.DeploymentMode
 }
 
 type authPageData struct {
@@ -39,19 +41,25 @@ type runtimeConfig struct {
 	AuthAvailable    bool   `json:"authAvailable"`
 	AuthRequired     bool   `json:"authRequired"`
 	IsAuthenticated  bool   `json:"isAuthenticated"`
+	BillingAvailable bool   `json:"billingAvailable"`
 	SyncAvailable    bool   `json:"syncAvailable"`
 	SyncRequiresAuth bool   `json:"syncRequiresAuth"`
+	SyncUsable       bool   `json:"syncUsable"`
+	Entitlement      struct {
+		HostedSync bool `json:"hostedSync"`
+	} `json:"entitlement"`
 	SetupAvailable   bool   `json:"setupAvailable"`
 	APIBase          string `json:"apiBase"`
 }
 
-func NewHandler(apiHandler http.Handler, authManager *auth.Manager, staticDir string, deploymentMode config.DeploymentMode) http.Handler {
+func NewHandler(apiHandler http.Handler, authManager *auth.Manager, entitlementManager *entitlement.Manager, staticDir string, deploymentMode config.DeploymentMode) http.Handler {
 	server := &Server{
-		authManager:    authManager,
-		staticDir:      staticDir,
-		staticHandler:  http.FileServer(http.Dir(staticDir)),
-		apiHandler:     apiHandler,
-		deploymentMode: deploymentMode,
+		authManager:        authManager,
+		entitlementManager: entitlementManager,
+		staticDir:          staticDir,
+		staticHandler:      http.FileServer(http.Dir(staticDir)),
+		apiHandler:         apiHandler,
+		deploymentMode:     deploymentMode,
 	}
 
 	mux := http.NewServeMux()
@@ -481,30 +489,41 @@ func (s *Server) redirectAuthenticatedOrLogin(w http.ResponseWriter, r *http.Req
 }
 
 func (s *Server) currentRuntimeConfig(w http.ResponseWriter, r *http.Request) (runtimeConfig, error) {
-	config := runtimeConfig{
+	runtime := runtimeConfig{
 		DeploymentMode:   string(s.deploymentMode),
 		AuthAvailable:    s.authAvailable(),
 		AuthRequired:     s.appShellAuthRequired(),
 		IsAuthenticated:  false,
+		BillingAvailable: s.billingAvailable(),
 		SyncAvailable:    s.syncEnabled(),
 		SyncRequiresAuth: s.syncRequiresAuth(),
+		SyncUsable:       s.syncUsableWithoutAuthentication(),
 		SetupAvailable:   s.setupEnabled(),
 		APIBase:          "",
 	}
 
 	if !s.authAvailable() {
-		return config, nil
+		return runtime, nil
 	}
 
-	if _, err := s.authManager.AuthenticateRequest(r.Context(), w, r); err != nil {
+	user, err := s.authManager.AuthenticateRequest(r.Context(), w, r)
+	if err != nil {
 		if errors.Is(err, auth.ErrUnauthorized) {
-			return config, nil
+			return runtime, nil
 		}
 		return runtimeConfig{}, err
 	}
 
-	config.IsAuthenticated = true
-	return config, nil
+	runtime.IsAuthenticated = true
+	if s.deploymentMode == config.DeploymentModeCloudMultiUser {
+		hostedSyncGranted, err := s.entitlementManager.HostedSyncGranted(r.Context(), user.ID)
+		if err != nil {
+			return runtimeConfig{}, err
+		}
+		runtime.SyncUsable = hostedSyncGranted
+		runtime.Entitlement.HostedSync = hostedSyncGranted
+	}
+	return runtime, nil
 }
 
 func (s *Server) serveAppShellFile(w http.ResponseWriter, r *http.Request) {
@@ -551,6 +570,14 @@ func (s *Server) syncEnabled() bool {
 
 func (s *Server) syncRequiresAuth() bool {
 	return s.syncEnabled()
+}
+
+func (s *Server) billingAvailable() bool {
+	return false
+}
+
+func (s *Server) syncUsableWithoutAuthentication() bool {
+	return s.deploymentMode == config.DeploymentModeSelfHostedSingleUser
 }
 
 func (s *Server) loginPageData(username string) authPageData {

@@ -749,8 +749,13 @@ async function enableMockedSync(page, options = {}) {
     authAvailable: true,
     authRequired: true,
     isAuthenticated: true,
+    billingAvailable: false,
     syncAvailable: true,
     syncRequiresAuth: true,
+    syncUsable: true,
+    entitlement: {
+      hostedSync: false
+    },
     setupAvailable: false,
     apiBase: ''
   }, options.runtimeConfig || {});
@@ -3955,7 +3960,10 @@ test.describe('Runtime auth and sync gating', () => {
 
     const debugState = await page.evaluate(() => window.postbabyDebugSync());
     expect(debugState.runtimeConfig.authAvailable).toBe(false);
+    expect(debugState.runtimeConfig.billingAvailable).toBe(false);
     expect(debugState.runtimeConfig.syncAvailable).toBe(false);
+    expect(debugState.runtimeConfig.syncUsable).toBe(false);
+    expect(debugState.runtimeConfig.entitlement.hostedSync).toBe(false);
     expect(debugState.shouldStartSyncImmediately).toBe(false);
     expect(debugState.shouldShowSyncUI).toBe(false);
   });
@@ -3979,6 +3987,9 @@ test.describe('Runtime auth and sync gating', () => {
     await expect.poll(() => syncRequests.some((url) => url.includes('/api/document/meta'))).toBe(true);
 
     const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    expect(debugState.runtimeConfig.billingAvailable).toBe(false);
+    expect(debugState.runtimeConfig.syncUsable).toBe(true);
+    expect(debugState.runtimeConfig.entitlement.hostedSync).toBe(false);
     expect(debugState.shouldStartSyncImmediately).toBe(true);
     expect(debugState.shouldShowSyncUI).toBe(true);
     expect(debugState.shouldShowLogoutControl).toBe(true);
@@ -4001,7 +4012,11 @@ test.describe('Runtime auth and sync gating', () => {
       runtimeConfig: {
         deploymentMode: 'cloud_multi_user',
         authRequired: false,
-        isAuthenticated: false
+        isAuthenticated: false,
+        syncUsable: false,
+        entitlement: {
+          hostedSync: false
+        }
       }
     });
     page.on('request', (request) => {
@@ -4020,13 +4035,17 @@ test.describe('Runtime auth and sync gating', () => {
     expect(debugState.runtimeConfig.authAvailable).toBe(true);
     expect(debugState.runtimeConfig.authRequired).toBe(false);
     expect(debugState.runtimeConfig.isAuthenticated).toBe(false);
+    expect(debugState.runtimeConfig.billingAvailable).toBe(false);
     expect(debugState.runtimeConfig.syncAvailable).toBe(true);
     expect(debugState.runtimeConfig.syncRequiresAuth).toBe(true);
+    expect(debugState.runtimeConfig.syncUsable).toBe(false);
+    expect(debugState.runtimeConfig.entitlement.hostedSync).toBe(false);
     expect(debugState.shouldStartSyncImmediately).toBe(false);
     expect(debugState.shouldShowSyncUI).toBe(true);
     expect(debugState.shouldShowLogoutControl).toBe(false);
     expect(debugState.shouldShowHostedAuthLinks).toBe(true);
     expect(debugState.isSyncAwaitingAuthentication).toBe(true);
+    expect(debugState.isSyncBlockedByEntitlement).toBe(false);
     expect(debugState.isBackgroundSyncActive).toBe(false);
     await expect(page.locator('#authLinks')).toBeVisible();
     await expect(page.locator('#loginLink')).toHaveAttribute('href', '/login');
@@ -4040,7 +4059,60 @@ test.describe('Runtime auth and sync gating', () => {
     await page.locator('.close-settings').click();
   });
 
-  test('optional-auth authenticated runtime still auto-starts sync', async ({ page }) => {
+  test('optional-auth authenticated but unentitled runtime stays local-only', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Optional Auth Unpaid');
+    const syncRequests = [];
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await enableMockedSync(page, {
+      runtimeConfig: {
+        deploymentMode: 'cloud_multi_user',
+        authRequired: false,
+        isAuthenticated: true,
+        syncUsable: false,
+        entitlement: {
+          hostedSync: false
+        }
+      }
+    });
+    page.on('request', (request) => {
+      const url = request.url();
+      if (url.includes('/api/document/meta') || url.includes('/api/document')) {
+        syncRequests.push(url);
+      }
+    });
+
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Optional Auth Unpaid');
+    await page.waitForTimeout(250);
+    expect(syncRequests).toEqual([]);
+
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    expect(debugState.runtimeConfig.authRequired).toBe(false);
+    expect(debugState.runtimeConfig.isAuthenticated).toBe(true);
+    expect(debugState.runtimeConfig.billingAvailable).toBe(false);
+    expect(debugState.runtimeConfig.syncAvailable).toBe(true);
+    expect(debugState.runtimeConfig.syncRequiresAuth).toBe(true);
+    expect(debugState.runtimeConfig.syncUsable).toBe(false);
+    expect(debugState.runtimeConfig.entitlement.hostedSync).toBe(false);
+    expect(debugState.shouldStartSyncImmediately).toBe(false);
+    expect(debugState.shouldShowLogoutControl).toBe(true);
+    expect(debugState.shouldShowHostedAuthLinks).toBe(false);
+    expect(debugState.isSyncAwaitingAuthentication).toBe(false);
+    expect(debugState.isSyncBlockedByEntitlement).toBe(true);
+    expect(debugState.isBackgroundSyncActive).toBe(false);
+    expect(debugState.syncStatusMessage).toBe('Account sync is not enabled for this account yet');
+    await expect(page.locator('#authLinks')).toBeHidden();
+    await expect(page.locator('#logoutForm')).toBeVisible();
+
+    await openSettingsModal(page);
+    await expect(page.locator('#syncStateStatus')).toContainText('Account sync is not enabled for this account yet');
+    await expect(page.locator('#syncVersionStatus')).toContainText('Server version: hosted sync not enabled for this account');
+    await page.locator('.close-settings').click();
+  });
+
+  test('optional-auth authenticated and entitled runtime auto-starts sync', async ({ page }) => {
     const localSnapshot = buildLocalSnapshot('Optional Auth Signed In');
     const syncRequests = [];
 
@@ -4050,7 +4122,11 @@ test.describe('Runtime auth and sync gating', () => {
       runtimeConfig: {
         deploymentMode: 'cloud_multi_user',
         authRequired: false,
-        isAuthenticated: true
+        isAuthenticated: true,
+        syncUsable: true,
+        entitlement: {
+          hostedSync: true
+        }
       }
     });
     page.on('request', (request) => {
@@ -4067,14 +4143,69 @@ test.describe('Runtime auth and sync gating', () => {
     const debugState = await page.evaluate(() => window.postbabyDebugSync());
     expect(debugState.runtimeConfig.authRequired).toBe(false);
     expect(debugState.runtimeConfig.isAuthenticated).toBe(true);
+    expect(debugState.runtimeConfig.syncUsable).toBe(true);
+    expect(debugState.runtimeConfig.entitlement.hostedSync).toBe(true);
     expect(debugState.shouldStartSyncImmediately).toBe(true);
     expect(debugState.shouldShowLogoutControl).toBe(true);
     expect(debugState.shouldShowHostedAuthLinks).toBe(false);
+    expect(debugState.isSyncBlockedByEntitlement).toBe(false);
     expect(debugState.isBackgroundSyncActive).toBe(true);
     await expect(page.locator('#authLinks')).toBeHidden();
     await expect(page.locator('#logoutForm')).toBeVisible();
 
     await openSettingsModal(page);
+    await page.locator('.close-settings').click();
+  });
+
+  test('optional-auth entitlement-required sync responses do not redirect or log out the user', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Optional Auth Entitlement Required');
+    const dialogs = [];
+
+    attachDialogHandler(page, [], dialogs);
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await enableMockedSync(page, {
+      runtimeConfig: {
+        deploymentMode: 'cloud_multi_user',
+        authRequired: false,
+        isAuthenticated: true,
+        syncUsable: true,
+        entitlement: {
+          hostedSync: true
+        }
+      },
+      metaStatus: 403,
+      metaBody: {
+        ok: false,
+        error: {
+          code: 'entitlement_required',
+          message: 'hosted sync is not enabled for this account'
+        }
+      }
+    });
+
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Optional Auth Entitlement Required');
+    await expect(page).toHaveURL(/\/index\.html$/);
+    expect(dialogs).toEqual([]);
+
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    expect(debugState.runtimeConfig.authRequired).toBe(false);
+    expect(debugState.runtimeConfig.isAuthenticated).toBe(true);
+    expect(debugState.runtimeConfig.syncUsable).toBe(false);
+    expect(debugState.runtimeConfig.entitlement.hostedSync).toBe(false);
+    expect(debugState.shouldStartSyncImmediately).toBe(false);
+    expect(debugState.shouldShowLogoutControl).toBe(true);
+    expect(debugState.shouldShowHostedAuthLinks).toBe(false);
+    expect(debugState.isSyncBlockedByEntitlement).toBe(true);
+    expect(debugState.isBackgroundSyncActive).toBe(false);
+    expect(debugState.syncStatusMessage).toBe('Account sync is not enabled for this account yet');
+    await expect(page.locator('#authLinks')).toBeHidden();
+    await expect(page.locator('#logoutForm')).toBeVisible();
+
+    await openSettingsModal(page);
+    await expect(page.locator('#syncStateStatus')).toContainText('Account sync is not enabled for this account yet');
+    await expect(page.locator('#syncVersionStatus')).toContainText('Server version: hosted sync not enabled for this account');
     await page.locator('.close-settings').click();
   });
 
@@ -4089,7 +4220,11 @@ test.describe('Runtime auth and sync gating', () => {
       runtimeConfig: {
         deploymentMode: 'cloud_multi_user',
         authRequired: false,
-        isAuthenticated: true
+        isAuthenticated: true,
+        syncUsable: true,
+        entitlement: {
+          hostedSync: true
+        }
       },
       metaStatus: 401,
       metaBody: {
@@ -4112,6 +4247,7 @@ test.describe('Runtime auth and sync gating', () => {
     expect(debugState.shouldStartSyncImmediately).toBe(false);
     expect(debugState.shouldShowLogoutControl).toBe(false);
     expect(debugState.shouldShowHostedAuthLinks).toBe(true);
+    expect(debugState.isSyncBlockedByEntitlement).toBe(false);
     expect(debugState.isBackgroundSyncActive).toBe(false);
     expect(debugState.syncStatusMessage).toBe('Login expired - sign in again');
     await expect(page.locator('#authLinks')).toBeVisible();

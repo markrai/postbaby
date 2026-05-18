@@ -13,6 +13,7 @@ import (
 
 	"postbaby-backend/internal/auth"
 	"postbaby-backend/internal/config"
+	"postbaby-backend/internal/entitlement"
 	"postbaby-backend/internal/store"
 )
 
@@ -427,12 +428,42 @@ func TestCloudMultiUserDocumentRoutesRequireAuthentication(t *testing.T) {
 	}
 }
 
+func TestCloudMultiUserDocumentRoutesRequireHostedSyncEntitlement(t *testing.T) {
+	t.Parallel()
+
+	env := newTestEnv(t, config.DeploymentModeCloudMultiUser)
+	cookie := createAuthenticatedUserSession(t, env, "cloud-user")
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/document?appId=demo", nil)
+	getReq.AddCookie(cookie)
+	getRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(getRec, getReq)
+	assertErrorResponse(t, getRec, http.StatusForbidden, "entitlement_required")
+	assertNoStore(t, getRec)
+
+	metaReq := httptest.NewRequest(http.MethodGet, "/api/document/meta?appId=demo", nil)
+	metaReq.AddCookie(cookie)
+	metaRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(metaRec, metaReq)
+	assertErrorResponse(t, metaRec, http.StatusForbidden, "entitlement_required")
+	assertNoStore(t, metaRec)
+
+	putRec := performJSONRequest(t, env.handler, cookie, http.MethodPut, "/api/document", map[string]any{
+		"appId": "demo",
+		"data":  snapshot("tab-1", "[]"),
+	})
+	assertErrorResponse(t, putRec, http.StatusForbidden, "entitlement_required")
+	assertNoStore(t, putRec)
+}
+
 func TestCloudMultiUserDocumentRoutesUseAuthenticatedOwnerNamespace(t *testing.T) {
 	t.Parallel()
 
 	env := newTestEnv(t, config.DeploymentModeCloudMultiUser)
 	firstCookie := createAuthenticatedUserSession(t, env, "cloud-user-one")
 	secondCookie := createAuthenticatedUserSession(t, env, "cloud-user-two")
+	grantHostedSyncEntitlement(t, env, firstCookie)
+	grantHostedSyncEntitlement(t, env, secondCookie)
 
 	firstPut := performJSONRequest(t, env.handler, firstCookie, http.MethodPut, "/api/document", map[string]any{
 		"appId": "demo",
@@ -562,8 +593,9 @@ func newTestEnv(t *testing.T, deploymentMode config.DeploymentMode) *testEnv {
 	})
 
 	authManager := auth.NewManager(docStore, auth.Options{})
+	entitlementManager := entitlement.NewManager(docStore)
 	return &testEnv{
-		handler:     NewHandler(docStore, authManager, deploymentMode),
+		handler:     NewHandler(docStore, authManager, entitlementManager, deploymentMode),
 		store:       docStore,
 		authManager: authManager,
 	}
@@ -611,6 +643,29 @@ func createAuthenticatedUserSession(t *testing.T, env *testEnv, username string)
 	}
 
 	return cookies[0]
+}
+
+func grantHostedSyncEntitlement(t *testing.T, env *testEnv, cookie *http.Cookie) {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	authenticatedUser, err := env.authManager.AuthenticateRequest(context.Background(), rec, req)
+	if err != nil {
+		t.Fatalf("authenticate user from session cookie: %v", err)
+	}
+
+	if _, err := env.store.PutAccountEntitlement(
+		context.Background(),
+		authenticatedUser.ID,
+		store.EntitlementKeyHostedSync,
+		store.EntitlementStatusActive,
+		store.EntitlementSourceManual,
+		nil,
+	); err != nil {
+		t.Fatalf("grant hosted sync entitlement: %v", err)
+	}
 }
 
 func performJSONRequest(t *testing.T, handler http.Handler, cookie *http.Cookie, method, target string, payload any) *httptest.ResponseRecorder {

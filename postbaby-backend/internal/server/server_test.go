@@ -12,6 +12,7 @@ import (
 
 	"postbaby-backend/internal/auth"
 	"postbaby-backend/internal/config"
+	"postbaby-backend/internal/entitlement"
 	"postbaby-backend/internal/httpapi"
 	"postbaby-backend/internal/store"
 )
@@ -87,8 +88,11 @@ func TestRuntimeConfigServedWithoutAuth(t *testing.T) {
 		`"authAvailable":false`,
 		`"authRequired":false`,
 		`"isAuthenticated":false`,
+		`"billingAvailable":false`,
 		`"syncAvailable":false`,
 		`"syncRequiresAuth":false`,
+		`"syncUsable":false`,
+		`"entitlement":{"hostedSync":false}`,
 		`"setupAvailable":false`,
 		`"apiBase":""`,
 	} {
@@ -119,8 +123,11 @@ func TestRuntimeConfigServedWithoutAuthInCloudMultiUserMode(t *testing.T) {
 		`"authAvailable":true`,
 		`"authRequired":false`,
 		`"isAuthenticated":false`,
+		`"billingAvailable":false`,
 		`"syncAvailable":true`,
 		`"syncRequiresAuth":true`,
+		`"syncUsable":false`,
+		`"entitlement":{"hostedSync":false}`,
 		`"setupAvailable":false`,
 		`"apiBase":""`,
 	} {
@@ -152,8 +159,11 @@ func TestRuntimeConfigReflectsAuthenticationStateInCloudMultiUserMode(t *testing
 		`"authAvailable":true`,
 		`"authRequired":false`,
 		`"isAuthenticated":false`,
+		`"billingAvailable":false`,
 		`"syncAvailable":true`,
 		`"syncRequiresAuth":true`,
+		`"syncUsable":false`,
+		`"entitlement":{"hostedSync":false}`,
 		`"setupAvailable":false`,
 		`"apiBase":""`,
 	} {
@@ -170,10 +180,50 @@ func TestRuntimeConfigReflectsAuthenticationStateInCloudMultiUserMode(t *testing
 	if authRec.Code != http.StatusOK {
 		t.Fatalf("expected authenticated cloud runtime config status 200, got %d", authRec.Code)
 	}
-	if body := authRec.Body.String(); !strings.Contains(body, `"isAuthenticated":true`) {
-		t.Fatalf("expected authenticated cloud runtime config body to contain isAuthenticated true, got %q", body)
+	for _, want := range []string{
+		`"isAuthenticated":true`,
+		`"billingAvailable":false`,
+		`"syncUsable":false`,
+		`"entitlement":{"hostedSync":false}`,
+	} {
+		if body := authRec.Body.String(); !strings.Contains(body, want) {
+			t.Fatalf("expected authenticated cloud runtime config body to contain %q, got %q", want, body)
+		}
 	}
 	assertNoStore(t, unauthRec)
+	assertNoStore(t, authRec)
+}
+
+func TestRuntimeConfigReflectsHostedSyncEntitlementInCloudMultiUserMode(t *testing.T) {
+	t.Parallel()
+
+	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	user := createHostedUser(t, env, "cloud-entitled-user")
+	grantHostedSyncEntitlement(t, env, user.ID)
+
+	authReq := httptest.NewRequest(http.MethodGet, "/runtime-config.js", nil)
+	authReq.AddCookie(createSessionCookie(t, env, user.ID))
+	authRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(authRec, authReq)
+
+	if authRec.Code != http.StatusOK {
+		t.Fatalf("expected authenticated runtime config status 200, got %d", authRec.Code)
+	}
+
+	body := authRec.Body.String()
+	for _, want := range []string{
+		`"deploymentMode":"cloud_multi_user"`,
+		`"isAuthenticated":true`,
+		`"billingAvailable":false`,
+		`"syncAvailable":true`,
+		`"syncRequiresAuth":true`,
+		`"syncUsable":true`,
+		`"entitlement":{"hostedSync":true}`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected entitled cloud runtime config body to contain %q, got %q", want, body)
+		}
+	}
 	assertNoStore(t, authRec)
 }
 
@@ -197,8 +247,11 @@ func TestRuntimeConfigReflectsAuthenticationStateInSelfHostedMode(t *testing.T) 
 		`"authAvailable":true`,
 		`"authRequired":true`,
 		`"isAuthenticated":false`,
+		`"billingAvailable":false`,
 		`"syncAvailable":true`,
 		`"syncRequiresAuth":true`,
+		`"syncUsable":true`,
+		`"entitlement":{"hostedSync":false}`,
 		`"setupAvailable":true`,
 		`"apiBase":""`,
 	} {
@@ -215,8 +268,15 @@ func TestRuntimeConfigReflectsAuthenticationStateInSelfHostedMode(t *testing.T) 
 	if authRec.Code != http.StatusOK {
 		t.Fatalf("expected authenticated runtime config status 200, got %d", authRec.Code)
 	}
-	if body := authRec.Body.String(); !strings.Contains(body, `"isAuthenticated":true`) {
-		t.Fatalf("expected authenticated runtime config body to contain isAuthenticated true, got %q", body)
+	for _, want := range []string{
+		`"isAuthenticated":true`,
+		`"billingAvailable":false`,
+		`"syncUsable":true`,
+		`"entitlement":{"hostedSync":false}`,
+	} {
+		if body := authRec.Body.String(); !strings.Contains(body, want) {
+			t.Fatalf("expected authenticated runtime config body to contain %q, got %q", want, body)
+		}
 	}
 	assertNoStore(t, unauthRec)
 	assertNoStore(t, authRec)
@@ -326,6 +386,9 @@ func TestCloudMultiUserSignupPageAndFlow(t *testing.T) {
 	env.handler.ServeHTTP(runtimeRec, runtimeReq)
 	if !strings.Contains(runtimeRec.Body.String(), `"isAuthenticated":true`) {
 		t.Fatalf("expected authenticated runtime config after signup, got %q", runtimeRec.Body.String())
+	}
+	if !strings.Contains(runtimeRec.Body.String(), `"syncUsable":false`) {
+		t.Fatalf("expected authenticated runtime config after signup to keep sync unusable without entitlement, got %q", runtimeRec.Body.String())
 	}
 }
 
@@ -836,9 +899,10 @@ func newServerTestEnv(t *testing.T, deploymentMode config.DeploymentMode) *serve
 	})
 
 	authManager := auth.NewManager(docStore, auth.Options{})
-	apiHandler := httpapi.NewHandler(docStore, authManager, deploymentMode)
+	entitlementManager := entitlement.NewManager(docStore)
+	apiHandler := httpapi.NewHandler(docStore, authManager, entitlementManager, deploymentMode)
 	return &serverTestEnv{
-		handler:     NewHandler(apiHandler, authManager, staticDir, deploymentMode),
+		handler:     NewHandler(apiHandler, authManager, entitlementManager, staticDir, deploymentMode),
 		store:       docStore,
 		authManager: authManager,
 	}
@@ -880,6 +944,21 @@ func createSessionCookie(t *testing.T, env *serverTestEnv, userID int64) *http.C
 	}
 
 	return cookies[0]
+}
+
+func grantHostedSyncEntitlement(t *testing.T, env *serverTestEnv, userID int64) {
+	t.Helper()
+
+	if _, err := env.store.PutAccountEntitlement(
+		context.Background(),
+		userID,
+		store.EntitlementKeyHostedSync,
+		store.EntitlementStatusActive,
+		store.EntitlementSourceManual,
+		nil,
+	); err != nil {
+		t.Fatalf("grant hosted sync entitlement: %v", err)
+	}
 }
 
 func assertNoStore(t *testing.T, rec *httptest.ResponseRecorder) {
