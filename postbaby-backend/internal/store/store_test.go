@@ -15,7 +15,7 @@ func TestOpenCreatesSchema(t *testing.T) {
 
 	docStore := openTestStore(t)
 
-	for _, tableName := range []string{"documents", "users", "sessions", "account_entitlements"} {
+	for _, tableName := range []string{"documents", "users", "sessions", "account_entitlements", "billing_customers", "billing_subscriptions"} {
 		var found string
 		err := docStore.db.QueryRowContext(
 			context.Background(),
@@ -391,6 +391,74 @@ func TestAccountEntitlementsSchemaEnforcesUniqueUserAndEntitlementKey(t *testing
 	)
 	if err == nil {
 		t.Fatal("expected unique constraint error for duplicate entitlement row")
+	}
+}
+
+func TestPutAndGetBillingCustomer(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	user, err := docStore.CreateUser(ctx, "billing-user", "argon-hash", "billing-owner")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	saved, err := docStore.PutBillingCustomer(ctx, user.ID, "stripe", "cus_123")
+	if err != nil {
+		t.Fatalf("put billing customer: %v", err)
+	}
+
+	if saved.UserID != user.ID || saved.Provider != "stripe" || saved.ProviderCustomerID != "cus_123" {
+		t.Fatalf("unexpected saved billing customer: %+v", saved)
+	}
+
+	loaded, err := docStore.GetBillingCustomer(ctx, user.ID, "stripe")
+	if err != nil {
+		t.Fatalf("get billing customer: %v", err)
+	}
+	if loaded.ProviderCustomerID != "cus_123" {
+		t.Fatalf("unexpected loaded billing customer: %+v", loaded)
+	}
+
+	byProviderID, err := docStore.GetBillingCustomerByProviderCustomerID(ctx, "stripe", "cus_123")
+	if err != nil {
+		t.Fatalf("get billing customer by provider id: %v", err)
+	}
+	if byProviderID.UserID != user.ID {
+		t.Fatalf("expected provider lookup to return user %d, got %+v", user.ID, byProviderID)
+	}
+}
+
+func TestPutBillingSubscriptionUpsertsAndPreservesValidUntil(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	user, err := docStore.CreateUser(ctx, "billing-sub-user", "argon-hash", "billing-sub-owner")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	validUntil := time.Date(2026, time.May, 20, 12, 0, 0, 0, time.UTC)
+	if _, err := docStore.PutBillingSubscription(ctx, user.ID, "stripe", "sub_123", EntitlementStatusActive, &validUntil); err != nil {
+		t.Fatalf("put billing subscription: %v", err)
+	}
+
+	replacement, err := docStore.PutBillingSubscription(ctx, user.ID, "stripe", "sub_123", EntitlementStatusCanceled, nil)
+	if err != nil {
+		t.Fatalf("replace billing subscription: %v", err)
+	}
+	if replacement.Status != EntitlementStatusCanceled || replacement.ValidUntil != nil {
+		t.Fatalf("unexpected replacement billing subscription: %+v", replacement)
+	}
+
+	loaded, err := docStore.GetBillingSubscriptionByProviderSubscriptionID(ctx, "stripe", "sub_123")
+	if err != nil {
+		t.Fatalf("get billing subscription: %v", err)
+	}
+	if loaded.UserID != user.ID || loaded.Status != EntitlementStatusCanceled || loaded.ValidUntil != nil {
+		t.Fatalf("unexpected loaded billing subscription: %+v", loaded)
 	}
 }
 

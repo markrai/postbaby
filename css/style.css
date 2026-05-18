@@ -66,6 +66,18 @@
     opacity: 0.75;
 }
 
+.settings-billing-actions {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+}
+
+.settings-billing-actions form {
+    margin: 0;
+}
+
 .tab {
     padding: 10px 20px;
     margin-right: 5px;

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,12 +26,17 @@ const (
 )
 
 type Config struct {
-	Addr           string
-	DBPath         string
-	StaticDir      string
-	CookieSecure   bool
-	SessionTTL     time.Duration
-	DeploymentMode DeploymentMode
+	Addr                string
+	DBPath              string
+	StaticDir           string
+	CookieSecure        bool
+	SessionTTL          time.Duration
+	DeploymentMode      DeploymentMode
+	BillingProvider     string
+	PublicBaseURL       string
+	StripeSecretKey     string
+	StripeWebhookSecret string
+	StripePriceID       string
 }
 
 func Load() (Config, error) {
@@ -72,13 +78,51 @@ func Load() (Config, error) {
 		sessionTTL = parsedTTL
 	}
 
+	billingProvider, err := parseBillingProviderEnv("POSTBABY_BILLING_PROVIDER")
+	if err != nil {
+		return Config{}, err
+	}
+
+	publicBaseURL := strings.TrimSpace(os.Getenv("POSTBABY_PUBLIC_BASE_URL"))
+	if publicBaseURL != "" {
+		normalizedBaseURL, normalizeErr := normalizePublicBaseURL(publicBaseURL)
+		if normalizeErr != nil {
+			return Config{}, fmt.Errorf("parse POSTBABY_PUBLIC_BASE_URL: %w", normalizeErr)
+		}
+		publicBaseURL = normalizedBaseURL
+	}
+
+	stripeSecretKey := strings.TrimSpace(os.Getenv("POSTBABY_STRIPE_SECRET_KEY"))
+	stripeWebhookSecret := strings.TrimSpace(os.Getenv("POSTBABY_STRIPE_WEBHOOK_SECRET"))
+	stripePriceID := strings.TrimSpace(os.Getenv("POSTBABY_STRIPE_PRICE_ID"))
+
+	if billingProvider == "stripe" {
+		if stripeSecretKey == "" {
+			return Config{}, fmt.Errorf("POSTBABY_STRIPE_SECRET_KEY is required when POSTBABY_BILLING_PROVIDER=stripe")
+		}
+		if stripeWebhookSecret == "" {
+			return Config{}, fmt.Errorf("POSTBABY_STRIPE_WEBHOOK_SECRET is required when POSTBABY_BILLING_PROVIDER=stripe")
+		}
+		if stripePriceID == "" {
+			return Config{}, fmt.Errorf("POSTBABY_STRIPE_PRICE_ID is required when POSTBABY_BILLING_PROVIDER=stripe")
+		}
+		if publicBaseURL == "" {
+			return Config{}, fmt.Errorf("POSTBABY_PUBLIC_BASE_URL is required when POSTBABY_BILLING_PROVIDER=stripe")
+		}
+	}
+
 	return Config{
-		Addr:           addr,
-		DBPath:         dbPath,
-		StaticDir:      staticDir,
-		CookieSecure:   cookieSecure,
-		SessionTTL:     sessionTTL,
-		DeploymentMode: deploymentMode,
+		Addr:                addr,
+		DBPath:              dbPath,
+		StaticDir:           staticDir,
+		CookieSecure:        cookieSecure,
+		SessionTTL:          sessionTTL,
+		DeploymentMode:      deploymentMode,
+		BillingProvider:     billingProvider,
+		PublicBaseURL:       publicBaseURL,
+		StripeSecretKey:     stripeSecretKey,
+		StripeWebhookSecret: stripeWebhookSecret,
+		StripePriceID:       stripePriceID,
 	}, nil
 }
 
@@ -149,4 +193,31 @@ func parseDeploymentModeEnv(name string, defaultValue DeploymentMode) (Deploymen
 	default:
 		return "", fmt.Errorf("%s must be one of %q, %q, or %q", name, DeploymentModeStaticLocal, DeploymentModeSelfHostedSingleUser, DeploymentModeCloudMultiUser)
 	}
+}
+
+func parseBillingProviderEnv(name string) (string, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return "", nil
+	}
+
+	switch strings.ToLower(raw) {
+	case "stripe":
+		return "stripe", nil
+	default:
+		return "", fmt.Errorf("%s must be blank or %q", name, "stripe")
+	}
+}
+
+func normalizePublicBaseURL(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("must include scheme and host")
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	parsed.RawPath = strings.TrimRight(parsed.RawPath, "/")
+	return parsed.String(), nil
 }

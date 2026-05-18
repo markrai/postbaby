@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"postbaby-backend/internal/auth"
+	"postbaby-backend/internal/billing"
 	"postbaby-backend/internal/config"
 	"postbaby-backend/internal/entitlement"
 	"postbaby-backend/internal/httpapi"
@@ -44,8 +45,12 @@ func main() {
 		SessionTTL:   cfg.SessionTTL,
 	})
 	entitlementManager := entitlement.NewManager(sqliteStore)
+	billingService, err := billing.NewService(sqliteStore, cfg)
+	if err != nil {
+		log.Fatalf("configure billing: %v", err)
+	}
 	apiHandler := httpapi.NewHandler(sqliteStore, authManager, entitlementManager, cfg.DeploymentMode)
-	handler := appserver.NewHandler(apiHandler, authManager, entitlementManager, staticDir, cfg.DeploymentMode)
+	handler := appserver.NewHandler(apiHandler, authManager, entitlementManager, billingService, staticDir, cfg.DeploymentMode)
 
 	server := &http.Server{
 		Addr:              cfg.Addr,

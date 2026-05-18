@@ -30,8 +30,19 @@ type EntitlementStore interface {
 	PutAccountEntitlement(ctx context.Context, userID int64, entitlementKey, status, source string, validUntil *time.Time) (AccountEntitlement, error)
 }
 
+type BillingStore interface {
+	EntitlementStore
+	IdentityStore
+	GetBillingCustomer(ctx context.Context, userID int64, provider string) (BillingCustomer, error)
+	GetBillingCustomerByProviderCustomerID(ctx context.Context, provider, providerCustomerID string) (BillingCustomer, error)
+	PutBillingCustomer(ctx context.Context, userID int64, provider, providerCustomerID string) (BillingCustomer, error)
+	GetBillingSubscriptionByProviderSubscriptionID(ctx context.Context, provider, providerSubscriptionID string) (BillingSubscription, error)
+	PutBillingSubscription(ctx context.Context, userID int64, provider, providerSubscriptionID, status string, validUntil *time.Time) (BillingSubscription, error)
+}
+
 var (
-	_ DocumentStore = (*Store)(nil)
-	_ IdentityStore = (*Store)(nil)
+	_ DocumentStore    = (*Store)(nil)
+	_ IdentityStore    = (*Store)(nil)
 	_ EntitlementStore = (*Store)(nil)
+	_ BillingStore     = (*Store)(nil)
 )

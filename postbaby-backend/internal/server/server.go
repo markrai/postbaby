@@ -3,12 +3,14 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"path/filepath"
 	"strings"
 
 	"postbaby-backend/internal/auth"
+	"postbaby-backend/internal/billing"
 	"postbaby-backend/internal/config"
 	"postbaby-backend/internal/entitlement"
 	"postbaby-backend/internal/httpcache"
@@ -17,6 +19,7 @@ import (
 
 type Server struct {
 	authManager        *auth.Manager
+	billingService     *billing.Service
 	entitlementManager *entitlement.Manager
 	staticDir          string
 	staticHandler      http.Handler
@@ -48,13 +51,14 @@ type runtimeConfig struct {
 	Entitlement      struct {
 		HostedSync bool `json:"hostedSync"`
 	} `json:"entitlement"`
-	SetupAvailable   bool   `json:"setupAvailable"`
-	APIBase          string `json:"apiBase"`
+	SetupAvailable bool   `json:"setupAvailable"`
+	APIBase        string `json:"apiBase"`
 }
 
-func NewHandler(apiHandler http.Handler, authManager *auth.Manager, entitlementManager *entitlement.Manager, staticDir string, deploymentMode config.DeploymentMode) http.Handler {
+func NewHandler(apiHandler http.Handler, authManager *auth.Manager, entitlementManager *entitlement.Manager, billingService *billing.Service, staticDir string, deploymentMode config.DeploymentMode) http.Handler {
 	server := &Server{
 		authManager:        authManager,
+		billingService:     billingService,
 		entitlementManager: entitlementManager,
 		staticDir:          staticDir,
 		staticHandler:      http.FileServer(http.Dir(staticDir)),
@@ -76,6 +80,11 @@ func NewHandler(apiHandler http.Handler, authManager *auth.Manager, entitlementM
 	}
 	if server.logoutEnabled() {
 		mux.HandleFunc("/logout", server.handleLogout)
+	}
+	if server.billingRoutesEnabled() {
+		mux.HandleFunc("/billing/checkout", server.handleBillingCheckout)
+		mux.HandleFunc("/billing/portal", server.handleBillingPortal)
+		mux.HandleFunc("/billing/webhook", server.handleBillingWebhook)
 	}
 	mux.HandleFunc("/", server.handleRoot)
 	return mux
@@ -476,6 +485,116 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
+func (s *Server) handleBillingCheckout(w http.ResponseWriter, r *http.Request) {
+	httpcache.SetNoStore(w)
+
+	if !s.billingRoutesEnabled() {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !isTrustedFormPost(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	user, err := s.requireAuthenticatedUserOrLogin(w, r)
+	if err != nil {
+		return
+	}
+
+	redirectURL, err := s.billingService.CreateCheckoutSession(r.Context(), user)
+	if err != nil {
+		if errors.Is(err, billing.ErrBillingUnavailable) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "failed to start billing checkout", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+}
+
+func (s *Server) handleBillingPortal(w http.ResponseWriter, r *http.Request) {
+	httpcache.SetNoStore(w)
+
+	if !s.billingRoutesEnabled() {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !isTrustedFormPost(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	user, err := s.requireAuthenticatedUserOrLogin(w, r)
+	if err != nil {
+		return
+	}
+
+	redirectURL, err := s.billingService.CreatePortalSession(r.Context(), user)
+	if err != nil {
+		switch {
+		case errors.Is(err, billing.ErrBillingUnavailable):
+			http.NotFound(w, r)
+		case errors.Is(err, billing.ErrBillingCustomerNotFound):
+			http.Error(w, "billing customer not found", http.StatusConflict)
+		default:
+			http.Error(w, "failed to open billing portal", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+}
+
+func (s *Server) handleBillingWebhook(w http.ResponseWriter, r *http.Request) {
+	httpcache.SetNoStore(w)
+
+	if !s.billingRoutesEnabled() {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	defer r.Body.Close()
+
+	rawBody, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "invalid webhook request", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.billingService.HandleWebhook(r.Context(), rawBody, strings.TrimSpace(r.Header.Get("Stripe-Signature"))); err != nil {
+		switch {
+		case errors.Is(err, billing.ErrInvalidWebhookSignature):
+			http.Error(w, "invalid webhook signature", http.StatusBadRequest)
+		case errors.Is(err, billing.ErrBillingUnavailable):
+			http.NotFound(w, r)
+		default:
+			http.Error(w, "failed to process billing webhook", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
 func (s *Server) redirectAuthenticatedOrLogin(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.authManager.AuthenticateRequest(r.Context(), w, r); err == nil {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -573,11 +692,31 @@ func (s *Server) syncRequiresAuth() bool {
 }
 
 func (s *Server) billingAvailable() bool {
-	return false
+	return s.deploymentMode == config.DeploymentModeCloudMultiUser &&
+		s.billingService != nil &&
+		s.billingService.Available()
 }
 
 func (s *Server) syncUsableWithoutAuthentication() bool {
 	return s.deploymentMode == config.DeploymentModeSelfHostedSingleUser
+}
+
+func (s *Server) billingRoutesEnabled() bool {
+	return s.deploymentMode == config.DeploymentModeCloudMultiUser && s.billingAvailable()
+}
+
+func (s *Server) requireAuthenticatedUserOrLogin(w http.ResponseWriter, r *http.Request) (*store.User, error) {
+	user, err := s.authManager.AuthenticateRequest(r.Context(), w, r)
+	if err == nil {
+		return user, nil
+	}
+	if errors.Is(err, auth.ErrUnauthorized) {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return nil, err
+	}
+
+	http.Error(w, "failed to authenticate request", http.StatusInternalServerError)
+	return nil, err
 }
 
 func (s *Server) loginPageData(username string) authPageData {

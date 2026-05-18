@@ -1,6 +1,6 @@
 // sw.js
 
-const PUBLIC_JS_REVISION = 'efbc92b25f40';
+const PUBLIC_JS_REVISION = 'c886d598bf90';
 const CACHE_NAME = 'postbaby-cache-v8-' + PUBLIC_JS_REVISION;
 const urlsToCache = [
   '/favicon.ico',

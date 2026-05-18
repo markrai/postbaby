@@ -254,6 +254,14 @@
                 <span class="settings-sync-copy">Browser storage stays primary. When you sign in, Postbaby keeps your account-backed snapshots in sync automatically across your browsers and devices on this server.</span>
                 <span id="syncStateStatus" class="settings-sync-status">Saved locally</span>
                 <span id="syncVersionStatus" class="settings-sync-status">Server version: not yet synced</span>
+                <div class="settings-billing-actions">
+                    <form id="billingCheckoutForm" method="post" action="/billing/checkout" hidden>
+                        <button type="submit" class="modal-button">Upgrade</button>
+                    </form>
+                    <form id="billingPortalForm" method="post" action="/billing/portal" hidden>
+                        <button type="submit" class="modal-button">Manage Billing</button>
+                    </form>
+                </div>
             </div>
 
             <br>

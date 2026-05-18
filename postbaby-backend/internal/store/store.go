@@ -370,6 +370,43 @@ func (s *Store) init(ctx context.Context) error {
 
 	_, err = s.db.ExecContext(
 		ctx,
+		`CREATE TABLE IF NOT EXISTS billing_customers (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			provider TEXT NOT NULL,
+			provider_customer_id TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			UNIQUE(user_id, provider),
+			UNIQUE(provider, provider_customer_id),
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+	)
+	if err != nil {
+		return s.wrapDBError("db_init_create_billing_customers", started, fmt.Errorf("create billing_customers table: %w", err))
+	}
+
+	_, err = s.db.ExecContext(
+		ctx,
+		`CREATE TABLE IF NOT EXISTS billing_subscriptions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			provider TEXT NOT NULL,
+			provider_subscription_id TEXT NOT NULL,
+			status TEXT NOT NULL,
+			valid_until TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			UNIQUE(provider, provider_subscription_id),
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+	)
+	if err != nil {
+		return s.wrapDBError("db_init_create_billing_subscriptions", started, fmt.Errorf("create billing_subscriptions table: %w", err))
+	}
+
+	_, err = s.db.ExecContext(
+		ctx,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
 	)
 	if err != nil {
@@ -382,6 +419,22 @@ func (s *Store) init(ctx context.Context) error {
 	)
 	if err != nil {
 		return s.wrapDBError("db_init_create_account_entitlements_user_idx", started, fmt.Errorf("create account_entitlements user_id index: %w", err))
+	}
+
+	_, err = s.db.ExecContext(
+		ctx,
+		`CREATE INDEX IF NOT EXISTS idx_billing_customers_user_id ON billing_customers(user_id)`,
+	)
+	if err != nil {
+		return s.wrapDBError("db_init_create_billing_customers_user_idx", started, fmt.Errorf("create billing_customers user_id index: %w", err))
+	}
+
+	_, err = s.db.ExecContext(
+		ctx,
+		`CREATE INDEX IF NOT EXISTS idx_billing_subscriptions_user_id ON billing_subscriptions(user_id)`,
+	)
+	if err != nil {
+		return s.wrapDBError("db_init_create_billing_subscriptions_user_idx", started, fmt.Errorf("create billing_subscriptions user_id index: %w", err))
 	}
 
 	s.logDBOperation("db_init_create_schema", started, nil)

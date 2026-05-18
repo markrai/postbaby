@@ -4059,7 +4059,7 @@ test.describe('Runtime auth and sync gating', () => {
     await page.locator('.close-settings').click();
   });
 
-  test('optional-auth authenticated but unentitled runtime stays local-only', async ({ page }) => {
+  test('logged-in unpaid cloud runtime with billingAvailable=false keeps the Phase 1 status-only UI', async ({ page }) => {
     const localSnapshot = buildLocalSnapshot('Optional Auth Unpaid');
     const syncRequests = [];
 
@@ -4099,16 +4099,57 @@ test.describe('Runtime auth and sync gating', () => {
     expect(debugState.shouldStartSyncImmediately).toBe(false);
     expect(debugState.shouldShowLogoutControl).toBe(true);
     expect(debugState.shouldShowHostedAuthLinks).toBe(false);
+    expect(debugState.shouldShowBillingUpgradeControl).toBe(false);
+    expect(debugState.shouldShowManageBillingControl).toBe(false);
     expect(debugState.isSyncAwaitingAuthentication).toBe(false);
     expect(debugState.isSyncBlockedByEntitlement).toBe(true);
     expect(debugState.isBackgroundSyncActive).toBe(false);
     expect(debugState.syncStatusMessage).toBe('Account sync is not enabled for this account yet');
     await expect(page.locator('#authLinks')).toBeHidden();
     await expect(page.locator('#logoutForm')).toBeVisible();
+    await expect(page.locator('#billingCheckoutForm')).toBeHidden();
+    await expect(page.locator('#billingPortalForm')).toBeHidden();
 
     await openSettingsModal(page);
     await expect(page.locator('#syncStateStatus')).toContainText('Account sync is not enabled for this account yet');
     await expect(page.locator('#syncVersionStatus')).toContainText('Server version: hosted sync not enabled for this account');
+    await expect(page.locator('#billingCheckoutForm')).toBeHidden();
+    await expect(page.locator('#billingPortalForm')).toBeHidden();
+    await page.locator('.close-settings').click();
+  });
+
+  test('logged-in unpaid cloud runtime with billingAvailable=true shows Upgrade', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Optional Auth Upgrade');
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await enableMockedSync(page, {
+      runtimeConfig: {
+        deploymentMode: 'cloud_multi_user',
+        authRequired: false,
+        isAuthenticated: true,
+        billingAvailable: true,
+        syncUsable: false,
+        entitlement: {
+          hostedSync: false
+        }
+      }
+    });
+
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Optional Auth Upgrade');
+
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    expect(debugState.runtimeConfig.billingAvailable).toBe(true);
+    expect(debugState.runtimeConfig.stripeSecretKey).toBeUndefined();
+    expect(debugState.shouldShowBillingUpgradeControl).toBe(true);
+    expect(debugState.shouldShowManageBillingControl).toBe(false);
+
+    await openSettingsModal(page);
+    await expect(page.locator('#billingCheckoutForm')).toBeVisible();
+    await expect(page.locator('#billingCheckoutForm')).toHaveAttribute('action', '/billing/checkout');
+    await expect(page.locator('#billingCheckoutForm button')).toContainText('Upgrade');
+    await expect(page.locator('#billingPortalForm')).toBeHidden();
     await page.locator('.close-settings').click();
   });
 
@@ -4148,12 +4189,57 @@ test.describe('Runtime auth and sync gating', () => {
     expect(debugState.shouldStartSyncImmediately).toBe(true);
     expect(debugState.shouldShowLogoutControl).toBe(true);
     expect(debugState.shouldShowHostedAuthLinks).toBe(false);
+    expect(debugState.shouldShowBillingUpgradeControl).toBe(false);
+    expect(debugState.shouldShowManageBillingControl).toBe(false);
     expect(debugState.isSyncBlockedByEntitlement).toBe(false);
     expect(debugState.isBackgroundSyncActive).toBe(true);
     await expect(page.locator('#authLinks')).toBeHidden();
     await expect(page.locator('#logoutForm')).toBeVisible();
 
     await openSettingsModal(page);
+    await page.locator('.close-settings').click();
+  });
+
+  test('logged-in entitled cloud runtime with billingAvailable=true shows Manage Billing', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Optional Auth Manage Billing');
+    const syncRequests = [];
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await enableMockedSync(page, {
+      runtimeConfig: {
+        deploymentMode: 'cloud_multi_user',
+        authRequired: false,
+        isAuthenticated: true,
+        billingAvailable: true,
+        syncUsable: true,
+        entitlement: {
+          hostedSync: true
+        }
+      }
+    });
+    page.on('request', (request) => {
+      const url = request.url();
+      if (url.includes('/api/document/meta') || url.includes('/api/document')) {
+        syncRequests.push(url);
+      }
+    });
+
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Optional Auth Manage Billing');
+    await expect.poll(() => syncRequests.some((url) => url.includes('/api/document/meta'))).toBe(true);
+
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    expect(debugState.runtimeConfig.billingAvailable).toBe(true);
+    expect(debugState.shouldShowBillingUpgradeControl).toBe(false);
+    expect(debugState.shouldShowManageBillingControl).toBe(true);
+    expect(debugState.isBackgroundSyncActive).toBe(true);
+
+    await openSettingsModal(page);
+    await expect(page.locator('#billingPortalForm')).toBeVisible();
+    await expect(page.locator('#billingPortalForm')).toHaveAttribute('action', '/billing/portal');
+    await expect(page.locator('#billingPortalForm button')).toContainText('Manage Billing');
+    await expect(page.locator('#billingCheckoutForm')).toBeHidden();
     await page.locator('.close-settings').click();
   });
 
