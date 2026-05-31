@@ -194,6 +194,78 @@ func (p *StripeProvider) ParseWebhook(ctx context.Context, rawBody []byte, signa
 			Status:                 status,
 			ValidUntil:             stripeTimestampPointer(subscription.CurrentPeriodEnd),
 		}, nil
+	case "invoice.paid", "invoice.payment_succeeded":
+		var invoice struct {
+			Customer     any               `json:"customer"`
+			Subscription any               `json:"subscription"`
+			Status       string            `json:"status"`
+			Paid         bool              `json:"paid"`
+			Metadata     map[string]string `json:"metadata"`
+			Parent       struct {
+				SubscriptionDetails *struct {
+					Subscription any               `json:"subscription"`
+					Metadata     map[string]string `json:"metadata"`
+				} `json:"subscription_details"`
+			} `json:"parent"`
+			Lines struct {
+				Data []struct {
+					Metadata map[string]string `json:"metadata"`
+					Period   struct {
+						End int64 `json:"end"`
+					} `json:"period"`
+					Parent struct {
+						SubscriptionItemDetails *struct {
+							Subscription any `json:"subscription"`
+						} `json:"subscription_item_details"`
+					} `json:"parent"`
+				} `json:"data"`
+			} `json:"lines"`
+		}
+		if err := json.Unmarshal(envelope.Data.Object, &invoice); err != nil {
+			return WebhookEvent{}, fmt.Errorf("decode stripe invoice event: %w", err)
+		}
+
+		metadata := invoice.Metadata
+		if invoice.Parent.SubscriptionDetails != nil && len(invoice.Parent.SubscriptionDetails.Metadata) > 0 {
+			metadata = invoice.Parent.SubscriptionDetails.Metadata
+		}
+		if len(metadata) == 0 {
+			for _, line := range invoice.Lines.Data {
+				if len(line.Metadata) > 0 {
+					metadata = line.Metadata
+					break
+				}
+			}
+		}
+
+		status := "expired"
+		if invoice.Paid || strings.EqualFold(strings.TrimSpace(invoice.Status), "paid") {
+			status = "active"
+		}
+
+		subscriptionID := decodeStripeID(invoice.Subscription)
+		if subscriptionID == "" && invoice.Parent.SubscriptionDetails != nil {
+			subscriptionID = decodeStripeID(invoice.Parent.SubscriptionDetails.Subscription)
+		}
+		var validUntilUnix int64
+		for _, line := range invoice.Lines.Data {
+			if subscriptionID == "" && line.Parent.SubscriptionItemDetails != nil {
+				subscriptionID = decodeStripeID(line.Parent.SubscriptionItemDetails.Subscription)
+			}
+			if line.Period.End > validUntilUnix {
+				validUntilUnix = line.Period.End
+			}
+		}
+
+		return WebhookEvent{
+			ID:                     envelope.ID,
+			Type:                   envelope.Type,
+			UserID:                 parseStripeUserID("", metadata),
+			ProviderCustomerID:     decodeStripeID(invoice.Customer),
+			ProviderSubscriptionID: subscriptionID,
+			Status:                 status,
+			ValidUntil:             stripeTimestampPointer(validUntilUnix),
+		}, nil
 	default:
 		return WebhookEvent{
 			ID:   envelope.ID,

@@ -978,7 +978,7 @@ func TestBillingWebhookUpdatesEntitlementAndSyncSourceOfTruth(t *testing.T) {
 
 	provider.webhookEvent = billing.WebhookEvent{
 		ID:                     "evt_subscription",
-		Type:                   "customer.subscription.updated",
+		Type:                   "customer.subscription.created",
 		ProviderCustomerID:     "cus_billed",
 		ProviderSubscriptionID: "sub_billed",
 		Status:                 "active",

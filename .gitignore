@@ -10,6 +10,7 @@ postbaby-data/
 postbaby-backend/data/*.db
 postbaby-backend/data/*.db-wal
 postbaby-backend/data/*.db-shm
+postbaby-backend/tmp/
 *.db-wal
 *.db-shm
 *.tar

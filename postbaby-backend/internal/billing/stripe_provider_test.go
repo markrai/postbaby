@@ -158,6 +158,63 @@ func TestStripeProviderParseWebhookVerifiesSignatureAndMapsSubscriptionEvent(t *
 	}
 }
 
+func TestStripeProviderParseWebhookMapsInvoicePaidEvent(t *testing.T) {
+	t.Parallel()
+
+	provider := NewStripeProvider(StripeProviderOptions{
+		SecretKey:     "sk_test_123",
+		WebhookSecret: "whsec_test",
+		PriceID:       "price_123",
+	})
+
+	payload := map[string]any{
+		"id":   "evt_invoice_paid",
+		"type": "invoice.paid",
+		"data": map[string]any{
+			"object": map[string]any{
+				"id":       "in_123",
+				"customer": "cus_123",
+				"status":   "paid",
+				"paid":     true,
+				"parent": map[string]any{
+					"subscription_details": map[string]any{
+						"subscription": "sub_123",
+						"metadata": map[string]string{
+							"user_id": "42",
+						},
+					},
+				},
+				"lines": map[string]any{
+					"data": []map[string]any{
+						{
+							"period": map[string]any{
+								"end": int64(1775000000),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	rawBody, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	signatureHeader := signedStripeHeader(t, "whsec_test", rawBody, time.Now().UTC().Unix())
+
+	event, err := provider.ParseWebhook(context.Background(), rawBody, signatureHeader)
+	if err != nil {
+		t.Fatalf("parse webhook: %v", err)
+	}
+
+	if event.Type != "invoice.paid" || event.UserID != 42 || event.ProviderCustomerID != "cus_123" || event.ProviderSubscriptionID != "sub_123" || event.Status != "active" {
+		t.Fatalf("unexpected parsed event: %+v", event)
+	}
+	if event.ValidUntil == nil || event.ValidUntil.UTC().Unix() != 1775000000 {
+		t.Fatalf("unexpected valid_until: %+v", event.ValidUntil)
+	}
+}
+
 func TestStripeProviderRejectsInvalidWebhookSignature(t *testing.T) {
 	t.Parallel()
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -587,6 +588,7 @@ func (s *Server) handleBillingWebhook(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, billing.ErrBillingUnavailable):
 			http.NotFound(w, r)
 		default:
+			log.Printf("billing webhook processing failed: %v", err)
 			http.Error(w, "failed to process billing webhook", http.StatusInternalServerError)
 		}
 		return

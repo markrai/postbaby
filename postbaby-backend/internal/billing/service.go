@@ -145,7 +145,7 @@ func (s *Service) HandleWebhook(ctx context.Context, rawBody []byte, signatureHe
 	switch event.Type {
 	case "checkout.session.completed":
 		return s.applyCheckoutCompleted(ctx, event)
-	case "customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted":
+	case "customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted", "invoice.paid", "invoice.payment_succeeded":
 		return s.applySubscriptionEvent(ctx, event)
 	default:
 		log.Printf("billing webhook ignored type=%s id=%s", event.Type, event.ID)
@@ -176,29 +176,32 @@ func (s *Service) ensureProviderCustomer(ctx context.Context, user *store.User) 
 
 func (s *Service) applyCheckoutCompleted(ctx context.Context, event WebhookEvent) error {
 	if event.ProviderCustomerID == "" {
+		log.Printf("billing checkout webhook missing customer id type=%s id=%s", event.Type, event.ID)
 		return nil
 	}
 
 	userID, err := s.resolveUserID(ctx, event)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve billing user for checkout webhook type=%s id=%s customer_id=%s: %w", event.Type, event.ID, event.ProviderCustomerID, err)
 	}
 
 	if _, err := s.store.PutBillingCustomer(ctx, userID, s.provider.Name(), event.ProviderCustomerID); err != nil {
 		return err
 	}
 
+	log.Printf("billing checkout customer linked type=%s id=%s user_id=%d provider=%s customer_id=%s", event.Type, event.ID, userID, s.provider.Name(), event.ProviderCustomerID)
 	return nil
 }
 
 func (s *Service) applySubscriptionEvent(ctx context.Context, event WebhookEvent) error {
 	if event.ProviderSubscriptionID == "" {
+		log.Printf("billing subscription webhook missing subscription id type=%s id=%s customer_id=%s", event.Type, event.ID, event.ProviderCustomerID)
 		return nil
 	}
 
 	userID, err := s.resolveUserID(ctx, event)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve billing user for subscription webhook type=%s id=%s customer_id=%s subscription_id=%s: %w", event.Type, event.ID, event.ProviderCustomerID, event.ProviderSubscriptionID, err)
 	}
 
 	if event.ProviderCustomerID != "" {
@@ -215,6 +218,7 @@ func (s *Service) applySubscriptionEvent(ctx context.Context, event WebhookEvent
 		return err
 	}
 
+	log.Printf("billing entitlement updated type=%s id=%s user_id=%d provider=%s customer_id=%s subscription_id=%s subscription_status=%s entitlement_status=%s", event.Type, event.ID, userID, s.provider.Name(), event.ProviderCustomerID, event.ProviderSubscriptionID, event.Status, entitlementStatus)
 	return nil
 }
 
