@@ -963,7 +963,6 @@ h1 {
     pointer-events: auto;
     width: 100px;
     height: 100px;
-    cursor: pointer;
     user-select: none;
 }
 
@@ -971,7 +970,6 @@ h1 {
     transform: scale(1.2);
     opacity: 1;
     pointer-events: auto;
-    cursor: pointer;
     z-index: 1000; /* Increase z-index when active */
 }
 

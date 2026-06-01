@@ -107,7 +107,6 @@
         transform: none;
         opacity: 1;
         pointer-events: auto;
-        cursor: pointer;
         z-index: -1;
     }
 
