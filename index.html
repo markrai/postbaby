@@ -71,19 +71,37 @@
 
 
     <!-- Tab Bar -->
-    <div id="tabBar">
-        <!-- Existing tabs will be dynamically inserted here -->
-        <div class="tab add-tab" id="addTab">+</div>
-    </div>
-
-    <div id="topAuthControls" class="tabbar-auth-controls">
-        <div id="authLinks" class="tabbar-auth-links" hidden>
-            <a id="loginLink" class="tabbar-auth-link" href="/login">Sign In</a>
-            <a id="signupLink" class="tabbar-auth-link" href="/signup">Sign Up</a>
+    <div class="tab-bar-header">
+        <div id="tabBar">
+            <!-- Existing tabs will be dynamically inserted here -->
+            <div class="tab add-tab" id="addTab">+</div>
         </div>
-        <form id="logoutForm" class="tabbar-auth-logout" method="post" action="/logout" hidden>
-            <button type="submit" class="tabbar-auth-button">Log Out</button>
-        </form>
+
+        <div id="topAppControls" class="top-app-controls">
+        <button type="button" id="settingsButton" class="top-app-control-button top-app-settings-button"
+            aria-label="Settings" title="Settings">
+            <span class="top-app-control-icon" aria-hidden="true">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                    class="top-app-settings-icon">
+                    <path
+                        d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" />
+                    <circle cx="12" cy="12" r="3" />
+                </svg>
+            </span>
+        </button>
+        <button type="button" id="accountButton" class="top-app-control-button top-app-account-button"
+            aria-label="Account" title="Account">
+            <span class="top-app-account-icon" aria-hidden="true">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                    class="top-app-user-icon">
+                    <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+                    <circle cx="12" cy="7" r="4" />
+                </svg>
+            </span>
+        </button>
+        </div>
     </div>
 
     <!-- Logo Container -->
@@ -116,9 +134,7 @@
         <br>
         clear current tab: <i>c</i>
         <br>
-        delete selected items: <i>Delete</i>
-        <br>
-        switch tabs: <i>tab / shift+tab</i>
+        delete all tabs: <i>ctrl+c</i>
         <br>
         jump tabs: <i>keys 1-9</i>
         <br>
@@ -130,9 +146,7 @@
         <br>
         draw arrow: <i>ctrl + mouse-drag</i>
         <br>
-        reset welcome notes: <i>ctrl + alt + h</i>
-        <br>
-        settings: <i>left-click on trash icon</i>
+        settings: <i>click the gear button (top-right)</i>
     </div>
 
     <!-- Mobile Shortcuts -->
@@ -146,7 +160,7 @@
         <br>
         change color:<i> single tap on item or tab</i>
         <br>
-        settings: <i>single tap trash icon</i>
+        settings: <i>tap the gear button (top-right)</i>
     </div>
 
     <!-- Delete Confirmation Modal -->
@@ -249,21 +263,6 @@
                 <button id="loadDataButton" class="modal-button">Import Data</button>
             </div>
 
-            <div class="settings-sync-panel">
-                <p class="settings-sync-title">Sync</p>
-                <span class="settings-sync-copy">Browser storage stays primary. When you sign in, Postbaby keeps your account-backed snapshots in sync automatically across your browsers and devices on this server.</span>
-                <span id="syncStateStatus" class="settings-sync-status">Saved locally</span>
-                <span id="syncVersionStatus" class="settings-sync-status">Server version: not yet synced</span>
-                <div class="settings-billing-actions">
-                    <form id="billingCheckoutForm" method="post" action="/billing/checkout" hidden>
-                        <button type="submit" class="modal-button">Upgrade</button>
-                    </form>
-                    <form id="billingPortalForm" method="post" action="/billing/portal" hidden>
-                        <button type="submit" class="modal-button">Manage Billing</button>
-                    </form>
-                </div>
-            </div>
-
             <br>
 
             <!-- Hidden File Input for Loading Data -->
@@ -273,6 +272,58 @@
             <span class="questions">Questions/Comments:
                 <a href="mailto:markraidc@gmail.com" class="accent-link">markraidc@gmail.com</a>
             </span>
+        </div>
+    </div>
+
+    <!-- Account Modal -->
+    <div id="accountModal" class="modal">
+        <div class="modal-content">
+            <span class="close-account" tabindex="0" aria-label="Close Account Modal">&times;</span>
+            <p class="modal-title">Account</p>
+
+            <div id="accountLoggedOutPanel" class="account-panel">
+                <p id="accountLocalOnlyCopy" class="account-copy" hidden>
+                    Notes stay in this browser until you sign in. Account sync keeps your snapshots available across
+                    browsers and devices on this server.
+                </p>
+                <p id="accountUnavailableCopy" class="account-copy">
+                    Account sync is unavailable in this build. Your notes stay saved locally in this browser.
+                </p>
+                <div id="authLinks" class="account-auth-links" hidden>
+                    <a id="loginLink" class="account-auth-link" href="/login">Log In</a>
+                    <a id="signupLink" class="account-auth-link" href="/signup">Sign Up</a>
+                </div>
+                <p id="accountBenefitsCopy" class="account-copy account-benefits" hidden>
+                    Sign in to sync notes across browsers, keep account-backed backups, and pick up where you left off
+                    on another device.
+                </p>
+            </div>
+
+            <div id="accountLoggedInPanel" class="account-panel" hidden>
+                <div id="accountIdentity" class="account-identity">
+                    <img id="accountAvatar" class="account-avatar" alt="" hidden>
+                    <span id="accountInitials" class="account-initials" hidden></span>
+                    <span id="accountDisplayName" class="account-display-name"></span>
+                </div>
+
+                <div class="settings-sync-panel">
+                    <p class="settings-sync-title">Sync</p>
+                    <span class="settings-sync-copy">Browser storage stays primary. When you sign in, Postbaby keeps your account-backed snapshots in sync automatically across your browsers and devices on this server.</span>
+                    <span id="syncStateStatus" class="settings-sync-status">Saved locally</span>
+                    <span id="syncVersionStatus" class="settings-sync-status">Server version: not yet synced</span>
+                    <div class="settings-billing-actions">
+                        <form id="billingCheckoutForm" method="post" action="/billing/checkout" hidden>
+                            <button type="submit" class="modal-button">Upgrade</button>
+                        </form>
+                        <form id="billingPortalForm" method="post" action="/billing/portal" hidden>
+                            <button type="submit" class="modal-button">Manage Billing</button>
+                        </form>
+                    </div>
+                    <form id="logoutForm" class="settings-sync-logout" method="post" action="/logout" hidden>
+                        <button type="submit" class="modal-button">Log Out</button>
+                    </form>
+                </div>
+            </div>
         </div>
     </div>
 

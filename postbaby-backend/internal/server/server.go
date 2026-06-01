@@ -40,6 +40,13 @@ type authPageData struct {
 	PasswordMinLength int
 }
 
+type runtimeAccount struct {
+	Username    string `json:"username"`
+	DisplayName string `json:"displayName"`
+	Email       string `json:"email"`
+	AvatarURL   string `json:"avatarUrl"`
+}
+
 type runtimeConfig struct {
 	DeploymentMode   string `json:"deploymentMode"`
 	AuthAvailable    bool   `json:"authAvailable"`
@@ -52,8 +59,9 @@ type runtimeConfig struct {
 	Entitlement      struct {
 		HostedSync bool `json:"hostedSync"`
 	} `json:"entitlement"`
-	SetupAvailable bool   `json:"setupAvailable"`
-	APIBase        string `json:"apiBase"`
+	SetupAvailable bool            `json:"setupAvailable"`
+	APIBase        string          `json:"apiBase"`
+	Account        *runtimeAccount `json:"account"`
 }
 
 func NewHandler(apiHandler http.Handler, authManager *auth.Manager, entitlementManager *entitlement.Manager, billingService *billing.Service, staticDir string, deploymentMode config.DeploymentMode) http.Handler {
@@ -636,6 +644,12 @@ func (s *Server) currentRuntimeConfig(w http.ResponseWriter, r *http.Request) (r
 	}
 
 	runtime.IsAuthenticated = true
+	runtime.Account = &runtimeAccount{
+		Username:    user.Username,
+		DisplayName: user.Username,
+		Email:       "",
+		AvatarURL:   "",
+	}
 	if s.deploymentMode == config.DeploymentModeCloudMultiUser {
 		hostedSyncGranted, err := s.entitlementManager.HostedSyncGranted(r.Context(), user.ID)
 		if err != nil {

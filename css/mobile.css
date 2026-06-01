@@ -47,6 +47,24 @@
         z-index: -1;
     }
 
+    .top-app-controls {
+        top: 8px;
+        right: 8px;
+        gap: 6px;
+        max-width: min(96px, calc(100vw - 180px));
+    }
+
+    .top-app-control-button {
+        width: 30px;
+        height: 30px;
+    }
+
+    .top-app-control-icon svg,
+    .top-app-account-icon svg {
+        width: 16px;
+        height: 16px;
+    }
+
     .logo-container {
         display: flex;
         justify-content: center;

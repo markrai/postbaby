@@ -97,6 +97,7 @@ func TestRuntimeConfigServedWithoutAuth(t *testing.T) {
 		`"entitlement":{"hostedSync":false}`,
 		`"setupAvailable":false`,
 		`"apiBase":""`,
+		`"account":null`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected runtime config body to contain %q, got %q", want, body)
@@ -132,6 +133,7 @@ func TestRuntimeConfigServedWithoutAuthInCloudMultiUserMode(t *testing.T) {
 		`"entitlement":{"hostedSync":false}`,
 		`"setupAvailable":false`,
 		`"apiBase":""`,
+		`"account":null`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected runtime config body to contain %q, got %q", want, body)
@@ -191,6 +193,7 @@ func TestRuntimeConfigReflectsAuthenticationStateInCloudMultiUserMode(t *testing
 		`"entitlement":{"hostedSync":false}`,
 		`"setupAvailable":false`,
 		`"apiBase":""`,
+		`"account":null`,
 	} {
 		if !strings.Contains(unauthBody, want) {
 			t.Fatalf("expected unauthenticated cloud runtime config body to contain %q, got %q", want, unauthBody)
@@ -210,6 +213,10 @@ func TestRuntimeConfigReflectsAuthenticationStateInCloudMultiUserMode(t *testing
 		`"billingAvailable":false`,
 		`"syncUsable":false`,
 		`"entitlement":{"hostedSync":false}`,
+		`"username":"cloud-user"`,
+		`"displayName":"cloud-user"`,
+		`"email":""`,
+		`"avatarUrl":""`,
 	} {
 		if body := authRec.Body.String(); !strings.Contains(body, want) {
 			t.Fatalf("expected authenticated cloud runtime config body to contain %q, got %q", want, body)
@@ -279,6 +286,7 @@ func TestRuntimeConfigReflectsAuthenticationStateInSelfHostedMode(t *testing.T) 
 		`"entitlement":{"hostedSync":false}`,
 		`"setupAvailable":true`,
 		`"apiBase":""`,
+		`"account":null`,
 	} {
 		if !strings.Contains(unauthBody, want) {
 			t.Fatalf("expected unauthenticated runtime config body to contain %q, got %q", want, unauthBody)
@@ -298,6 +306,10 @@ func TestRuntimeConfigReflectsAuthenticationStateInSelfHostedMode(t *testing.T) 
 		`"billingAvailable":false`,
 		`"syncUsable":true`,
 		`"entitlement":{"hostedSync":false}`,
+		`"username":"owner"`,
+		`"displayName":"owner"`,
+		`"email":""`,
+		`"avatarUrl":""`,
 	} {
 		if body := authRec.Body.String(); !strings.Contains(body, want) {
 			t.Fatalf("expected authenticated runtime config body to contain %q, got %q", want, body)

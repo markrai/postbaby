@@ -17,6 +17,11 @@
 }
 
 /* Tab Bar Styles */
+.tab-bar-header {
+    position: relative;
+    z-index: 2;
+}
+
 #tabBar {
     display: flex;
     border-bottom: 1px solid var(--border-tab-bar);
@@ -29,41 +34,189 @@
 
 }
 
-.tabbar-auth-controls {
-    position: fixed;
-    top: 10px;
-    right: 14px;
+@media (min-width: 769px) {
+    .tab-bar-header {
+        display: flex;
+        align-items: stretch;
+        width: 100%;
+        height: 50px;
+        background-color: var(--bg-tab-bar);
+        border-bottom: 1px solid var(--border-tab-bar);
+    }
+
+    #tabBar {
+        flex: 1 1 auto;
+        min-width: 0;
+        width: auto;
+        border-bottom: none;
+        background-color: transparent;
+    }
+
+    .top-app-controls {
+        position: static;
+        top: auto;
+        right: auto;
+        flex: 0 0 auto;
+        align-self: center;
+        padding: 0 14px 0 10px;
+        max-width: none;
+    }
+}
+
+.top-app-controls {
     z-index: 8;
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 8px;
     font-family: 'Kalam', sans-serif;
-    font-size: 13px;
+}
+
+@media (max-width: 768px) {
+    .top-app-controls {
+        position: fixed;
+        top: 10px;
+        right: 14px;
+        max-width: min(120px, calc(100vw - 220px));
+    }
+}
+
+.top-app-control-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border: 1px solid var(--border-tab-bar);
+    border-radius: 999px;
+    background-color: var(--bg-tab);
+    color: var(--text-primary);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.top-app-control-button:hover {
+    opacity: 0.85;
+}
+
+.top-app-control-button:focus-visible {
+    outline: 2px solid var(--note-selected-outline);
+    outline-offset: 2px;
+}
+
+.top-app-control-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     line-height: 1;
 }
 
-.tabbar-auth-links {
-    display: flex;
-    align-items: center;
-    gap: 12px;
+.top-app-control-icon svg,
+.top-app-account-icon svg {
+    width: 18px;
+    height: 18px;
+    display: block;
 }
 
-.tabbar-auth-link,
-.tabbar-auth-button {
+.top-app-account-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+}
+
+.top-app-account-avatar,
+.account-avatar {
+    width: 100%;
+    height: 100%;
+    border-radius: 999px;
+    object-fit: cover;
+}
+
+.top-app-account-initials,
+.account-initials {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    border-radius: 999px;
+    background-color: color-mix(in srgb, var(--text-primary) 12%, transparent);
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+    text-transform: uppercase;
+}
+
+.top-app-account-button--signed-in {
+    border-color: color-mix(in srgb, var(--note-selected-outline) 55%, var(--border-tab-bar));
+}
+
+.account-panel {
+    font-family: 'Kalam', sans-serif;
+}
+
+.account-copy {
+    margin: 0 0 12px;
+    font-size: 12px;
+    line-height: 1.35;
+    opacity: 0.85;
+}
+
+.account-benefits {
+    margin-top: 14px;
+}
+
+.account-auth-links {
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+}
+
+.account-auth-link {
     color: var(--text-primary);
     text-decoration: underline;
     text-underline-offset: 2px;
-    background: none;
-    border: 0;
-    padding: 0;
-    margin: 0;
-    font: inherit;
-    cursor: pointer;
+    font-size: 13px;
 }
 
-.tabbar-auth-link:hover,
-.tabbar-auth-button:hover {
+.account-auth-link:hover {
     opacity: 0.75;
+}
+
+.account-identity {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.account-avatar,
+.account-initials {
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+}
+
+.account-display-name {
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1.2;
+    word-break: break-word;
+}
+
+.close-account {
+    position: absolute;
+    top: 10px;
+    right: 15px;
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+    color: var(--text-primary);
 }
 
 .settings-billing-actions {
@@ -1002,6 +1155,15 @@ h1 {
     margin-top: 8px;
     font-size: 11px;
     opacity: 0.8;
+}
+
+.settings-sync-logout {
+    margin-top: 10px;
+}
+
+.settings-sync-logout .modal-button {
+    width: 100%;
+    margin: 0;
 }
 
 .grid-item.selected {

@@ -250,8 +250,78 @@ async function getLocalStorageValues(page, keys) {
 }
 
 async function openSettingsModal(page) {
-  await page.locator('#trash').click();
+  await page.locator('#settingsButton').click();
   await expect(page.locator('#settingsModal')).toBeVisible();
+}
+
+async function openAccountModal(page) {
+  await page.locator('#accountButton').click();
+  await expect(page.locator('#accountModal')).toBeVisible();
+}
+
+async function mockRuntimeConfig(page, runtime = {}) {
+  const authAvailable = runtime.authAvailable === true;
+  const syncAvailable = runtime.syncAvailable === true;
+  const authRequired = runtime.authRequired === true;
+  const apiBase = typeof runtime.apiBase === 'string' ? runtime.apiBase : '';
+  const account = Object.prototype.hasOwnProperty.call(runtime, 'account') ? runtime.account : null;
+  const extraLines = [];
+
+  if (Object.prototype.hasOwnProperty.call(runtime, 'isAuthenticated')) {
+    extraLines.push(`  isAuthenticated: ${runtime.isAuthenticated === true},`);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(runtime, 'deploymentMode')) {
+    extraLines.push(`  deploymentMode: ${JSON.stringify(runtime.deploymentMode)},`);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(runtime, 'billingAvailable')) {
+    extraLines.push(`  billingAvailable: ${runtime.billingAvailable === true},`);
+  }
+
+  const body = [
+    'window.POSTBABY_RUNTIME = {',
+    `  authAvailable: ${authAvailable},`,
+    `  syncAvailable: ${syncAvailable},`,
+    `  authRequired: ${authRequired},`,
+    `  apiBase: ${JSON.stringify(apiBase)},`,
+    ...extraLines,
+    `  account: ${account === null ? 'null' : JSON.stringify(account)}`,
+    '};'
+  ].join('\n');
+
+  await page.route('**/runtime-config.js', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/javascript; charset=utf-8',
+      headers: {
+        'Cache-Control': 'no-store'
+      },
+      body
+    });
+  });
+}
+
+async function dragNoteToTrash(page, note) {
+  const trash = page.locator('#trash');
+  await note.scrollIntoViewIfNeeded();
+  await trash.scrollIntoViewIfNeeded();
+
+  const noteBox = await note.boundingBox();
+  const trashBox = await trash.boundingBox();
+  if (!noteBox || !trashBox) {
+    throw new Error('Note or trash bounding box was not available.');
+  }
+
+  const startX = noteBox.x + (noteBox.width / 2);
+  const startY = noteBox.y + (noteBox.height / 2);
+  const endX = trashBox.x + (trashBox.width / 2);
+  const endY = trashBox.y + (trashBox.height / 2);
+
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(endX, endY, { steps: 16 });
+  await page.mouse.up();
 }
 
 async function expectNoteVisible(page, noteText) {
@@ -744,25 +814,6 @@ async function enableMockedSync(page, options = {}) {
   const metaPayload = options.metaPayload || { ok: true, exists: false, version: 0, updatedAt: TIMESTAMP };
   const documentPayload = options.documentPayload || buildServerPayload('Server Snapshot', metaPayload.version || 1);
   const onSave = options.onSave || null;
-  const runtimeConfig = Object.assign({
-    deploymentMode: 'selfhosted_single_user',
-    authAvailable: true,
-    authRequired: true,
-    isAuthenticated: true,
-    billingAvailable: false,
-    syncAvailable: true,
-    syncRequiresAuth: true,
-    syncUsable: true,
-    entitlement: {
-      hostedSync: false
-    },
-    setupAvailable: false,
-    apiBase: ''
-  }, options.runtimeConfig || {});
-  const metaStatus = options.metaStatus || 200;
-  const metaBody = options.metaBody || metaPayload;
-  const documentStatus = options.documentStatus || 200;
-  const documentBody = options.documentBody || documentPayload;
 
   await page.route('**/runtime-config.js', async (route) => {
     await route.fulfill({
@@ -771,18 +822,31 @@ async function enableMockedSync(page, options = {}) {
       headers: {
         'Cache-Control': 'no-store'
       },
-      body: `window.POSTBABY_RUNTIME = ${JSON.stringify(runtimeConfig)};\n`
+      body: [
+        'window.POSTBABY_RUNTIME = {',
+        '  authAvailable: true,',
+        '  syncAvailable: true,',
+        '  authRequired: true,',
+        '  apiBase: "",',
+        '  account: {',
+        '    username: "owner",',
+        '    displayName: "owner",',
+        '    email: "",',
+        '    avatarUrl: ""',
+        '  }',
+        '};'
+      ].join('\n')
     });
   });
 
   await page.route(/\/api\/document\/meta(?:\?.*)?$/, async (route) => {
     await route.fulfill({
-      status: metaStatus,
+      status: 200,
       contentType: 'application/json; charset=utf-8',
       headers: {
         'Cache-Control': 'no-store'
       },
-      body: JSON.stringify(metaBody)
+      body: JSON.stringify(metaPayload)
     });
   });
 
@@ -790,12 +854,12 @@ async function enableMockedSync(page, options = {}) {
     const request = route.request();
     if (request.method() === 'GET') {
       await route.fulfill({
-        status: documentStatus,
+        status: 200,
         contentType: 'application/json; charset=utf-8',
         headers: {
           'Cache-Control': 'no-store'
         },
-        body: JSON.stringify(documentBody)
+        body: JSON.stringify(documentPayload)
       });
       return;
     }
@@ -3947,404 +4011,6 @@ test.describe('Static local-only behavior', () => {
   });
 });
 
-test.describe('Runtime auth and sync gating', () => {
-  test('static local runtime keeps the sync panel hidden', async ({ page }) => {
-    const localSnapshot = buildLocalSnapshot('Static Local Runtime');
-
-    await prepareBlankPage(page);
-    await seedLocalStorage(page, localSnapshot);
-    await page.goto('/index.html');
-    await expectNoteVisible(page, 'Static Local Runtime');
-
-    await expect(page.locator('.settings-sync-panel')).toBeHidden();
-
-    const debugState = await page.evaluate(() => window.postbabyDebugSync());
-    expect(debugState.runtimeConfig.authAvailable).toBe(false);
-    expect(debugState.runtimeConfig.billingAvailable).toBe(false);
-    expect(debugState.runtimeConfig.syncAvailable).toBe(false);
-    expect(debugState.runtimeConfig.syncUsable).toBe(false);
-    expect(debugState.runtimeConfig.entitlement.hostedSync).toBe(false);
-    expect(debugState.shouldStartSyncImmediately).toBe(false);
-    expect(debugState.shouldShowSyncUI).toBe(false);
-  });
-
-  test('self-hosted authenticated runtime auto-starts sync and shows logout controls', async ({ page }) => {
-    const localSnapshot = buildLocalSnapshot('Self-Hosted Runtime');
-    const syncRequests = [];
-
-    await prepareBlankPage(page);
-    await seedLocalStorage(page, localSnapshot);
-    await enableMockedSync(page);
-    page.on('request', (request) => {
-      const url = request.url();
-      if (url.includes('/api/document/meta') || url.includes('/api/document')) {
-        syncRequests.push(url);
-      }
-    });
-
-    await page.goto('/index.html');
-    await expectNoteVisible(page, 'Self-Hosted Runtime');
-    await expect.poll(() => syncRequests.some((url) => url.includes('/api/document/meta'))).toBe(true);
-
-    const debugState = await page.evaluate(() => window.postbabyDebugSync());
-    expect(debugState.runtimeConfig.billingAvailable).toBe(false);
-    expect(debugState.runtimeConfig.syncUsable).toBe(true);
-    expect(debugState.runtimeConfig.entitlement.hostedSync).toBe(false);
-    expect(debugState.shouldStartSyncImmediately).toBe(true);
-    expect(debugState.shouldShowSyncUI).toBe(true);
-    expect(debugState.shouldShowLogoutControl).toBe(true);
-    expect(debugState.isBackgroundSyncActive).toBe(true);
-    await expect(page.locator('#logoutForm')).toBeVisible();
-    await expect(page.locator('#authLinks')).toBeHidden();
-
-    await openSettingsModal(page);
-    await expect(page.locator('.settings-sync-panel')).toBeVisible();
-    await page.locator('.close-settings').click();
-  });
-
-  test('optional-auth runtime stays local-only until the user is authenticated', async ({ page }) => {
-    const localSnapshot = buildLocalSnapshot('Optional Auth Preview');
-    const syncRequests = [];
-
-    await prepareBlankPage(page);
-    await seedLocalStorage(page, localSnapshot);
-    await enableMockedSync(page, {
-      runtimeConfig: {
-        deploymentMode: 'cloud_multi_user',
-        authRequired: false,
-        isAuthenticated: false,
-        syncUsable: false,
-        entitlement: {
-          hostedSync: false
-        }
-      }
-    });
-    page.on('request', (request) => {
-      const url = request.url();
-      if (url.includes('/api/document/meta') || url.includes('/api/document')) {
-        syncRequests.push(url);
-      }
-    });
-
-    await page.goto('/index.html');
-    await expectNoteVisible(page, 'Optional Auth Preview');
-    await page.waitForTimeout(250);
-    expect(syncRequests).toEqual([]);
-
-    const debugState = await page.evaluate(() => window.postbabyDebugSync());
-    expect(debugState.runtimeConfig.authAvailable).toBe(true);
-    expect(debugState.runtimeConfig.authRequired).toBe(false);
-    expect(debugState.runtimeConfig.isAuthenticated).toBe(false);
-    expect(debugState.runtimeConfig.billingAvailable).toBe(false);
-    expect(debugState.runtimeConfig.syncAvailable).toBe(true);
-    expect(debugState.runtimeConfig.syncRequiresAuth).toBe(true);
-    expect(debugState.runtimeConfig.syncUsable).toBe(false);
-    expect(debugState.runtimeConfig.entitlement.hostedSync).toBe(false);
-    expect(debugState.shouldStartSyncImmediately).toBe(false);
-    expect(debugState.shouldShowSyncUI).toBe(true);
-    expect(debugState.shouldShowLogoutControl).toBe(false);
-    expect(debugState.shouldShowHostedAuthLinks).toBe(true);
-    expect(debugState.isSyncAwaitingAuthentication).toBe(true);
-    expect(debugState.isSyncBlockedByEntitlement).toBe(false);
-    expect(debugState.isBackgroundSyncActive).toBe(false);
-    await expect(page.locator('#authLinks')).toBeVisible();
-    await expect(page.locator('#loginLink')).toHaveAttribute('href', '/login');
-    await expect(page.locator('#signupLink')).toHaveAttribute('href', '/signup');
-    await expect(page.locator('#logoutForm')).toBeHidden();
-
-    await openSettingsModal(page);
-    await expect(page.locator('.settings-sync-panel')).toBeVisible();
-    await expect(page.locator('#syncStateStatus')).toContainText('Sign in to sync across devices');
-    await expect(page.locator('#syncVersionStatus')).toContainText('Server version: sign in to access sync');
-    await page.locator('.close-settings').click();
-  });
-
-  test('logged-in unpaid cloud runtime with billingAvailable=false keeps the Phase 1 status-only UI', async ({ page }) => {
-    const localSnapshot = buildLocalSnapshot('Optional Auth Unpaid');
-    const syncRequests = [];
-
-    await prepareBlankPage(page);
-    await seedLocalStorage(page, localSnapshot);
-    await enableMockedSync(page, {
-      runtimeConfig: {
-        deploymentMode: 'cloud_multi_user',
-        authRequired: false,
-        isAuthenticated: true,
-        syncUsable: false,
-        entitlement: {
-          hostedSync: false
-        }
-      }
-    });
-    page.on('request', (request) => {
-      const url = request.url();
-      if (url.includes('/api/document/meta') || url.includes('/api/document')) {
-        syncRequests.push(url);
-      }
-    });
-
-    await page.goto('/index.html');
-    await expectNoteVisible(page, 'Optional Auth Unpaid');
-    await page.waitForTimeout(250);
-    expect(syncRequests).toEqual([]);
-
-    const debugState = await page.evaluate(() => window.postbabyDebugSync());
-    expect(debugState.runtimeConfig.authRequired).toBe(false);
-    expect(debugState.runtimeConfig.isAuthenticated).toBe(true);
-    expect(debugState.runtimeConfig.billingAvailable).toBe(false);
-    expect(debugState.runtimeConfig.syncAvailable).toBe(true);
-    expect(debugState.runtimeConfig.syncRequiresAuth).toBe(true);
-    expect(debugState.runtimeConfig.syncUsable).toBe(false);
-    expect(debugState.runtimeConfig.entitlement.hostedSync).toBe(false);
-    expect(debugState.shouldStartSyncImmediately).toBe(false);
-    expect(debugState.shouldShowLogoutControl).toBe(true);
-    expect(debugState.shouldShowHostedAuthLinks).toBe(false);
-    expect(debugState.shouldShowBillingUpgradeControl).toBe(false);
-    expect(debugState.shouldShowManageBillingControl).toBe(false);
-    expect(debugState.isSyncAwaitingAuthentication).toBe(false);
-    expect(debugState.isSyncBlockedByEntitlement).toBe(true);
-    expect(debugState.isBackgroundSyncActive).toBe(false);
-    expect(debugState.syncStatusMessage).toBe('Account sync is not enabled for this account yet');
-    await expect(page.locator('#authLinks')).toBeHidden();
-    await expect(page.locator('#logoutForm')).toBeVisible();
-    await expect(page.locator('#billingCheckoutForm')).toBeHidden();
-    await expect(page.locator('#billingPortalForm')).toBeHidden();
-
-    await openSettingsModal(page);
-    await expect(page.locator('#syncStateStatus')).toContainText('Account sync is not enabled for this account yet');
-    await expect(page.locator('#syncVersionStatus')).toContainText('Server version: hosted sync not enabled for this account');
-    await expect(page.locator('#billingCheckoutForm')).toBeHidden();
-    await expect(page.locator('#billingPortalForm')).toBeHidden();
-    await page.locator('.close-settings').click();
-  });
-
-  test('logged-in unpaid cloud runtime with billingAvailable=true shows Upgrade', async ({ page }) => {
-    const localSnapshot = buildLocalSnapshot('Optional Auth Upgrade');
-
-    await prepareBlankPage(page);
-    await seedLocalStorage(page, localSnapshot);
-    await enableMockedSync(page, {
-      runtimeConfig: {
-        deploymentMode: 'cloud_multi_user',
-        authRequired: false,
-        isAuthenticated: true,
-        billingAvailable: true,
-        syncUsable: false,
-        entitlement: {
-          hostedSync: false
-        }
-      }
-    });
-
-    await page.goto('/index.html');
-    await expectNoteVisible(page, 'Optional Auth Upgrade');
-
-    const debugState = await page.evaluate(() => window.postbabyDebugSync());
-    expect(debugState.runtimeConfig.billingAvailable).toBe(true);
-    expect(debugState.runtimeConfig.stripeSecretKey).toBeUndefined();
-    expect(debugState.shouldShowBillingUpgradeControl).toBe(true);
-    expect(debugState.shouldShowManageBillingControl).toBe(false);
-
-    await openSettingsModal(page);
-    await expect(page.locator('#billingCheckoutForm')).toBeVisible();
-    await expect(page.locator('#billingCheckoutForm')).toHaveAttribute('action', '/billing/checkout');
-    await expect(page.locator('#billingCheckoutForm button')).toContainText('Upgrade');
-    await expect(page.locator('#billingPortalForm')).toBeHidden();
-    await page.locator('.close-settings').click();
-  });
-
-  test('optional-auth authenticated and entitled runtime auto-starts sync', async ({ page }) => {
-    const localSnapshot = buildLocalSnapshot('Optional Auth Signed In');
-    const syncRequests = [];
-
-    await prepareBlankPage(page);
-    await seedLocalStorage(page, localSnapshot);
-    await enableMockedSync(page, {
-      runtimeConfig: {
-        deploymentMode: 'cloud_multi_user',
-        authRequired: false,
-        isAuthenticated: true,
-        syncUsable: true,
-        entitlement: {
-          hostedSync: true
-        }
-      }
-    });
-    page.on('request', (request) => {
-      const url = request.url();
-      if (url.includes('/api/document/meta') || url.includes('/api/document')) {
-        syncRequests.push(url);
-      }
-    });
-
-    await page.goto('/index.html');
-    await expectNoteVisible(page, 'Optional Auth Signed In');
-    await expect.poll(() => syncRequests.some((url) => url.includes('/api/document/meta'))).toBe(true);
-
-    const debugState = await page.evaluate(() => window.postbabyDebugSync());
-    expect(debugState.runtimeConfig.authRequired).toBe(false);
-    expect(debugState.runtimeConfig.isAuthenticated).toBe(true);
-    expect(debugState.runtimeConfig.syncUsable).toBe(true);
-    expect(debugState.runtimeConfig.entitlement.hostedSync).toBe(true);
-    expect(debugState.shouldStartSyncImmediately).toBe(true);
-    expect(debugState.shouldShowLogoutControl).toBe(true);
-    expect(debugState.shouldShowHostedAuthLinks).toBe(false);
-    expect(debugState.shouldShowBillingUpgradeControl).toBe(false);
-    expect(debugState.shouldShowManageBillingControl).toBe(false);
-    expect(debugState.isSyncBlockedByEntitlement).toBe(false);
-    expect(debugState.isBackgroundSyncActive).toBe(true);
-    await expect(page.locator('#authLinks')).toBeHidden();
-    await expect(page.locator('#logoutForm')).toBeVisible();
-
-    await openSettingsModal(page);
-    await page.locator('.close-settings').click();
-  });
-
-  test('logged-in entitled cloud runtime with billingAvailable=true shows Manage Billing', async ({ page }) => {
-    const localSnapshot = buildLocalSnapshot('Optional Auth Manage Billing');
-    const syncRequests = [];
-
-    await prepareBlankPage(page);
-    await seedLocalStorage(page, localSnapshot);
-    await enableMockedSync(page, {
-      runtimeConfig: {
-        deploymentMode: 'cloud_multi_user',
-        authRequired: false,
-        isAuthenticated: true,
-        billingAvailable: true,
-        syncUsable: true,
-        entitlement: {
-          hostedSync: true
-        }
-      }
-    });
-    page.on('request', (request) => {
-      const url = request.url();
-      if (url.includes('/api/document/meta') || url.includes('/api/document')) {
-        syncRequests.push(url);
-      }
-    });
-
-    await page.goto('/index.html');
-    await expectNoteVisible(page, 'Optional Auth Manage Billing');
-    await expect.poll(() => syncRequests.some((url) => url.includes('/api/document/meta'))).toBe(true);
-
-    const debugState = await page.evaluate(() => window.postbabyDebugSync());
-    expect(debugState.runtimeConfig.billingAvailable).toBe(true);
-    expect(debugState.shouldShowBillingUpgradeControl).toBe(false);
-    expect(debugState.shouldShowManageBillingControl).toBe(true);
-    expect(debugState.isBackgroundSyncActive).toBe(true);
-
-    await openSettingsModal(page);
-    await expect(page.locator('#billingPortalForm')).toBeVisible();
-    await expect(page.locator('#billingPortalForm')).toHaveAttribute('action', '/billing/portal');
-    await expect(page.locator('#billingPortalForm button')).toContainText('Manage Billing');
-    await expect(page.locator('#billingCheckoutForm')).toBeHidden();
-    await page.locator('.close-settings').click();
-  });
-
-  test('optional-auth entitlement-required sync responses do not redirect or log out the user', async ({ page }) => {
-    const localSnapshot = buildLocalSnapshot('Optional Auth Entitlement Required');
-    const dialogs = [];
-
-    attachDialogHandler(page, [], dialogs);
-    await prepareBlankPage(page);
-    await seedLocalStorage(page, localSnapshot);
-    await enableMockedSync(page, {
-      runtimeConfig: {
-        deploymentMode: 'cloud_multi_user',
-        authRequired: false,
-        isAuthenticated: true,
-        syncUsable: true,
-        entitlement: {
-          hostedSync: true
-        }
-      },
-      metaStatus: 403,
-      metaBody: {
-        ok: false,
-        error: {
-          code: 'entitlement_required',
-          message: 'hosted sync is not enabled for this account'
-        }
-      }
-    });
-
-    await page.goto('/index.html');
-    await expectNoteVisible(page, 'Optional Auth Entitlement Required');
-    await expect(page).toHaveURL(/\/index\.html$/);
-    expect(dialogs).toEqual([]);
-
-    const debugState = await page.evaluate(() => window.postbabyDebugSync());
-    expect(debugState.runtimeConfig.authRequired).toBe(false);
-    expect(debugState.runtimeConfig.isAuthenticated).toBe(true);
-    expect(debugState.runtimeConfig.syncUsable).toBe(false);
-    expect(debugState.runtimeConfig.entitlement.hostedSync).toBe(false);
-    expect(debugState.shouldStartSyncImmediately).toBe(false);
-    expect(debugState.shouldShowLogoutControl).toBe(true);
-    expect(debugState.shouldShowHostedAuthLinks).toBe(false);
-    expect(debugState.isSyncBlockedByEntitlement).toBe(true);
-    expect(debugState.isBackgroundSyncActive).toBe(false);
-    expect(debugState.syncStatusMessage).toBe('Account sync is not enabled for this account yet');
-    await expect(page.locator('#authLinks')).toBeHidden();
-    await expect(page.locator('#logoutForm')).toBeVisible();
-
-    await openSettingsModal(page);
-    await expect(page.locator('#syncStateStatus')).toContainText('Account sync is not enabled for this account yet');
-    await expect(page.locator('#syncVersionStatus')).toContainText('Server version: hosted sync not enabled for this account');
-    await page.locator('.close-settings').click();
-  });
-
-  test('optional-auth unauthorized sync responses do not redirect away from the board', async ({ page }) => {
-    const localSnapshot = buildLocalSnapshot('Optional Auth Unauthorized');
-    const dialogs = [];
-
-    attachDialogHandler(page, [], dialogs);
-    await prepareBlankPage(page);
-    await seedLocalStorage(page, localSnapshot);
-    await enableMockedSync(page, {
-      runtimeConfig: {
-        deploymentMode: 'cloud_multi_user',
-        authRequired: false,
-        isAuthenticated: true,
-        syncUsable: true,
-        entitlement: {
-          hostedSync: true
-        }
-      },
-      metaStatus: 401,
-      metaBody: {
-        ok: false,
-        error: {
-          code: 'unauthorized',
-          message: 'unauthorized'
-        }
-      }
-    });
-
-    await page.goto('/index.html');
-    await expectNoteVisible(page, 'Optional Auth Unauthorized');
-    await expect(page).toHaveURL(/\/index\.html$/);
-    expect(dialogs).toEqual([]);
-
-    const debugState = await page.evaluate(() => window.postbabyDebugSync());
-    expect(debugState.runtimeConfig.authRequired).toBe(false);
-    expect(debugState.runtimeConfig.isAuthenticated).toBe(false);
-    expect(debugState.shouldStartSyncImmediately).toBe(false);
-    expect(debugState.shouldShowLogoutControl).toBe(false);
-    expect(debugState.shouldShowHostedAuthLinks).toBe(true);
-    expect(debugState.isSyncBlockedByEntitlement).toBe(false);
-    expect(debugState.isBackgroundSyncActive).toBe(false);
-    expect(debugState.syncStatusMessage).toBe('Login expired - sign in again');
-    await expect(page.locator('#authLinks')).toBeVisible();
-    await expect(page.locator('#logoutForm')).toBeHidden();
-
-    await openSettingsModal(page);
-    await expect(page.locator('#syncStateStatus')).toContainText('Login expired - sign in again');
-    await page.locator('.close-settings').click();
-  });
-});
-
 test.describe('Touch note editing behavior', () => {
   test.use({
     hasTouch: true,
@@ -4604,5 +4270,167 @@ test.describe('Mocked sync startup reconciliation', () => {
     await page.goto('/index.html');
     await expectNoteVisible(page, 'Server Version 11');
     expect(dialogs).toEqual([]);
+  });
+});
+
+test.describe('Settings and Account UI', () => {
+  test('opens Settings from the gear button and not from trash click', async ({ page }) => {
+    await prepareBlankPage(page);
+    await page.goto('/index.html');
+
+    await page.locator('#trash').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+
+    await openSettingsModal(page);
+    await expect(page.locator('#settingsModal')).toBeVisible();
+  });
+
+  test('drag-to-delete still removes notes including corporate trash image mode', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Delete Me');
+    localSnapshot.corporateMode = 'true';
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    await expect(page.locator('#trash')).toHaveAttribute('src', /corporatetrash\.png/);
+    const note = page.locator('.grid-item[data-id="item-1"]');
+    await expectNoteVisible(page, 'Delete Me');
+
+    await dragNoteToTrash(page, note);
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    await page.click('#confirmDelete');
+    await expect(page.locator('.grid-item[data-id="item-1"]')).toHaveCount(0);
+  });
+
+  test('static logged-out UI shows gear, generic account button, and unavailable account modal', async ({ page }) => {
+    await prepareBlankPage(page);
+    await page.goto('/index.html');
+
+    await expect(page.locator('#settingsButton .top-app-settings-icon')).toBeVisible();
+    await expect(page.locator('#accountButton')).toHaveAttribute('aria-label', 'Account');
+    await expect(page.locator('#accountButton')).toHaveAttribute('title', 'Account');
+    await expect(page.locator('#accountButton .top-app-user-icon')).toBeVisible();
+
+    await openAccountModal(page);
+    await expect(page.locator('#accountUnavailableCopy')).toBeVisible();
+    await expect(page.locator('#accountLocalOnlyCopy')).toBeHidden();
+    await expect(page.locator('#loginLink')).toBeHidden();
+    await expect(page.locator('#signupLink')).toBeHidden();
+  });
+
+  test('optional-auth logged-out account modal shows local-only copy and auth actions', async ({ page }) => {
+    await prepareBlankPage(page);
+    await mockRuntimeConfig(page, {
+      authAvailable: true,
+      authRequired: false,
+      account: null
+    });
+    await page.goto('/index.html');
+
+    await openAccountModal(page);
+    await expect(page.locator('#accountLocalOnlyCopy')).toBeVisible();
+    await expect(page.locator('#accountUnavailableCopy')).toBeHidden();
+    await expect(page.locator('#loginLink')).toBeVisible();
+    await expect(page.locator('#signupLink')).toBeHidden();
+    await expect(page.locator('#loginLink')).toHaveAttribute('href', '/login');
+  });
+
+  test('logged-in UI shows initials and Account identity label on the account button', async ({ page }) => {
+    await prepareBlankPage(page);
+    await mockRuntimeConfig(page, {
+      authAvailable: true,
+      authRequired: false,
+      isAuthenticated: true,
+      account: {
+        username: 'owner',
+        displayName: 'Owner Name',
+        email: '',
+        avatarUrl: ''
+      }
+    });
+    await page.goto('/index.html');
+
+    await expect(page.locator('#accountButton')).toHaveAttribute('aria-label', 'Account: Owner Name');
+    await expect(page.locator('#accountButton')).toHaveAttribute('title', 'Account: Owner Name');
+    await expect(page.locator('#accountButton .top-app-account-initials')).toHaveText('ON');
+
+    await openAccountModal(page);
+    await expect(page.locator('#accountLoggedInPanel')).toBeVisible();
+    await expect(page.locator('#accountDisplayName')).toHaveText('Owner Name');
+    await expect(page.locator('#syncStateStatus')).toBeVisible();
+    await expect(page.locator('#logoutForm')).toBeVisible();
+  });
+
+  test('Settings modal contains only local settings plus import and export', async ({ page }) => {
+    await prepareBlankPage(page);
+    await mockRuntimeConfig(page, {
+      authAvailable: true,
+      authRequired: false,
+      isAuthenticated: true,
+      account: {
+        username: 'owner',
+        displayName: 'owner',
+        email: '',
+        avatarUrl: ''
+      }
+    });
+    await page.goto('/index.html');
+
+    await openSettingsModal(page);
+    await expect(page.locator('#settingsModal .modal-title')).toHaveText('Settings');
+    await expect(page.locator('#saveDataButton')).toBeVisible();
+    await expect(page.locator('#loadDataButton')).toBeVisible();
+    await expect(page.locator('#settingsModal .settings-sync-panel')).toHaveCount(0);
+    await expect(page.locator('#settingsModal #logoutForm')).toHaveCount(0);
+    await expect(page.locator('#settingsModal #syncStateStatus')).toHaveCount(0);
+  });
+
+  test('import and export still work from Settings', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Settings Export Note');
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    await openSettingsModal(page);
+    const exported = await exportCurrentSnapshot(page);
+    expect(exported.tabs).toBeTruthy();
+
+    await importBackupSnapshot(page, buildLocalSnapshot('Imported From Settings'));
+    await expectNoteVisible(page, 'Imported From Settings');
+  });
+
+  test('top-right controls stay compact at narrow widths', async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 640 });
+    await prepareBlankPage(page);
+    await page.goto('/index.html');
+
+    const controlsBox = await page.locator('#topAppControls').boundingBox();
+    const addTabBox = await page.locator('#addTab').boundingBox();
+    if (!controlsBox || !addTabBox) {
+      throw new Error('Top control bounding boxes were not available.');
+    }
+
+    expect(controlsBox.width).toBeLessThanOrEqual(120);
+    expect(controlsBox.x).toBeGreaterThan(addTabBox.x + addTabBox.width);
+  });
+
+  test('desktop tab bar ends before settings and account controls', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await prepareBlankPage(page);
+    await page.goto('/index.html');
+
+    const tabBarBox = await page.locator('#tabBar').boundingBox();
+    const controlsBox = await page.locator('#topAppControls').boundingBox();
+    const addTabBox = await page.locator('#addTab').boundingBox();
+    if (!tabBarBox || !controlsBox || !addTabBox) {
+      throw new Error('Tab bar layout bounding boxes were not available.');
+    }
+
+    expect(tabBarBox.x + tabBarBox.width).toBeLessThanOrEqual(controlsBox.x);
+    expect(addTabBox.x + addTabBox.width).toBeLessThanOrEqual(controlsBox.x);
+    await expect(page.locator('.tab-bar-header')).toHaveCSS('display', 'flex');
+    await expect(page.locator('#topAppControls')).toHaveCSS('position', 'static');
   });
 });
