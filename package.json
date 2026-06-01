@@ -5,6 +5,7 @@
     "build:public-js": "node scripts/build-public-js.mjs",
     "test:browser": "playwright test",
     "test:browser:headed": "playwright test --headed",
+    "test:public-js-build": "node scripts/verify-sw-revision-repair.mjs",
     "verify:public-js": "node scripts/build-public-js.mjs --check"
   },
   "devDependencies": {

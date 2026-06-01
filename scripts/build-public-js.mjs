@@ -1,16 +1,17 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-
-import JavaScriptObfuscator from 'javascript-obfuscator';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 
-const sourcePath = path.join(repoRoot, 'src', 'script.js');
+const defaultPrivateSourcePath = 'C:\\dev\\project\\postbaby-private\\src\\script.js';
+const sourcePath = process.env.POSTBABY_PRIVATE_SCRIPT_SOURCE || defaultPrivateSourcePath;
 const publicPath = path.join(repoRoot, 'js', 'script.js');
 const serviceWorkerPath = path.join(repoRoot, 'sw.js');
 const serviceWorkerRevisionPattern = /const PUBLIC_JS_REVISION = '([0-9a-f]+)';/;
@@ -22,29 +23,29 @@ const generatedBanner = [
     ''
 ].join('\n');
 
-const obfuscatorOptions = {
-    compact: true,
-    simplify: true,
-    identifierNamesGenerator: 'hexadecimal',
-    renameGlobals: false,
-    renameProperties: false,
-    transformObjectKeys: false,
-    stringArray: true,
-    stringArrayThreshold: 0.35,
-    stringArrayRotate: true,
-    stringArrayShuffle: true,
-    stringArrayWrappersCount: 1,
-    controlFlowFlattening: false,
-    deadCodeInjection: false,
-    splitStrings: false,
-    selfDefending: false,
-    debugProtection: false,
-    disableConsoleOutput: false,
-    numbersToExpressions: false,
-    unicodeEscapeSequence: false,
-    target: 'browser',
-    seed: 1
-};
+const obfuscatorOptions = [
+    ['--compact', 'true'],
+    ['--simplify', 'true'],
+    ['--identifier-names-generator', 'hexadecimal'],
+    ['--rename-globals', 'false'],
+    ['--rename-properties', 'false'],
+    ['--transform-object-keys', 'false'],
+    ['--string-array', 'true'],
+    ['--string-array-threshold', '0.35'],
+    ['--string-array-rotate', 'true'],
+    ['--string-array-shuffle', 'true'],
+    ['--string-array-wrappers-count', '1'],
+    ['--control-flow-flattening', 'false'],
+    ['--dead-code-injection', 'false'],
+    ['--split-strings', 'false'],
+    ['--self-defending', 'false'],
+    ['--debug-protection', 'false'],
+    ['--disable-console-output', 'false'],
+    ['--numbers-to-expressions', 'false'],
+    ['--unicode-escape-sequence', 'false'],
+    ['--target', 'browser'],
+    ['--seed', '1']
+];
 
 function normalizeLineEndings(text) {
     return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -54,45 +55,8 @@ function withTrailingNewline(text) {
     return text.endsWith('\n') ? text : `${text}\n`;
 }
 
-async function readTextFile(filePath) {
-    return fs.readFile(filePath, 'utf8');
-}
-
-async function readMaintainerSourceFile(filePath) {
-    try {
-        return await readTextFile(filePath);
-    } catch (error) {
-        if (error && error.code === 'ENOENT') {
-            throw new Error(
-                'src/script.js is not present in this checkout. ' +
-                'build:public-js and verify:public-js are maintainer-only commands ' +
-                'that require the local readable source.'
-            );
-        }
-        throw error;
-    }
-}
-
-async function readOptionalTextFile(filePath) {
-    try {
-        return await readTextFile(filePath);
-    } catch (error) {
-        if (error && error.code === 'ENOENT') {
-            return '';
-        }
-        throw error;
-    }
-}
-
-function buildPublicScript(sourceText) {
-    const obfuscatedCode = JavaScriptObfuscator.obfuscate(
-        normalizeLineEndings(sourceText),
-        obfuscatorOptions
-    ).getObfuscatedCode();
-
-    return withTrailingNewline(
-        generatedBanner + normalizeLineEndings(obfuscatedCode).trimEnd()
-    );
+function relativePath(filePath) {
+    return path.relative(repoRoot, filePath).replace(/\\/g, '/');
 }
 
 function buildPublicRevision(publicScriptText) {
@@ -115,24 +79,152 @@ function buildServiceWorkerText(currentServiceWorkerText, revision) {
     );
 }
 
-function relativePath(filePath) {
-    return path.relative(repoRoot, filePath).replace(/\\/g, '/');
+function parseArgs(argv) {
+    const candidateIndex = argv.indexOf('--candidate');
+    const hasCandidate = candidateIndex !== -1;
+    let candidatePath = null;
+
+    if (hasCandidate) {
+        const possiblePath = argv[candidateIndex + 1];
+        if (possiblePath && !possiblePath.startsWith('--')) {
+            candidatePath = path.resolve(possiblePath);
+        } else {
+            candidatePath = path.join(os.tmpdir(), `postbaby-public-script-${Date.now()}.js`);
+        }
+    }
+
+    return {
+        checkMode: argv.includes('--check'),
+        candidatePath
+    };
+}
+
+async function readTextFile(filePath) {
+    return fs.readFile(filePath, 'utf8');
+}
+
+async function readRequiredSourceFile(filePath) {
+    try {
+        return await readTextFile(filePath);
+    } catch (error) {
+        if (error && error.code === 'ENOENT') {
+            throw new Error(
+                `Readable private source is missing: ${filePath}\n` +
+                'Set POSTBABY_PRIVATE_SCRIPT_SOURCE or restore the maintainer source before building public JS.'
+            );
+        }
+        throw error;
+    }
+}
+
+async function readOptionalTextFile(filePath) {
+    try {
+        return await readTextFile(filePath);
+    } catch (error) {
+        if (error && error.code === 'ENOENT') {
+            return '';
+        }
+        throw error;
+    }
+}
+
+function flattenObfuscatorArgs(inputPath, outputPath) {
+    return [
+        inputPath,
+        '--output',
+        outputPath,
+        ...obfuscatorOptions.flat()
+    ];
+}
+
+function runObfuscator(inputPath, outputPath) {
+    const obfuscatorCommand = process.platform === 'win32' ? 'javascript-obfuscator.cmd' : 'javascript-obfuscator';
+    const obfuscatorArgs = flattenObfuscatorArgs(inputPath, outputPath);
+    const command = process.platform === 'win32' ? 'cmd.exe' : obfuscatorCommand;
+    const commandArgs = process.platform === 'win32'
+        ? ['/d', '/s', '/c', obfuscatorCommand, ...obfuscatorArgs]
+        : obfuscatorArgs;
+    const result = spawnSync(command, commandArgs, {
+        encoding: 'utf8',
+        windowsHide: true
+    });
+
+    if (result.error) {
+        if (result.error.code === 'ENOENT') {
+            throw new Error(
+                `${obfuscatorCommand} was not found on PATH. Install javascript-obfuscator or add it to PATH before building public JS.`
+            );
+        }
+        throw result.error;
+    }
+
+    if (result.status !== 0) {
+        throw new Error(
+            `javascript-obfuscator failed with exit code ${result.status}.\n` +
+            `${result.stdout || ''}${result.stderr || ''}`.trim()
+        );
+    }
+}
+
+async function buildPublicScript(sourceText) {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'postbaby-public-js-'));
+    const tempSourcePath = path.join(tempDir, 'script.source.js');
+    const tempOutputPath = path.join(tempDir, 'script.obfuscated.js');
+
+    try {
+        await fs.writeFile(tempSourcePath, normalizeLineEndings(sourceText), 'utf8');
+        runObfuscator(tempSourcePath, tempOutputPath);
+        const obfuscatedCode = await readTextFile(tempOutputPath);
+
+        return withTrailingNewline(
+            generatedBanner + normalizeLineEndings(obfuscatedCode).trimEnd()
+        );
+    } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+    }
+}
+
+async function writeFileLoud(filePath, contents, label) {
+    try {
+        await fs.writeFile(filePath, contents, 'utf8');
+    } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new Error(`Failed to write ${label} (${relativePath(filePath)}): ${reason}`);
+    }
+}
+
+async function writeCandidate(candidatePath, nextPublicScript) {
+    await fs.mkdir(path.dirname(candidatePath), { recursive: true });
+    await writeFileLoud(candidatePath, nextPublicScript, 'candidate public JS');
 }
 
 async function main() {
-    const checkMode = process.argv.includes('--check');
+    const { checkMode, candidatePath } = parseArgs(process.argv.slice(2));
+
+    console.log(`Readable source: ${sourcePath}`);
+    console.log(`Public output: ${publicPath}`);
+
+    if (candidatePath) {
+        console.log(`Candidate output: ${candidatePath}`);
+    }
 
     const [sourceText, currentPublicScript, currentServiceWorker] = await Promise.all([
-        readMaintainerSourceFile(sourcePath),
+        readRequiredSourceFile(sourcePath),
         readOptionalTextFile(publicPath),
         readTextFile(serviceWorkerPath)
     ]);
 
-    const nextPublicScript = buildPublicScript(sourceText);
+    const nextPublicScript = await buildPublicScript(sourceText);
     const publicScriptChanged = currentPublicScript !== nextPublicScript;
     const nextRevision = buildPublicRevision(nextPublicScript);
     const nextServiceWorker = buildServiceWorkerText(currentServiceWorker, nextRevision);
     const serviceWorkerChanged = currentServiceWorker !== nextServiceWorker;
+
+    if (candidatePath) {
+        await writeCandidate(candidatePath, nextPublicScript);
+        console.log(`Wrote candidate ${candidatePath} with revision ${nextRevision}.`);
+        return;
+    }
 
     if (checkMode) {
         const staleFiles = [];
@@ -146,39 +238,34 @@ async function main() {
         if (staleFiles.length > 0) {
             console.error(
                 `Public artifact drift detected: ${staleFiles.join(', ')}.\n` +
-                'Run npm run build:public-js in a maintainer checkout that has the local readable source, then commit the result.'
+                'Run npm run build:public-js in a maintainer checkout that has the private readable source, then commit the result.'
             );
             process.exitCode = 1;
             return;
         }
 
-        console.log('Public js artifact is up to date.');
+        console.log(`Public js artifact is up to date with revision ${nextRevision}.`);
         return;
     }
 
-    if (!publicScriptChanged) {
-        if (serviceWorkerChanged) {
-            console.warn(
-                'sw.js has a stale public-js revision token, but build:public-js left it unchanged ' +
-                'because js/script.js did not change.'
-            );
-        }
-
-        console.log('js/script.js is already up to date; no files changed.');
-        return;
-    }
-
-    await fs.writeFile(publicPath, nextPublicScript, 'utf8');
-    if (serviceWorkerChanged) {
-        await fs.writeFile(serviceWorkerPath, nextServiceWorker, 'utf8');
-    }
-
-    console.log(`Updated ${relativePath(publicPath)}.`);
-    if (serviceWorkerChanged) {
-        console.log(`Updated ${relativePath(serviceWorkerPath)} with revision ${nextRevision}.`);
+    if (publicScriptChanged) {
+        await writeFileLoud(publicPath, nextPublicScript, 'generated public JS');
+        console.log(`Updated ${relativePath(publicPath)}.`);
     } else {
-        console.log(`Reused existing ${relativePath(serviceWorkerPath)} revision ${nextRevision}.`);
+        console.log(`${relativePath(publicPath)} is already up to date.`);
     }
+
+    // Reconcile the service-worker revision whenever it drifts, even if the
+    // generated JS itself did not change. This is what guarantees a stale
+    // PUBLIC_JS_REVISION is always repaired without forcing a full JS rebuild.
+    if (serviceWorkerChanged) {
+        await writeFileLoud(serviceWorkerPath, nextServiceWorker, 'service-worker revision');
+        console.log(`Repaired ${relativePath(serviceWorkerPath)} revision -> ${nextRevision}.`);
+    } else {
+        console.log(`${relativePath(serviceWorkerPath)} revision already matches (${nextRevision}).`);
+    }
+
+    console.log(`Public JS revision: ${nextRevision}`);
 }
 
 main().catch((error) => {

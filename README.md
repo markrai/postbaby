@@ -66,11 +66,9 @@ If you test locally on a different origin, do not expect notes from another orig
 
 # 🧱 Frontend Artifact
 
-- Browsers and the Docker image load the committed `js/script.js`.
-- The readable source used to generate that file is maintainer-local and intentionally not tracked in the public repo.
-- Obfuscation is not real security. It only means the public repo ships the generated browser artifact instead of the readable maintainer source.
-- Maintainers with the local source can run `npm run build:public-js`.
-- `npm run build:public-js` and `npm run verify:public-js` are maintainer-only checks. Public users and self-hosters do not need them for normal deployment.
+* The app serves the committed `js/script.js` file directly.
+* Self-hosters do not need to build or regenerate frontend assets for normal deployment.
+* Maintainer-only scripts such as `npm run build:public-js`, `npm run verify:public-js`, and `npm run test:public-js-build` are used only when updating the generated frontend artifact.
 
 # ⌨️ Desktop Usage Instructions
 
