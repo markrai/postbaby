@@ -4303,25 +4303,24 @@ test.describe('Settings and Account UI', () => {
     await expect(page.locator('.grid-item[data-id="item-1"]')).toHaveCount(0);
   });
 
-  test('static logged-out UI shows gear, generic account button, and unavailable account modal', async ({ page }) => {
+  test('static-local UI shows only gear and includes the local-only settings note', async ({ page }) => {
     await prepareBlankPage(page);
     await page.goto('/index.html');
 
     await expect(page.locator('#settingsButton .top-app-settings-icon')).toBeVisible();
-    await expect(page.locator('#accountButton')).toHaveAttribute('aria-label', 'Account');
-    await expect(page.locator('#accountButton')).toHaveAttribute('title', 'Account');
-    await expect(page.locator('#accountButton .top-app-user-icon')).toBeVisible();
+    await expect(page.locator('#topAppControls button:visible')).toHaveCount(1);
+    await expect(page.locator('#accountButton')).toBeHidden();
 
-    await openAccountModal(page);
-    await expect(page.locator('#accountUnavailableCopy')).toBeVisible();
-    await expect(page.locator('#accountLocalOnlyCopy')).toBeHidden();
-    await expect(page.locator('#loginLink')).toBeHidden();
-    await expect(page.locator('#signupLink')).toBeHidden();
+    await openSettingsModal(page);
+    await expect(page.locator('.questions')).toContainText('Questions/Comments:');
+    await expect(page.locator('#staticLocalSettingsNote')).toBeVisible();
+    await expect(page.locator('#staticLocalSettingsNote')).toContainText('This static version saves notes only in this browser on this device.');
   });
 
   test('optional-auth logged-out account modal shows local-only copy and auth actions', async ({ page }) => {
     await prepareBlankPage(page);
     await mockRuntimeConfig(page, {
+      deploymentMode: 'selfhosted_single_user',
       authAvailable: true,
       authRequired: false,
       account: null
@@ -4339,6 +4338,7 @@ test.describe('Settings and Account UI', () => {
   test('logged-in UI shows initials and Account identity label on the account button', async ({ page }) => {
     await prepareBlankPage(page);
     await mockRuntimeConfig(page, {
+      deploymentMode: 'selfhosted_single_user',
       authAvailable: true,
       authRequired: false,
       isAuthenticated: true,
@@ -4365,6 +4365,7 @@ test.describe('Settings and Account UI', () => {
   test('Settings modal contains only local settings plus import and export', async ({ page }) => {
     await prepareBlankPage(page);
     await mockRuntimeConfig(page, {
+      deploymentMode: 'selfhosted_single_user',
       authAvailable: true,
       authRequired: false,
       isAuthenticated: true,
@@ -4384,6 +4385,7 @@ test.describe('Settings and Account UI', () => {
     await expect(page.locator('#settingsModal .settings-sync-panel')).toHaveCount(0);
     await expect(page.locator('#settingsModal #logoutForm')).toHaveCount(0);
     await expect(page.locator('#settingsModal #syncStateStatus')).toHaveCount(0);
+    await expect(page.locator('#staticLocalSettingsNote')).toBeHidden();
   });
 
   test('import and export still work from Settings', async ({ page }) => {

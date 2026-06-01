@@ -96,6 +96,10 @@
     transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
+.top-app-control-button[hidden] {
+    display: none;
+}
+
 .top-app-control-button:hover {
     opacity: 0.85;
 }
@@ -433,6 +437,15 @@ input:checked + .slider:before {
 
 .questions {
     font-size: 10px;
+}
+
+#settingsModal .modal-content .settings-static-local-note {
+    margin: 8px 0 0;
+    font-size: 12px;
+    font-weight: normal;
+    line-height: 1.35;
+    text-align: left;
+    opacity: 0.85;
 }
 
 html {

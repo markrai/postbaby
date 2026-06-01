@@ -91,7 +91,7 @@
             </span>
         </button>
         <button type="button" id="accountButton" class="top-app-control-button top-app-account-button"
-            aria-label="Account" title="Account">
+            aria-label="Account" title="Account" hidden disabled aria-hidden="true">
             <span class="top-app-account-icon" aria-hidden="true">
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
@@ -272,6 +272,11 @@
             <span class="questions">Questions/Comments:
                 <a href="mailto:markraidc@gmail.com" class="accent-link">markraidc@gmail.com</a>
             </span>
+            <p id="staticLocalSettingsNote" class="settings-static-local-note" hidden>
+                Note: This static version saves notes only in this browser on this device. Account sign-in, cloud sync,
+                billing, and cross-device recovery are not available in this mode. Clearing site data or using a
+                different browser/device can make these notes unavailable.
+            </p>
         </div>
     </div>
 
