@@ -5,7 +5,7 @@ services:
     ports:
       - "${POSTBABY_PORT:-9170}:8080"
     environment:
-      POSTBABY_DEPLOYMENT_MODE: ${POSTBABY_DEPLOYMENT_MODE:-selfhosted_single_user}
+      POSTBABY_DEPLOYMENT_MODE: ${POSTBABY_DEPLOYMENT_MODE:-selfhosted}
       POSTBABY_COOKIE_SECURE: ${POSTBABY_COOKIE_SECURE:-false}
       POSTBABY_SESSION_TTL: ${POSTBABY_SESSION_TTL:-720h}
     volumes:

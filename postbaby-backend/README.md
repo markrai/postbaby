@@ -37,20 +37,20 @@ Not included:
 | `POSTBABY_DB_PATH` | no | `./data/postbaby.db` | SQLite database path |
 | `POSTBABY_ADDR` | no | `:8080` | HTTP listen address |
 | `POSTBABY_STATIC_DIR` | no | `../` | Static frontend directory |
-| `POSTBABY_DEPLOYMENT_MODE` | no | `static_local` | `static_local`, `selfhosted_single_user`, or `cloud_multi_user` |
+| `POSTBABY_DEPLOYMENT_MODE` | no | `static` | `static`, `selfhosted`, or `cloud` |
 | `POSTBABY_COOKIE_SECURE` | no | `false` | Set cookie `Secure` when serving over HTTPS |
 | `POSTBABY_SESSION_TTL` | no | `720h` | Session lifetime |
-| `POSTBABY_BILLING_PROVIDER` | no | blank | Set to `stripe` to enable hosted billing routes in `cloud_multi_user` |
+| `POSTBABY_BILLING_PROVIDER` | no | blank | Set to `stripe` to enable hosted billing routes in `cloud` |
 | `POSTBABY_STRIPE_SECRET_KEY` | when billing is enabled | blank | Stripe secret key placeholder for server-side checkout and portal calls |
 | `POSTBABY_STRIPE_WEBHOOK_SECRET` | when billing is enabled | blank | Stripe webhook signing secret placeholder |
 | `POSTBABY_STRIPE_PRICE_ID` | when billing is enabled | blank | Stripe price ID placeholder for the hosted sync subscription |
 | `POSTBABY_PUBLIC_BASE_URL` | when billing is enabled | blank | Public app base URL used to build checkout and portal return URLs |
 
-`cloud_multi_user` now supports the public app shell, hosted signup/login/logout, entitlement-gated account sync, and optional Stripe-backed billing. Real production values still belong in private deployment config.
+`cloud` now supports the public app shell, hosted signup/login/logout, entitlement-gated account sync, and optional Stripe-backed billing. Real production values still belong in private deployment config.
 
 ## Auth Flow
 
-1. In `selfhosted_single_user`, if no users exist, requests to `/` redirect to `/setup`.
+1. In `selfhosted`, if no users exist, requests to `/` redirect to `/setup`.
 2. The setup page creates the first user with `username`, `password`, and `confirm password`.
 3. The first user becomes the admin/owner account.
 4. After setup, the server creates a session cookie and redirects to `/`.
@@ -64,18 +64,18 @@ Setup is disabled once the first user exists.
 Public routes:
 
 - `GET /api/health`
-- `GET /login` (`selfhosted_single_user` only)
-- `POST /login` (`selfhosted_single_user` only)
-- `GET /setup` (`selfhosted_single_user` only)
-- `POST /setup` (`selfhosted_single_user` only)
+- `GET /login` (`selfhosted` only)
+- `POST /login` (`selfhosted` only)
+- `GET /setup` (`selfhosted` only)
+- `POST /setup` (`selfhosted` only)
 - static assets
 
 Authenticated routes:
 
-- `POST /logout` (`selfhosted_single_user` only)
-- `GET /api/document/meta` (`selfhosted_single_user` only)
-- `GET /api/document` (`selfhosted_single_user` only)
-- `PUT /api/document` (`selfhosted_single_user` only)
+- `POST /logout` (`selfhosted` only)
+- `GET /api/document/meta` (`selfhosted` only)
+- `GET /api/document` (`selfhosted` only)
+- `PUT /api/document` (`selfhosted` only)
 
 Authenticated API routes use the session cookie. They do not use `Authorization` headers anymore.
 
@@ -149,7 +149,7 @@ cd .\postbaby-backend
 $env:POSTBABY_DB_PATH = ".\data\postbaby.db"
 $env:POSTBABY_ADDR = ":8080"
 $env:POSTBABY_STATIC_DIR = ".."
-$env:POSTBABY_DEPLOYMENT_MODE = "selfhosted_single_user"
+$env:POSTBABY_DEPLOYMENT_MODE = "selfhosted"
 $env:POSTBABY_COOKIE_SECURE = "false"
 $env:POSTBABY_SESSION_TTL = "720h"
 go run ./cmd/postbaby-backend

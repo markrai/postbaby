@@ -439,7 +439,7 @@ input:checked + .slider:before {
     font-size: 10px;
 }
 
-#settingsModal .modal-content .settings-static-local-note {
+#settingsModal .modal-content .settings-static-note {
     margin: 8px 0 0;
     font-size: 12px;
     font-weight: normal;

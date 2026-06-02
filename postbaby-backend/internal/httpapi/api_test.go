@@ -22,7 +22,7 @@ const testPassword = "correct-horse-battery"
 func TestHealthReturnsOK(t *testing.T) {
 	t.Parallel()
 
-	env := newTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newTestEnv(t, config.DeploymentModeSelfHosted)
 	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
 	rec := httptest.NewRecorder()
 
@@ -44,7 +44,7 @@ func TestHealthReturnsOK(t *testing.T) {
 func TestHealthReturnsOKInCloudMultiUserMode(t *testing.T) {
 	t.Parallel()
 
-	env := newTestEnv(t, config.DeploymentModeCloudMultiUser)
+	env := newTestEnv(t, config.DeploymentModeCloud)
 	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
 	rec := httptest.NewRecorder()
 
@@ -66,7 +66,7 @@ func TestHealthReturnsOKInCloudMultiUserMode(t *testing.T) {
 func TestDocumentRequiresAuthentication(t *testing.T) {
 	t.Parallel()
 
-	env := newTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newTestEnv(t, config.DeploymentModeSelfHosted)
 	req := httptest.NewRequest(http.MethodGet, "/api/document?appId=demo", nil)
 	rec := httptest.NewRecorder()
 
@@ -79,7 +79,7 @@ func TestDocumentRequiresAuthentication(t *testing.T) {
 func TestDocumentRejectsInvalidSessionCookie(t *testing.T) {
 	t.Parallel()
 
-	env := newTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newTestEnv(t, config.DeploymentModeSelfHosted)
 	req := httptest.NewRequest(http.MethodGet, "/api/document?appId=demo", nil)
 	req.AddCookie(&http.Cookie{Name: "postbaby_session", Value: "bogus"})
 	rec := httptest.NewRecorder()
@@ -92,7 +92,7 @@ func TestDocumentRejectsInvalidSessionCookie(t *testing.T) {
 func TestDocumentMetaRequiresAuthentication(t *testing.T) {
 	t.Parallel()
 
-	env := newTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newTestEnv(t, config.DeploymentModeSelfHosted)
 	req := httptest.NewRequest(http.MethodGet, "/api/document/meta?appId=demo", nil)
 	rec := httptest.NewRecorder()
 
@@ -105,7 +105,7 @@ func TestDocumentMetaRequiresAuthentication(t *testing.T) {
 func TestDocumentMetaRequiresAppID(t *testing.T) {
 	t.Parallel()
 
-	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHosted)
 	req := httptest.NewRequest(http.MethodGet, "/api/document/meta", nil)
 	req.AddCookie(env.cookie)
 	rec := httptest.NewRecorder()
@@ -118,7 +118,7 @@ func TestDocumentMetaRequiresAppID(t *testing.T) {
 func TestDocumentMetaRejectsWrongMethod(t *testing.T) {
 	t.Parallel()
 
-	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHosted)
 	req := httptest.NewRequest(http.MethodPut, "/api/document/meta?appId=demo", nil)
 	req.AddCookie(env.cookie)
 	rec := httptest.NewRecorder()
@@ -134,7 +134,7 @@ func TestDocumentMetaRejectsWrongMethod(t *testing.T) {
 func TestDocumentMetaReturnsExistsFalseWhenMissing(t *testing.T) {
 	t.Parallel()
 
-	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHosted)
 	req := httptest.NewRequest(http.MethodGet, "/api/document/meta?appId=demo", nil)
 	req.AddCookie(env.cookie)
 	rec := httptest.NewRecorder()
@@ -160,7 +160,7 @@ func TestDocumentMetaReturnsExistsFalseWhenMissing(t *testing.T) {
 func TestDocumentMetaReturnsDocumentMetadataAfterSave(t *testing.T) {
 	t.Parallel()
 
-	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHosted)
 	performJSONRequest(t, env.handler, env.cookie, http.MethodPut, "/api/document", map[string]any{
 		"appId": "demo",
 		"data":  snapshot("tab-1", "[]"),
@@ -194,7 +194,7 @@ func TestDocumentMetaReturnsDocumentMetadataAfterSave(t *testing.T) {
 func TestGetDocumentRequiresAppID(t *testing.T) {
 	t.Parallel()
 
-	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHosted)
 	req := httptest.NewRequest(http.MethodGet, "/api/document", nil)
 	req.AddCookie(env.cookie)
 	rec := httptest.NewRecorder()
@@ -207,7 +207,7 @@ func TestGetDocumentRequiresAppID(t *testing.T) {
 func TestPutDocumentRejectsInvalidJSON(t *testing.T) {
 	t.Parallel()
 
-	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHosted)
 	req := httptest.NewRequest(http.MethodPut, "/api/document", strings.NewReader(`{"appId":"demo","data":`))
 	req.AddCookie(env.cookie)
 	rec := httptest.NewRecorder()
@@ -220,7 +220,7 @@ func TestPutDocumentRejectsInvalidJSON(t *testing.T) {
 func TestPutDocumentRejectsOversizedBody(t *testing.T) {
 	t.Parallel()
 
-	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHosted)
 	oversized := `{"appId":"demo","data":"` + strings.Repeat("a", int(MaxDocumentBodyBytes)) + `"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/document", strings.NewReader(oversized))
 	req.AddCookie(env.cookie)
@@ -234,7 +234,7 @@ func TestPutDocumentRejectsOversizedBody(t *testing.T) {
 func TestPutDocumentRejectsNonFrontendSnapshotData(t *testing.T) {
 	t.Parallel()
 
-	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHosted)
 	rec := performJSONRequest(t, env.handler, env.cookie, http.MethodPut, "/api/document", map[string]any{
 		"appId": "demo",
 		"data": map[string]any{
@@ -250,7 +250,7 @@ func TestPutDocumentRejectsNonFrontendSnapshotData(t *testing.T) {
 func TestGetDocumentReturnsNotFound(t *testing.T) {
 	t.Parallel()
 
-	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHosted)
 	req := httptest.NewRequest(http.MethodGet, "/api/document?appId=missing", nil)
 	req.AddCookie(env.cookie)
 	rec := httptest.NewRecorder()
@@ -263,7 +263,7 @@ func TestGetDocumentReturnsNotFound(t *testing.T) {
 func TestPutDocumentCreatesDocument(t *testing.T) {
 	t.Parallel()
 
-	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHosted)
 	rec := performJSONRequest(t, env.handler, env.cookie, http.MethodPut, "/api/document", map[string]any{
 		"appId": "demo",
 		"data":  snapshot("tab-1", "[]"),
@@ -288,7 +288,7 @@ func TestPutDocumentCreatesDocument(t *testing.T) {
 func TestPutDocumentRejectsReplacingExistingDocumentWithoutVersion(t *testing.T) {
 	t.Parallel()
 
-	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHosted)
 	performJSONRequest(t, env.handler, env.cookie, http.MethodPut, "/api/document", map[string]any{
 		"appId": "demo",
 		"data":  snapshot("tab-1", "[]"),
@@ -308,7 +308,7 @@ func TestPutDocumentRejectsReplacingExistingDocumentWithoutVersion(t *testing.T)
 func TestPutDocumentSupportsOptimisticLocking(t *testing.T) {
 	t.Parallel()
 
-	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHosted)
 	first := performJSONRequest(t, env.handler, env.cookie, http.MethodPut, "/api/document", map[string]any{
 		"appId": "demo",
 		"data":  snapshot("tab-1", "[]"),
@@ -338,7 +338,7 @@ func TestPutDocumentSupportsOptimisticLocking(t *testing.T) {
 func TestPutDocumentRejectsMismatchedVersionAndBaseServerRevision(t *testing.T) {
 	t.Parallel()
 
-	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHosted)
 	rec := performJSONRequest(t, env.handler, env.cookie, http.MethodPut, "/api/document", map[string]any{
 		"appId":              "demo",
 		"data":               snapshot("tab-1", "[]"),
@@ -355,7 +355,7 @@ func TestPutDocumentRejectsMismatchedVersionAndBaseServerRevision(t *testing.T) 
 func TestPutDocumentReturnsConflictForMismatchedVersion(t *testing.T) {
 	t.Parallel()
 
-	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHosted)
 	first := performJSONRequest(t, env.handler, env.cookie, http.MethodPut, "/api/document", map[string]any{
 		"appId": "demo",
 		"data":  snapshot("tab-1", "[]"),
@@ -387,7 +387,7 @@ func TestPutDocumentReturnsConflictForMismatchedVersion(t *testing.T) {
 func TestDocumentLoadAfterSavePreservesJSON(t *testing.T) {
 	t.Parallel()
 
-	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHosted)
 	payload := map[string]any{
 		"appId": "demo",
 		"data": map[string]string{
@@ -431,7 +431,7 @@ func TestDocumentLoadAfterSavePreservesJSON(t *testing.T) {
 func TestCloudMultiUserDocumentRoutesRequireAuthentication(t *testing.T) {
 	t.Parallel()
 
-	env := newTestEnv(t, config.DeploymentModeCloudMultiUser)
+	env := newTestEnv(t, config.DeploymentModeCloud)
 
 	for _, target := range []string{"/api/document?appId=demo", "/api/document/meta?appId=demo"} {
 		req := httptest.NewRequest(http.MethodGet, target, nil)
@@ -446,7 +446,7 @@ func TestCloudMultiUserDocumentRoutesRequireAuthentication(t *testing.T) {
 func TestCloudMultiUserDocumentRoutesRequireHostedSyncEntitlement(t *testing.T) {
 	t.Parallel()
 
-	env := newTestEnv(t, config.DeploymentModeCloudMultiUser)
+	env := newTestEnv(t, config.DeploymentModeCloud)
 	cookie := createAuthenticatedUserSession(t, env, "cloud-user")
 
 	getReq := httptest.NewRequest(http.MethodGet, "/api/document?appId=demo", nil)
@@ -474,7 +474,7 @@ func TestCloudMultiUserDocumentRoutesRequireHostedSyncEntitlement(t *testing.T) 
 func TestCloudMultiUserInactiveEntitlementAllowsReadButBlocksWrite(t *testing.T) {
 	t.Parallel()
 
-	env := newTestEnv(t, config.DeploymentModeCloudMultiUser)
+	env := newTestEnv(t, config.DeploymentModeCloud)
 	cookie := createAuthenticatedUserSession(t, env, "inactive-cloud-user")
 	grantHostedSyncEntitlement(t, env, cookie)
 
@@ -517,7 +517,7 @@ func TestCloudMultiUserInactiveEntitlementAllowsReadButBlocksWrite(t *testing.T)
 func TestCloudMultiUserDocumentRoutesUseAuthenticatedOwnerNamespace(t *testing.T) {
 	t.Parallel()
 
-	env := newTestEnv(t, config.DeploymentModeCloudMultiUser)
+	env := newTestEnv(t, config.DeploymentModeCloud)
 	firstCookie := createAuthenticatedUserSession(t, env, "cloud-user-one")
 	secondCookie := createAuthenticatedUserSession(t, env, "cloud-user-two")
 	grantHostedSyncEntitlement(t, env, firstCookie)
@@ -623,7 +623,7 @@ type testEnv struct {
 func TestDocumentRoutesReturnNotFoundWhenSyncDisabled(t *testing.T) {
 	t.Parallel()
 
-	env := newTestEnv(t, config.DeploymentModeStaticLocal)
+	env := newTestEnv(t, config.DeploymentModeStatic)
 
 	for _, target := range []string{"/api/document?appId=demo", "/api/document/meta?appId=demo"} {
 		req := httptest.NewRequest(http.MethodGet, target, nil)

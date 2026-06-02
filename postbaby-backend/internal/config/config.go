@@ -14,15 +14,15 @@ const (
 	defaultDBPath         = "./data/postbaby.db"
 	defaultStatic         = "../"
 	defaultSessionTTL     = 30 * 24 * time.Hour
-	defaultDeploymentMode = DeploymentModeStaticLocal
+	defaultDeploymentMode = DeploymentModeStatic
 )
 
 type DeploymentMode string
 
 const (
-	DeploymentModeStaticLocal          DeploymentMode = "static_local"
-	DeploymentModeSelfHostedSingleUser DeploymentMode = "selfhosted_single_user"
-	DeploymentModeCloudMultiUser       DeploymentMode = "cloud_multi_user"
+	DeploymentModeStatic     DeploymentMode = "static"
+	DeploymentModeSelfHosted DeploymentMode = "selfhosted"
+	DeploymentModeCloud      DeploymentMode = "cloud"
 )
 
 type Config struct {
@@ -184,14 +184,14 @@ func parseDeploymentModeEnv(name string, defaultValue DeploymentMode) (Deploymen
 	}
 
 	switch DeploymentMode(strings.ToLower(raw)) {
-	case DeploymentModeStaticLocal:
-		return DeploymentModeStaticLocal, nil
-	case DeploymentModeSelfHostedSingleUser:
-		return DeploymentModeSelfHostedSingleUser, nil
-	case DeploymentModeCloudMultiUser:
-		return DeploymentModeCloudMultiUser, nil
+	case DeploymentModeStatic:
+		return DeploymentModeStatic, nil
+	case DeploymentModeSelfHosted:
+		return DeploymentModeSelfHosted, nil
+	case DeploymentModeCloud:
+		return DeploymentModeCloud, nil
 	default:
-		return "", fmt.Errorf("%s must be one of %q, %q, or %q", name, DeploymentModeStaticLocal, DeploymentModeSelfHostedSingleUser, DeploymentModeCloudMultiUser)
+		return "", fmt.Errorf("%s must be one of %q, %q, or %q", name, DeploymentModeStatic, DeploymentModeSelfHosted, DeploymentModeCloud)
 	}
 }
 

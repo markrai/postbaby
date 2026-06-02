@@ -771,7 +771,7 @@ func (s *Server) currentRuntimeConfig(w http.ResponseWriter, r *http.Request) (r
 		StorageKey:  storageKeyForUser(s.deploymentMode, user),
 		Status:      user.AccountStatus,
 	}
-	if s.deploymentMode == config.DeploymentModeCloudMultiUser {
+	if s.deploymentMode == config.DeploymentModeCloud {
 		ent, exists, err := s.entitlementManager.HostedSyncEntitlement(r.Context(), user.ID)
 		if err != nil {
 			return runtimeConfig{}, err
@@ -794,7 +794,7 @@ func (s *Server) currentRuntimeConfig(w http.ResponseWriter, r *http.Request) (r
 		} else {
 			runtime.SyncPausedReason = "subscription_required"
 		}
-	} else if s.deploymentMode == config.DeploymentModeSelfHostedSingleUser {
+	} else if s.deploymentMode == config.DeploymentModeSelfHosted {
 		runtime.SyncUsable = true
 		runtime.SyncPausedReason = ""
 	}
@@ -814,20 +814,20 @@ func (s *Server) serveAppShellFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authAvailable() bool {
-	return s.deploymentMode == config.DeploymentModeSelfHostedSingleUser ||
-		s.deploymentMode == config.DeploymentModeCloudMultiUser
+	return s.deploymentMode == config.DeploymentModeSelfHosted ||
+		s.deploymentMode == config.DeploymentModeCloud
 }
 
 func (s *Server) appShellAuthRequired() bool {
-	return s.deploymentMode == config.DeploymentModeSelfHostedSingleUser
+	return s.deploymentMode == config.DeploymentModeSelfHosted
 }
 
 func (s *Server) setupEnabled() bool {
-	return s.deploymentMode == config.DeploymentModeSelfHostedSingleUser
+	return s.deploymentMode == config.DeploymentModeSelfHosted
 }
 
 func (s *Server) signupEnabled() bool {
-	return s.deploymentMode == config.DeploymentModeCloudMultiUser && s.billingAvailable()
+	return s.deploymentMode == config.DeploymentModeCloud && s.billingAvailable()
 }
 
 func (s *Server) loginEnabled() bool {
@@ -839,8 +839,8 @@ func (s *Server) logoutEnabled() bool {
 }
 
 func (s *Server) syncEnabled() bool {
-	return s.deploymentMode == config.DeploymentModeSelfHostedSingleUser ||
-		s.deploymentMode == config.DeploymentModeCloudMultiUser
+	return s.deploymentMode == config.DeploymentModeSelfHosted ||
+		s.deploymentMode == config.DeploymentModeCloud
 }
 
 func (s *Server) syncRequiresAuth() bool {
@@ -848,7 +848,7 @@ func (s *Server) syncRequiresAuth() bool {
 }
 
 func (s *Server) billingAvailable() bool {
-	return s.deploymentMode == config.DeploymentModeCloudMultiUser &&
+	return s.deploymentMode == config.DeploymentModeCloud &&
 		s.billingService != nil &&
 		s.billingService.Available()
 }
@@ -858,7 +858,7 @@ func (s *Server) syncUsableWithoutAuthentication() bool {
 }
 
 func (s *Server) billingRoutesEnabled() bool {
-	return s.deploymentMode == config.DeploymentModeCloudMultiUser && s.billingAvailable()
+	return s.deploymentMode == config.DeploymentModeCloud && s.billingAvailable()
 }
 
 func (s *Server) requireAuthenticatedUserOrLogin(w http.ResponseWriter, r *http.Request) (*store.User, error) {
@@ -877,7 +877,7 @@ func (s *Server) requireAuthenticatedUserOrLogin(w http.ResponseWriter, r *http.
 
 func (s *Server) loginPageData(username string) authPageData {
 	body := "Use the local account configured on this server."
-	if s.deploymentMode == config.DeploymentModeCloudMultiUser {
+	if s.deploymentMode == config.DeploymentModeCloud {
 		body = "Sign in to manage billing, reactivate sync, or access your paid account."
 	}
 
@@ -907,9 +907,9 @@ func (s *Server) signupPageData(username string) authPageData {
 
 func (s *Server) authorityModel() string {
 	switch s.deploymentMode {
-	case config.DeploymentModeSelfHostedSingleUser:
+	case config.DeploymentModeSelfHosted:
 		return "server_authoritative"
-	case config.DeploymentModeCloudMultiUser:
+	case config.DeploymentModeCloud:
 		return "subscription_sync"
 	default:
 		return "browser_only"
@@ -917,8 +917,8 @@ func (s *Server) authorityModel() string {
 }
 
 func (s *Server) defaultSyncPausedReason() string {
-	if s.deploymentMode == config.DeploymentModeCloudMultiUser ||
-		s.deploymentMode == config.DeploymentModeSelfHostedSingleUser {
+	if s.deploymentMode == config.DeploymentModeCloud ||
+		s.deploymentMode == config.DeploymentModeSelfHosted {
 		return "auth_required"
 	}
 	return ""
@@ -930,7 +930,7 @@ func storageKeyForUser(deploymentMode config.DeploymentMode, user *store.User) s
 }
 
 func (s *Server) cleanupExpiredProvisionalUsers(r *http.Request) {
-	if s.deploymentMode != config.DeploymentModeCloudMultiUser {
+	if s.deploymentMode != config.DeploymentModeCloud {
 		return
 	}
 	if count, err := s.authManager.CleanupExpiredProvisionalUsers(r.Context(), time.Now().UTC()); err != nil {

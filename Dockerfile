@@ -32,7 +32,7 @@ RUN mkdir -p /app/data
 ENV POSTBABY_ADDR=0.0.0.0:8080 \
     POSTBABY_DB_PATH=/app/data/postbaby.db \
     POSTBABY_STATIC_DIR=/app/public \
-    POSTBABY_DEPLOYMENT_MODE=selfhosted_single_user \
+    POSTBABY_DEPLOYMENT_MODE=selfhosted \
     POSTBABY_COOKIE_SECURE=false \
     POSTBABY_SESSION_TTL=720h
 

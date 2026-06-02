@@ -2,7 +2,7 @@ package config
 
 import "testing"
 
-func TestLoadDefaultsToStaticLocalMode(t *testing.T) {
+func TestLoadDefaultsToStaticMode(t *testing.T) {
 	t.Setenv("POSTBABY_DEPLOYMENT_MODE", "")
 
 	cfg, err := Load()
@@ -10,34 +10,34 @@ func TestLoadDefaultsToStaticLocalMode(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 
-	if cfg.DeploymentMode != DeploymentModeStaticLocal {
-		t.Fatalf("expected default deployment mode %q, got %q", DeploymentModeStaticLocal, cfg.DeploymentMode)
+	if cfg.DeploymentMode != DeploymentModeStatic {
+		t.Fatalf("expected default deployment mode %q, got %q", DeploymentModeStatic, cfg.DeploymentMode)
 	}
 }
 
-func TestLoadAcceptsSelfHostedSingleUserMode(t *testing.T) {
-	t.Setenv("POSTBABY_DEPLOYMENT_MODE", string(DeploymentModeSelfHostedSingleUser))
+func TestLoadAcceptsSelfHostedMode(t *testing.T) {
+	t.Setenv("POSTBABY_DEPLOYMENT_MODE", string(DeploymentModeSelfHosted))
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
 
-	if cfg.DeploymentMode != DeploymentModeSelfHostedSingleUser {
-		t.Fatalf("expected deployment mode %q, got %q", DeploymentModeSelfHostedSingleUser, cfg.DeploymentMode)
+	if cfg.DeploymentMode != DeploymentModeSelfHosted {
+		t.Fatalf("expected deployment mode %q, got %q", DeploymentModeSelfHosted, cfg.DeploymentMode)
 	}
 }
 
-func TestLoadAcceptsCloudMultiUserMode(t *testing.T) {
-	t.Setenv("POSTBABY_DEPLOYMENT_MODE", string(DeploymentModeCloudMultiUser))
+func TestLoadAcceptsCloudMode(t *testing.T) {
+	t.Setenv("POSTBABY_DEPLOYMENT_MODE", string(DeploymentModeCloud))
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
 
-	if cfg.DeploymentMode != DeploymentModeCloudMultiUser {
-		t.Fatalf("expected deployment mode %q, got %q", DeploymentModeCloudMultiUser, cfg.DeploymentMode)
+	if cfg.DeploymentMode != DeploymentModeCloud {
+		t.Fatalf("expected deployment mode %q, got %q", DeploymentModeCloud, cfg.DeploymentMode)
 	}
 }
 

@@ -844,7 +844,7 @@ async function enableMockedSync(page, options = {}) {
       },
       body: [
         'window.POSTBABY_RUNTIME = {',
-        '  deploymentMode: "selfhosted_single_user",',
+        '  deploymentMode: "selfhosted",',
         '  authorityModel: "server_authoritative",',
         '  authAvailable: true,',
         '  syncAvailable: true,',
@@ -1000,7 +1000,7 @@ test.describe('IndexedDB migration', () => {
   });
 });
 
-test.describe('Static local-only behavior', () => {
+test.describe('Static behavior', () => {
   test('imports an old backup without shape, width, or height and renders it as a default note', async ({ page }) => {
     const syncRequests = [];
     const importedSnapshot = buildLocalSnapshotWithItems([{
@@ -4012,7 +4012,7 @@ test.describe('Static local-only behavior', () => {
     expect(syncRequests).toEqual([]);
   });
 
-  test('exposes debug helpers in static local-only mode', async ({ page }) => {
+  test('exposes debug helpers in static mode', async ({ page }) => {
     const localSnapshot = buildLocalSnapshot('Debug Helper Note', { theme: 'dark' });
 
     await prepareBlankPage(page);
@@ -4099,7 +4099,7 @@ test.describe('Mocked sync startup reconciliation', () => {
     await prepareBlankPage(page);
     await seedLocalStorage(page, anonymousSnapshot);
     await mockRuntimeConfig(page, {
-      deploymentMode: 'cloud_multi_user',
+      deploymentMode: 'cloud',
       authorityModel: 'subscription_sync',
       authAvailable: true,
       authRequired: false,
@@ -4175,7 +4175,7 @@ test.describe('Mocked sync startup reconciliation', () => {
     await prepareBlankPage(page);
     await seedLocalStorage(page, localSnapshot);
     await mockRuntimeConfig(page, {
-      deploymentMode: 'cloud_multi_user',
+      deploymentMode: 'cloud',
       authorityModel: 'subscription_sync',
       authAvailable: true,
       authRequired: false,
@@ -4251,7 +4251,7 @@ test.describe('Mocked sync startup reconciliation', () => {
     await prepareBlankPage(page);
     await seedLocalStorage(page, localSnapshot);
     await mockRuntimeConfig(page, {
-      deploymentMode: 'cloud_multi_user',
+      deploymentMode: 'cloud',
       authorityModel: 'subscription_sync',
       authAvailable: true,
       authRequired: false,
@@ -4552,7 +4552,7 @@ test.describe('Settings and Account UI', () => {
     await expect(page.locator('.grid-item[data-id="item-1"]')).toHaveCount(0);
   });
 
-  test('static-local UI shows only gear and includes the local-only settings note', async ({ page }) => {
+  test('static UI shows only gear and includes the local-only settings note', async ({ page }) => {
     await prepareBlankPage(page);
     await page.goto('/index.html');
 
@@ -4562,14 +4562,14 @@ test.describe('Settings and Account UI', () => {
 
     await openSettingsModal(page);
     await expect(page.locator('.questions')).toContainText('Questions/Comments:');
-    await expect(page.locator('#staticLocalSettingsNote')).toBeVisible();
-    await expect(page.locator('#staticLocalSettingsNote')).toContainText('This static version saves notes only in this browser on this device.');
+    await expect(page.locator('#staticSettingsNote')).toBeVisible();
+    await expect(page.locator('#staticSettingsNote')).toContainText('This static version saves notes only in this browser on this device.');
   });
 
   test('optional-auth logged-out account modal shows local-only copy and auth actions', async ({ page }) => {
     await prepareBlankPage(page);
     await mockRuntimeConfig(page, {
-      deploymentMode: 'selfhosted_single_user',
+      deploymentMode: 'selfhosted',
       authAvailable: true,
       authRequired: false,
       account: null
@@ -4587,7 +4587,7 @@ test.describe('Settings and Account UI', () => {
   test('cloud logged-out account modal uses upgrade wording', async ({ page }) => {
     await prepareBlankPage(page);
     await mockRuntimeConfig(page, {
-      deploymentMode: 'cloud_multi_user',
+      deploymentMode: 'cloud',
       authorityModel: 'subscription_sync',
       authAvailable: true,
       authRequired: false,
@@ -4611,7 +4611,7 @@ test.describe('Settings and Account UI', () => {
   test('cloud inactive account shows paused copy and reactivation controls', async ({ page }) => {
     await prepareBlankPage(page);
     await mockRuntimeConfig(page, {
-      deploymentMode: 'cloud_multi_user',
+      deploymentMode: 'cloud',
       authorityModel: 'subscription_sync',
       authAvailable: true,
       authRequired: false,
@@ -4653,7 +4653,7 @@ test.describe('Settings and Account UI', () => {
   test('logged-in UI shows initials and Account identity label on the account button', async ({ page }) => {
     await prepareBlankPage(page);
     await mockRuntimeConfig(page, {
-      deploymentMode: 'selfhosted_single_user',
+      deploymentMode: 'selfhosted',
       authAvailable: true,
       authRequired: false,
       isAuthenticated: true,
@@ -4680,7 +4680,7 @@ test.describe('Settings and Account UI', () => {
   test('Settings modal contains only local settings plus import and export', async ({ page }) => {
     await prepareBlankPage(page);
     await mockRuntimeConfig(page, {
-      deploymentMode: 'selfhosted_single_user',
+      deploymentMode: 'selfhosted',
       authAvailable: true,
       authRequired: false,
       isAuthenticated: true,
@@ -4700,7 +4700,7 @@ test.describe('Settings and Account UI', () => {
     await expect(page.locator('#settingsModal .settings-sync-panel')).toHaveCount(0);
     await expect(page.locator('#settingsModal #logoutForm')).toHaveCount(0);
     await expect(page.locator('#settingsModal #syncStateStatus')).toHaveCount(0);
-    await expect(page.locator('#staticLocalSettingsNote')).toBeHidden();
+    await expect(page.locator('#staticSettingsNote')).toBeHidden();
   });
 
   test('import and export still work from Settings', async ({ page }) => {

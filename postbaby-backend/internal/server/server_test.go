@@ -24,7 +24,7 @@ const serverTestPassword = "correct-horse-battery"
 func TestNewHandlerServesRootWithoutAuthInStaticLocalMode(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeStaticLocal)
+	env := newServerTestEnv(t, config.DeploymentModeStatic)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
 
@@ -39,7 +39,7 @@ func TestNewHandlerServesRootWithoutAuthInStaticLocalMode(t *testing.T) {
 func TestNewHandlerServesAppShellWithoutAuthInCloudMultiUserMode(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	env := newServerTestEnv(t, config.DeploymentModeCloud)
 
 	for _, target := range []string{"/", "/index.html"} {
 		req := httptest.NewRequest(http.MethodGet, target, nil)
@@ -57,7 +57,7 @@ func TestNewHandlerServesAppShellWithoutAuthInCloudMultiUserMode(t *testing.T) {
 func TestNewHandlerServesStaticAssetsWithoutAuth(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeStaticLocal)
+	env := newServerTestEnv(t, config.DeploymentModeStatic)
 	req := httptest.NewRequest(http.MethodGet, "/css/style.css", nil)
 	rec := httptest.NewRecorder()
 
@@ -71,7 +71,7 @@ func TestNewHandlerServesStaticAssetsWithoutAuth(t *testing.T) {
 func TestRuntimeConfigServedWithoutAuth(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeStaticLocal)
+	env := newServerTestEnv(t, config.DeploymentModeStatic)
 	req := httptest.NewRequest(http.MethodGet, "/runtime-config.js", nil)
 	rec := httptest.NewRecorder()
 
@@ -86,7 +86,7 @@ func TestRuntimeConfigServedWithoutAuth(t *testing.T) {
 
 	body := rec.Body.String()
 	for _, want := range []string{
-		`"deploymentMode":"static_local"`,
+		`"deploymentMode":"static"`,
 		`"authorityModel":"browser_only"`,
 		`"authAvailable":false`,
 		`"authRequired":false`,
@@ -113,7 +113,7 @@ func TestRuntimeConfigServedWithoutAuth(t *testing.T) {
 func TestRuntimeConfigServedWithoutAuthInCloudMultiUserMode(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	env := newServerTestEnv(t, config.DeploymentModeCloud)
 	req := httptest.NewRequest(http.MethodGet, "/runtime-config.js", nil)
 	rec := httptest.NewRecorder()
 
@@ -125,7 +125,7 @@ func TestRuntimeConfigServedWithoutAuthInCloudMultiUserMode(t *testing.T) {
 
 	body := rec.Body.String()
 	for _, want := range []string{
-		`"deploymentMode":"cloud_multi_user"`,
+		`"deploymentMode":"cloud"`,
 		`"authorityModel":"subscription_sync"`,
 		`"authAvailable":true`,
 		`"authRequired":false`,
@@ -152,7 +152,7 @@ func TestRuntimeConfigServedWithoutAuthInCloudMultiUserMode(t *testing.T) {
 func TestRuntimeConfigReflectsBillingAvailabilityInCloudMultiUserMode(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloudMultiUser, serverTestOptions{
+	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloud, serverTestOptions{
 		billingProvider: &serverFakeBillingProvider{
 			available: true,
 			name:      "stripe",
@@ -175,7 +175,7 @@ func TestRuntimeConfigReflectsBillingAvailabilityInCloudMultiUserMode(t *testing
 func TestRuntimeConfigReflectsAuthenticationStateInCloudMultiUserMode(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	env := newServerTestEnv(t, config.DeploymentModeCloud)
 	user := createHostedUser(t, env, "cloud-user")
 
 	unauthReq := httptest.NewRequest(http.MethodGet, "/runtime-config.js", nil)
@@ -188,7 +188,7 @@ func TestRuntimeConfigReflectsAuthenticationStateInCloudMultiUserMode(t *testing
 
 	unauthBody := unauthRec.Body.String()
 	for _, want := range []string{
-		`"deploymentMode":"cloud_multi_user"`,
+		`"deploymentMode":"cloud"`,
 		`"authorityModel":"subscription_sync"`,
 		`"authAvailable":true`,
 		`"authRequired":false`,
@@ -242,7 +242,7 @@ func TestRuntimeConfigReflectsAuthenticationStateInCloudMultiUserMode(t *testing
 func TestRuntimeConfigReflectsHostedSyncEntitlementInCloudMultiUserMode(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	env := newServerTestEnv(t, config.DeploymentModeCloud)
 	user := createHostedUser(t, env, "cloud-entitled-user")
 	grantHostedSyncEntitlement(t, env, user.ID)
 
@@ -257,7 +257,7 @@ func TestRuntimeConfigReflectsHostedSyncEntitlementInCloudMultiUserMode(t *testi
 
 	body := authRec.Body.String()
 	for _, want := range []string{
-		`"deploymentMode":"cloud_multi_user"`,
+		`"deploymentMode":"cloud"`,
 		`"isAuthenticated":true`,
 		`"billingAvailable":false`,
 		`"syncAvailable":true`,
@@ -277,7 +277,7 @@ func TestRuntimeConfigReflectsHostedSyncEntitlementInCloudMultiUserMode(t *testi
 func TestRuntimeConfigReflectsAuthenticationStateInSelfHostedMode(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newServerTestEnv(t, config.DeploymentModeSelfHosted)
 	user := createInitialUser(t, env)
 
 	unauthReq := httptest.NewRequest(http.MethodGet, "/runtime-config.js", nil)
@@ -290,7 +290,7 @@ func TestRuntimeConfigReflectsAuthenticationStateInSelfHostedMode(t *testing.T) 
 
 	unauthBody := unauthRec.Body.String()
 	for _, want := range []string{
-		`"deploymentMode":"selfhosted_single_user"`,
+		`"deploymentMode":"selfhosted"`,
 		`"authorityModel":"server_authoritative"`,
 		`"authAvailable":true`,
 		`"authRequired":true`,
@@ -344,7 +344,7 @@ func TestRuntimeConfigReflectsAuthenticationStateInSelfHostedMode(t *testing.T) 
 func TestStaticLocalModeDisablesAuthRoutes(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeStaticLocal)
+	env := newServerTestEnv(t, config.DeploymentModeStatic)
 
 	for _, target := range []string{"/setup", "/signup", "/login", "/logout"} {
 		req := httptest.NewRequest(http.MethodGet, target, nil)
@@ -357,10 +357,10 @@ func TestStaticLocalModeDisablesAuthRoutes(t *testing.T) {
 	}
 }
 
-func TestSelfHostedSingleUserModeDisablesSignupRoute(t *testing.T) {
+func TestSelfHostedModeDisablesSignupRoute(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newServerTestEnv(t, config.DeploymentModeSelfHosted)
 	req := httptest.NewRequest(http.MethodGet, "/signup", nil)
 	rec := httptest.NewRecorder()
 	env.handler.ServeHTTP(rec, req)
@@ -373,7 +373,7 @@ func TestSelfHostedSingleUserModeDisablesSignupRoute(t *testing.T) {
 func TestSelfHostedAdminCanCreateAdditionalAccounts(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newServerTestEnv(t, config.DeploymentModeSelfHosted)
 	admin := createInitialUser(t, env)
 	adminCookie := createSessionCookie(t, env, admin.ID)
 
@@ -410,7 +410,7 @@ func TestSelfHostedAdminCanCreateAdditionalAccounts(t *testing.T) {
 func TestSelfHostedNonAdminCannotCreateAdditionalAccounts(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newServerTestEnv(t, config.DeploymentModeSelfHosted)
 	createInitialUser(t, env)
 	guest := createHostedUser(t, env, "guest")
 	guestCookie := createSessionCookie(t, env, guest.ID)
@@ -427,7 +427,7 @@ func TestSelfHostedNonAdminCannotCreateAdditionalAccounts(t *testing.T) {
 func TestCloudMultiUserModeDisablesSetupRoute(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	env := newServerTestEnv(t, config.DeploymentModeCloud)
 
 	req := httptest.NewRequest(http.MethodGet, "/setup", nil)
 	rec := httptest.NewRecorder()
@@ -441,7 +441,7 @@ func TestCloudMultiUserModeDisablesSetupRoute(t *testing.T) {
 func TestCloudMultiUserSignupRouteRequiresBilling(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	env := newServerTestEnv(t, config.DeploymentModeCloud)
 	req := httptest.NewRequest(http.MethodGet, "/signup", nil)
 	rec := httptest.NewRecorder()
 	env.handler.ServeHTTP(rec, req)
@@ -626,7 +626,7 @@ func TestCloudMultiUserDuplicateSignupIsHandledSafely(t *testing.T) {
 func TestSetupRejectsCrossOriginPost(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newServerTestEnv(t, config.DeploymentModeSelfHosted)
 	req := newFormRequest(http.MethodPost, "/setup", url.Values{
 		"username":        {"owner"},
 		"password":        {serverTestPassword},
@@ -645,7 +645,7 @@ func TestSetupRejectsCrossOriginPost(t *testing.T) {
 func TestSelfHostedLoginRejectsCrossOriginPost(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newServerTestEnv(t, config.DeploymentModeSelfHosted)
 	createInitialUser(t, env)
 
 	req := newFormRequest(http.MethodPost, "/login", url.Values{
@@ -665,7 +665,7 @@ func TestSelfHostedLoginRejectsCrossOriginPost(t *testing.T) {
 func TestSelfHostedLogoutRejectsCrossOriginPost(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newServerTestEnv(t, config.DeploymentModeSelfHosted)
 	user := createInitialUser(t, env)
 
 	req := httptest.NewRequest(http.MethodPost, "/logout", nil)
@@ -685,7 +685,7 @@ func TestSelfHostedLogoutRejectsCrossOriginPost(t *testing.T) {
 func TestCloudMultiUserLoginPageAndFlow(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	env := newServerTestEnv(t, config.DeploymentModeCloud)
 	createHostedUser(t, env, "cloud-user")
 
 	getReq := httptest.NewRequest(http.MethodGet, "/login", nil)
@@ -723,7 +723,7 @@ func TestCloudMultiUserLoginPageAndFlow(t *testing.T) {
 func TestCloudMultiUserLoginRejectsCrossOriginPost(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	env := newServerTestEnv(t, config.DeploymentModeCloud)
 	createHostedUser(t, env, "cloud-user")
 
 	req := newFormRequest(http.MethodPost, "/login", url.Values{
@@ -743,7 +743,7 @@ func TestCloudMultiUserLoginRejectsCrossOriginPost(t *testing.T) {
 func TestCloudMultiUserLogoutClearsSessionAndRedirectsHome(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	env := newServerTestEnv(t, config.DeploymentModeCloud)
 	user := createHostedUser(t, env, "cloud-user")
 	cookie := createSessionCookie(t, env, user.ID)
 
@@ -789,7 +789,7 @@ func TestCloudMultiUserSignupRejectsCrossOriginPost(t *testing.T) {
 func TestCloudMultiUserLogoutRejectsCrossOriginPost(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	env := newServerTestEnv(t, config.DeploymentModeCloud)
 	user := createHostedUser(t, env, "cloud-user")
 
 	req := httptest.NewRequest(http.MethodPost, "/logout", nil)
@@ -810,8 +810,8 @@ func TestBillingRoutesDisabledOutsideConfiguredCloudMode(t *testing.T) {
 	t.Parallel()
 
 	for _, mode := range []config.DeploymentMode{
-		config.DeploymentModeStaticLocal,
-		config.DeploymentModeSelfHostedSingleUser,
+		config.DeploymentModeStatic,
+		config.DeploymentModeSelfHosted,
 	} {
 		t.Run(string(mode), func(t *testing.T) {
 			t.Parallel()
@@ -840,7 +840,7 @@ func TestBillingRoutesDisabledOutsideConfiguredCloudMode(t *testing.T) {
 func TestBillingRoutesReturnNotFoundWhenCloudBillingIsNotConfigured(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	env := newServerTestEnv(t, config.DeploymentModeCloud)
 
 	for _, target := range []string{"/billing/checkout", "/billing/portal", "/billing/webhook"} {
 		req := httptest.NewRequest(http.MethodPost, target, nil)
@@ -862,7 +862,7 @@ func TestBillingCheckoutRequiresAuthenticationAndRedirectsToProvider(t *testing.
 		createCustomerID: "cus_checkout",
 		checkoutURL:      "https://checkout.stripe.test/session",
 	}
-	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloudMultiUser, serverTestOptions{
+	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloud, serverTestOptions{
 		billingProvider: provider,
 		publicBaseURL:   "http://127.0.0.1:8080",
 	})
@@ -903,7 +903,7 @@ func TestBillingPortalRequiresAuthenticationAndRedirectsToProvider(t *testing.T)
 		name:      "stripe",
 		portalURL: "https://billing.stripe.test/session",
 	}
-	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloudMultiUser, serverTestOptions{
+	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloud, serverTestOptions{
 		billingProvider: provider,
 		publicBaseURL:   "http://127.0.0.1:8080",
 	})
@@ -942,7 +942,7 @@ func TestBillingPortalRequiresAuthenticationAndRedirectsToProvider(t *testing.T)
 func TestBillingCheckoutRejectsCrossOriginPost(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloudMultiUser, serverTestOptions{
+	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloud, serverTestOptions{
 		billingProvider: &serverFakeBillingProvider{
 			available: true,
 			name:      "stripe",
@@ -967,7 +967,7 @@ func TestBillingCheckoutRejectsCrossOriginPost(t *testing.T) {
 func TestBillingPortalRejectsCrossOriginPost(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloudMultiUser, serverTestOptions{
+	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloud, serverTestOptions{
 		billingProvider: &serverFakeBillingProvider{
 			available: true,
 			name:      "stripe",
@@ -995,7 +995,7 @@ func TestBillingPortalRejectsCrossOriginPost(t *testing.T) {
 func TestBillingWebhookRejectsInvalidSignature(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloudMultiUser, serverTestOptions{
+	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloud, serverTestOptions{
 		billingProvider: &serverFakeBillingProvider{
 			available:  true,
 			name:       "stripe",
@@ -1018,7 +1018,7 @@ func TestBillingWebhookRejectsInvalidSignature(t *testing.T) {
 func TestBillingWebhookIgnoresUnknownValidEvent(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloudMultiUser, serverTestOptions{
+	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloud, serverTestOptions{
 		billingProvider: &serverFakeBillingProvider{
 			available: true,
 			name:      "stripe",
@@ -1048,7 +1048,7 @@ func TestBillingWebhookUpdatesEntitlementAndSyncSourceOfTruth(t *testing.T) {
 		available: true,
 		name:      "stripe",
 	}
-	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloudMultiUser, serverTestOptions{
+	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloud, serverTestOptions{
 		billingProvider: provider,
 		publicBaseURL:   "http://127.0.0.1:8080",
 	})
@@ -1135,7 +1135,7 @@ func TestBillingWebhookCheckoutCompletionAloneDoesNotGrantHostedSync(t *testing.
 		available: true,
 		name:      "stripe",
 	}
-	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloudMultiUser, serverTestOptions{
+	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloud, serverTestOptions{
 		billingProvider: provider,
 		publicBaseURL:   "http://127.0.0.1:8080",
 	})
@@ -1203,7 +1203,7 @@ func TestBillingWebhookCheckoutCompletionAloneDoesNotGrantHostedSync(t *testing.
 func TestNewHandlerRedirectsRootToSetupWhenNoUsers(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newServerTestEnv(t, config.DeploymentModeSelfHosted)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
 
@@ -1221,7 +1221,7 @@ func TestNewHandlerRedirectsRootToSetupWhenNoUsers(t *testing.T) {
 func TestSetupCreatesFirstUserAndServesApp(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newServerTestEnv(t, config.DeploymentModeSelfHosted)
 	form := url.Values{
 		"username":        {"owner"},
 		"password":        {serverTestPassword},
@@ -1262,7 +1262,7 @@ func TestSetupCreatesFirstUserAndServesApp(t *testing.T) {
 func TestProtectedAppRedirectsToLoginWhenSessionMissing(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newServerTestEnv(t, config.DeploymentModeSelfHosted)
 	createInitialUser(t, env)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -1280,7 +1280,7 @@ func TestProtectedAppRedirectsToLoginWhenSessionMissing(t *testing.T) {
 func TestLoginAndLogoutFlow(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newServerTestEnv(t, config.DeploymentModeSelfHosted)
 	createInitialUser(t, env)
 
 	loginForm := url.Values{
@@ -1333,7 +1333,7 @@ func TestLoginAndLogoutFlow(t *testing.T) {
 func TestSetupUnavailableAfterFirstUserExists(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newServerTestEnv(t, config.DeploymentModeSelfHosted)
 	createInitialUser(t, env)
 
 	req := httptest.NewRequest(http.MethodGet, "/setup", nil)
@@ -1352,7 +1352,7 @@ func TestSetupUnavailableAfterFirstUserExists(t *testing.T) {
 func TestLoginPageBypassesForExistingSession(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newServerTestEnv(t, config.DeploymentModeSelfHosted)
 	user := createInitialUser(t, env)
 	cookie := createSessionCookie(t, env, user.ID)
 
@@ -1373,7 +1373,7 @@ func TestLoginPageBypassesForExistingSession(t *testing.T) {
 func TestSetupPageSetsNoStore(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newServerTestEnv(t, config.DeploymentModeSelfHosted)
 	req := httptest.NewRequest(http.MethodGet, "/setup", nil)
 	rec := httptest.NewRecorder()
 
@@ -1388,7 +1388,7 @@ func TestSetupPageSetsNoStore(t *testing.T) {
 func TestLoginPageSetsNoStore(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	env := newServerTestEnv(t, config.DeploymentModeSelfHosted)
 	createInitialUser(t, env)
 
 	req := httptest.NewRequest(http.MethodGet, "/login", nil)
@@ -1427,7 +1427,7 @@ func newBillingEnabledCloudServerTestEnv(t *testing.T) (*serverTestEnv, *serverF
 		checkoutURL:      "https://checkout.stripe.test/session",
 		portalURL:        "https://billing.stripe.test/session",
 	}
-	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloudMultiUser, serverTestOptions{
+	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloud, serverTestOptions{
 		billingProvider: provider,
 		publicBaseURL:   "http://127.0.0.1:8080",
 	})

@@ -409,15 +409,15 @@ func (a *API) requireDocumentWriteUser(w http.ResponseWriter, r *http.Request) (
 }
 
 func (a *API) syncEnabled() bool {
-	return a.deploymentMode == config.DeploymentModeSelfHostedSingleUser ||
-		a.deploymentMode == config.DeploymentModeCloudMultiUser
+	return a.deploymentMode == config.DeploymentModeSelfHosted ||
+		a.deploymentMode == config.DeploymentModeCloud
 }
 
 func (a *API) syncUsableForUser(ctx context.Context, user *store.User) (bool, error) {
-	if a.deploymentMode == config.DeploymentModeSelfHostedSingleUser {
+	if a.deploymentMode == config.DeploymentModeSelfHosted {
 		return true, nil
 	}
-	if a.deploymentMode != config.DeploymentModeCloudMultiUser {
+	if a.deploymentMode != config.DeploymentModeCloud {
 		return false, nil
 	}
 
@@ -425,10 +425,10 @@ func (a *API) syncUsableForUser(ctx context.Context, user *store.User) (bool, er
 }
 
 func (a *API) documentReadAllowedForUser(ctx context.Context, user *store.User) (bool, error) {
-	if a.deploymentMode == config.DeploymentModeSelfHostedSingleUser {
+	if a.deploymentMode == config.DeploymentModeSelfHosted {
 		return true, nil
 	}
-	if a.deploymentMode != config.DeploymentModeCloudMultiUser {
+	if a.deploymentMode != config.DeploymentModeCloud {
 		return false, nil
 	}
 	if user.AccountStatus == store.AccountStatusCheckoutPending {

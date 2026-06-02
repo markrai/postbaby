@@ -49,8 +49,9 @@ For NAS and Portainer-specific setups, see [docs/NAS.md](./docs/NAS.md).
 
 # 🧭 Modes
 
-- `static_local`: browser-local / ephemeral behavior, no login, no server sync.
-- `selfhosted_single_user`: Go backend + SQLite + `/setup` + `/login` + cookie-session sync.
+- `static`: browser-local / ephemeral behavior, no login, no server sync.
+- `selfhosted`: Go backend + SQLite + `/setup` + `/login` + cookie-session sync.
+- `cloud`: hosted signup/login/logout + entitlement-gated account sync + billing-aware flows.
 
 
 # 💾 Storage

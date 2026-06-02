@@ -1,6 +1,6 @@
 (function () {
     window.POSTBABY_RUNTIME = {
-        deploymentMode: "static_local",
+        deploymentMode: "static",
         authAvailable: false,
         authRequired: false,
         isAuthenticated: false,
