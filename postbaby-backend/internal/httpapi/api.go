@@ -60,9 +60,10 @@ type getDocumentMetaResponse struct {
 }
 
 type putDocumentRequest struct {
-	AppID   string          `json:"appId"`
-	Data    json.RawMessage `json:"data"`
-	Version *int64          `json:"version"`
+	AppID              string          `json:"appId"`
+	Data               json.RawMessage `json:"data"`
+	Version            *int64          `json:"version"`
+	BaseServerRevision *int64          `json:"baseServerRevision"`
 }
 
 type putDocumentResponse struct {
@@ -137,7 +138,7 @@ func (a *API) handleDocumentMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := a.requireSyncUser(w, r)
+	user, err := a.requireDocumentReadUser(w, r)
 	if err != nil {
 		return
 	}
@@ -173,7 +174,7 @@ func (a *API) handleDocumentMeta(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleGetDocument(w http.ResponseWriter, r *http.Request) {
-	user, err := a.requireSyncUser(w, r)
+	user, err := a.requireDocumentReadUser(w, r)
 	if err != nil {
 		return
 	}
@@ -205,7 +206,7 @@ func (a *API) handleGetDocument(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handlePutDocument(w http.ResponseWriter, r *http.Request) {
-	user, err := a.requireSyncUser(w, r)
+	user, err := a.requireDocumentWriteUser(w, r)
 	if err != nil {
 		return
 	}
@@ -242,12 +243,26 @@ func (a *API) handlePutDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Version != nil && *req.Version < 0 {
+	expectedVersion, ok := normalizeExpectedVersion(w, req)
+	if !ok {
+		return
+	}
+	if expectedVersion != nil && *expectedVersion < 0 {
 		writeError(w, http.StatusBadRequest, "invalid_request", "version must be zero or greater")
 		return
 	}
 
-	doc, err := a.store.PutDocument(r.Context(), user.OwnerKey, req.AppID, cloneJSON(req.Data), req.Version)
+	if expectedVersion == nil {
+		if _, err := a.store.GetDocumentMeta(r.Context(), user.OwnerKey, req.AppID); err == nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "version is required when replacing an existing document")
+			return
+		} else if err != nil && !errors.Is(err, store.ErrDocumentNotFound) {
+			writeError(w, http.StatusInternalServerError, "internal_error", "failed to load document metadata")
+			return
+		}
+	}
+
+	doc, err := a.store.PutDocument(r.Context(), user.OwnerKey, req.AppID, cloneJSON(req.Data), expectedVersion)
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrVersionConflict):
@@ -265,6 +280,17 @@ func (a *API) handlePutDocument(w http.ResponseWriter, r *http.Request) {
 		Version:   doc.Version,
 		UpdatedAt: doc.UpdatedAt.UTC().Format(time.RFC3339),
 	})
+}
+
+func normalizeExpectedVersion(w http.ResponseWriter, req putDocumentRequest) (*int64, bool) {
+	if req.Version != nil && req.BaseServerRevision != nil && *req.Version != *req.BaseServerRevision {
+		writeError(w, http.StatusBadRequest, "invalid_request", "version and baseServerRevision must match")
+		return nil, false
+	}
+	if req.Version != nil {
+		return req.Version, true
+	}
+	return req.BaseServerRevision, true
 }
 
 func writeDecodeError(w http.ResponseWriter, err error) {
@@ -344,7 +370,26 @@ func (a *API) requireUser(w http.ResponseWriter, r *http.Request) (*store.User, 
 	return user, nil
 }
 
-func (a *API) requireSyncUser(w http.ResponseWriter, r *http.Request) (*store.User, error) {
+func (a *API) requireDocumentReadUser(w http.ResponseWriter, r *http.Request) (*store.User, error) {
+	user, err := a.requireUser(w, r)
+	if err != nil {
+		return nil, err
+	}
+
+	readAllowed, err := a.documentReadAllowedForUser(r.Context(), user)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "failed to evaluate account entitlement")
+		return nil, err
+	}
+	if !readAllowed {
+		writeError(w, http.StatusForbidden, "entitlement_required", "hosted sync is not enabled for this account")
+		return nil, errEntitlementRequired
+	}
+
+	return user, nil
+}
+
+func (a *API) requireDocumentWriteUser(w http.ResponseWriter, r *http.Request) (*store.User, error) {
 	user, err := a.requireUser(w, r)
 	if err != nil {
 		return nil, err
@@ -377,4 +422,34 @@ func (a *API) syncUsableForUser(ctx context.Context, user *store.User) (bool, er
 	}
 
 	return a.entitlementManager.HostedSyncGranted(ctx, user.ID)
+}
+
+func (a *API) documentReadAllowedForUser(ctx context.Context, user *store.User) (bool, error) {
+	if a.deploymentMode == config.DeploymentModeSelfHostedSingleUser {
+		return true, nil
+	}
+	if a.deploymentMode != config.DeploymentModeCloudMultiUser {
+		return false, nil
+	}
+	if user.AccountStatus == store.AccountStatusCheckoutPending {
+		return false, nil
+	}
+
+	entitlement, exists, err := a.entitlementManager.HostedSyncEntitlement(ctx, user.ID)
+	if err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, nil
+	}
+
+	switch entitlement.Status {
+	case store.EntitlementStatusActive,
+		store.EntitlementStatusPastDue,
+		store.EntitlementStatusCanceled,
+		store.EntitlementStatusExpired:
+		return true, nil
+	default:
+		return false, nil
+	}
 }

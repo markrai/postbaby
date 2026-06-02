@@ -327,11 +327,20 @@ func (s *Store) init(ctx context.Context) error {
 			password_hash TEXT NOT NULL,
 			owner_key TEXT NOT NULL UNIQUE,
 			is_admin INTEGER NOT NULL,
+			account_status TEXT NOT NULL DEFAULT 'active',
+			checkout_expires_at TEXT,
 			created_at TEXT NOT NULL
 		)`,
 	)
 	if err != nil {
 		return s.wrapDBError("db_init_create_users", started, fmt.Errorf("create users table: %w", err))
+	}
+
+	if err := s.ensureColumn(ctx, "users", "account_status", "TEXT NOT NULL DEFAULT 'active'"); err != nil {
+		return s.wrapDBError("db_init_users_account_status", started, err)
+	}
+	if err := s.ensureColumn(ctx, "users", "checkout_expires_at", "TEXT"); err != nil {
+		return s.wrapDBError("db_init_users_checkout_expires_at", started, err)
 	}
 
 	_, err = s.db.ExecContext(
@@ -438,6 +447,37 @@ func (s *Store) init(ctx context.Context) error {
 	}
 
 	s.logDBOperation("db_init_create_schema", started, nil)
+	return nil
+}
+
+func (s *Store) ensureColumn(ctx context.Context, tableName, columnName, definition string) error {
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%s)`, tableName))
+	if err != nil {
+		return fmt.Errorf("query table info for %s: %w", tableName, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return fmt.Errorf("scan table info for %s: %w", tableName, err)
+		}
+		if name == columnName {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate table info for %s: %w", tableName, err)
+	}
+
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, tableName, columnName, definition)); err != nil {
+		return fmt.Errorf("add column %s.%s: %w", tableName, columnName, err)
+	}
 	return nil
 }
 

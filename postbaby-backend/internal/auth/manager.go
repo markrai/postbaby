@@ -109,6 +109,24 @@ func (m *Manager) CreateUser(ctx context.Context, username, password string) (st
 	return m.store.CreateUser(ctx, username, passwordHash, ownerKey)
 }
 
+func (m *Manager) CreateProvisionalUser(ctx context.Context, username, password string, checkoutExpiresAt time.Time) (store.User, error) {
+	passwordHash, err := HashPassword(password)
+	if err != nil {
+		return store.User{}, err
+	}
+
+	ownerKey, err := randomOwnerKey()
+	if err != nil {
+		return store.User{}, err
+	}
+
+	return m.store.CreateProvisionalUser(ctx, username, passwordHash, ownerKey, checkoutExpiresAt)
+}
+
+func (m *Manager) CleanupExpiredProvisionalUsers(ctx context.Context, now time.Time) (int64, error) {
+	return m.store.DeleteExpiredProvisionalUsers(ctx, now)
+}
+
 func (m *Manager) Login(ctx context.Context, w http.ResponseWriter, username, password string) (store.User, error) {
 	user, err := m.store.GetUserByUsername(ctx, username)
 	if err != nil {
@@ -123,6 +141,9 @@ func (m *Manager) Login(ctx context.Context, w http.ResponseWriter, username, pa
 		return store.User{}, err
 	}
 	if !ok {
+		return store.User{}, ErrInvalidCredentials
+	}
+	if user.AccountStatus == store.AccountStatusCheckoutPending && user.CheckoutExpiresAt != nil && !user.CheckoutExpiresAt.After(time.Now().UTC()) {
 		return store.User{}, ErrInvalidCredentials
 	}
 
@@ -176,6 +197,11 @@ func (m *Manager) AuthenticateRequest(ctx context.Context, w http.ResponseWriter
 
 	now := time.Now().UTC()
 	if !sessionUser.Session.ExpiresAt.After(now) {
+		_ = m.store.DeleteSessionByTokenHash(ctx, sessionUser.Session.TokenHash)
+		m.ClearSessionCookie(w)
+		return nil, ErrUnauthorized
+	}
+	if sessionUser.User.AccountStatus == store.AccountStatusCheckoutPending && sessionUser.User.CheckoutExpiresAt != nil && !sessionUser.User.CheckoutExpiresAt.After(now) {
 		_ = m.store.DeleteSessionByTokenHash(ctx, sessionUser.Session.TokenHash)
 		m.ClearSessionCookie(w)
 		return nil, ErrUnauthorized

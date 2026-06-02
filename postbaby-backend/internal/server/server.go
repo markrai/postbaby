@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -9,6 +11,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"postbaby-backend/internal/auth"
 	"postbaby-backend/internal/billing"
@@ -45,10 +48,14 @@ type runtimeAccount struct {
 	DisplayName string `json:"displayName"`
 	Email       string `json:"email"`
 	AvatarURL   string `json:"avatarUrl"`
+	IsAdmin     bool   `json:"isAdmin"`
+	StorageKey  string `json:"storageKey"`
+	Status      string `json:"status"`
 }
 
 type runtimeConfig struct {
 	DeploymentMode   string `json:"deploymentMode"`
+	AuthorityModel   string `json:"authorityModel"`
 	AuthAvailable    bool   `json:"authAvailable"`
 	AuthRequired     bool   `json:"authRequired"`
 	IsAuthenticated  bool   `json:"isAuthenticated"`
@@ -56,8 +63,11 @@ type runtimeConfig struct {
 	SyncAvailable    bool   `json:"syncAvailable"`
 	SyncRequiresAuth bool   `json:"syncRequiresAuth"`
 	SyncUsable       bool   `json:"syncUsable"`
+	SyncPausedReason string `json:"syncPausedReason"`
 	Entitlement      struct {
-		HostedSync bool `json:"hostedSync"`
+		HostedSync bool   `json:"hostedSync"`
+		Status     string `json:"status"`
+		ValidUntil string `json:"validUntil,omitempty"`
 	} `json:"entitlement"`
 	SetupAvailable bool            `json:"setupAvailable"`
 	APIBase        string          `json:"apiBase"`
@@ -80,6 +90,7 @@ func NewHandler(apiHandler http.Handler, authManager *auth.Manager, entitlementM
 	mux.HandleFunc("/runtime-config.js", server.handleRuntimeConfig)
 	if server.setupEnabled() {
 		mux.HandleFunc("/setup", server.handleSetup)
+		mux.HandleFunc("/admin/accounts", server.handleAdminAccounts)
 	}
 	if server.signupEnabled() {
 		mux.HandleFunc("/signup", server.handleSignup)
@@ -101,6 +112,7 @@ func NewHandler(apiHandler http.Handler, authManager *auth.Manager, entitlementM
 
 func (s *Server) handleRuntimeConfig(w http.ResponseWriter, r *http.Request) {
 	httpcache.SetNoStore(w)
+	s.cleanupExpiredProvisionalUsers(r)
 
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodHead}, ", "))
@@ -294,6 +306,7 @@ func (s *Server) handleSetupPost(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	httpcache.SetNoStore(w)
+	s.cleanupExpiredProvisionalUsers(r)
 
 	if !s.loginEnabled() {
 		http.NotFound(w, r)
@@ -365,6 +378,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 	httpcache.SetNoStore(w)
+	s.cleanupExpiredProvisionalUsers(r)
 
 	if !s.signupEnabled() {
 		http.NotFound(w, r)
@@ -430,7 +444,13 @@ func (s *Server) handleSignupPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := s.authManager.CreateUser(r.Context(), username, password)
+	if !s.billingAvailable() {
+		page.Error = "Account sync upgrades are unavailable right now."
+		renderAuthPage(w, http.StatusServiceUnavailable, page)
+		return
+	}
+
+	user, err := s.authManager.CreateProvisionalUser(r.Context(), username, password, time.Now().UTC().Add(24*time.Hour))
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrUsernameTaken):
@@ -447,7 +467,102 @@ func (s *Server) handleSignupPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	redirectURL, err := s.billingService.CreateCheckoutSession(r.Context(), &user)
+	if err != nil {
+		http.Error(w, "failed to start billing checkout", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+}
+
+func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
+	httpcache.SetNoStore(w)
+
+	if !s.setupEnabled() {
+		http.NotFound(w, r)
+		return
+	}
+
+	user, err := s.requireAuthenticatedUserOrLogin(w, r)
+	if err != nil {
+		return
+	}
+	if !user.IsAdmin {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		renderAuthPage(w, http.StatusOK, authPageData{
+			Title:             "Postbaby Accounts",
+			Heading:           "Create a Postbaby account",
+			Body:              "Create another local account for this server.",
+			Action:            "/admin/accounts",
+			SubmitLabel:       "Create account",
+			ShowConfirm:       true,
+			PasswordMinLength: auth.PasswordMinLength(),
+		})
+	case http.MethodPost:
+		s.handleAdminAccountsPost(w, r)
+	default:
+		w.Header().Set("Allow", strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleAdminAccountsPost(w http.ResponseWriter, r *http.Request) {
+	if !isTrustedFormPost(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form submission", http.StatusBadRequest)
+		return
+	}
+
+	username := strings.TrimSpace(r.FormValue("username"))
+	password := r.FormValue("password")
+	confirmPassword := r.FormValue("confirmPassword")
+	page := authPageData{
+		Title:             "Postbaby Accounts",
+		Heading:           "Create a Postbaby account",
+		Body:              "Create another local account for this server.",
+		Action:            "/admin/accounts",
+		SubmitLabel:       "Create account",
+		Username:          username,
+		ShowConfirm:       true,
+		PasswordMinLength: auth.PasswordMinLength(),
+	}
+
+	if username == "" || password == "" {
+		page.Error = "Enter both username and password."
+		renderAuthPage(w, http.StatusBadRequest, page)
+		return
+	}
+	if len(password) < auth.PasswordMinLength() {
+		page.Error = "Choose a longer password."
+		renderAuthPage(w, http.StatusBadRequest, page)
+		return
+	}
+	if password != confirmPassword {
+		page.Error = "Passwords do not match."
+		renderAuthPage(w, http.StatusBadRequest, page)
+		return
+	}
+
+	if _, err := s.authManager.CreateUser(r.Context(), username, password); err != nil {
+		if errors.Is(err, store.ErrUsernameTaken) {
+			page.Error = "That username is already in use."
+			renderAuthPage(w, http.StatusConflict, page)
+			return
+		}
+		http.Error(w, "failed to create account", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/admin/accounts", http.StatusSeeOther)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -620,6 +735,7 @@ func (s *Server) redirectAuthenticatedOrLogin(w http.ResponseWriter, r *http.Req
 func (s *Server) currentRuntimeConfig(w http.ResponseWriter, r *http.Request) (runtimeConfig, error) {
 	runtime := runtimeConfig{
 		DeploymentMode:   string(s.deploymentMode),
+		AuthorityModel:   s.authorityModel(),
 		AuthAvailable:    s.authAvailable(),
 		AuthRequired:     s.appShellAuthRequired(),
 		IsAuthenticated:  false,
@@ -627,9 +743,11 @@ func (s *Server) currentRuntimeConfig(w http.ResponseWriter, r *http.Request) (r
 		SyncAvailable:    s.syncEnabled(),
 		SyncRequiresAuth: s.syncRequiresAuth(),
 		SyncUsable:       s.syncUsableWithoutAuthentication(),
+		SyncPausedReason: s.defaultSyncPausedReason(),
 		SetupAvailable:   s.setupEnabled(),
 		APIBase:          "",
 	}
+	runtime.Entitlement.Status = store.EntitlementStatusNone
 
 	if !s.authAvailable() {
 		return runtime, nil
@@ -649,14 +767,36 @@ func (s *Server) currentRuntimeConfig(w http.ResponseWriter, r *http.Request) (r
 		DisplayName: user.Username,
 		Email:       "",
 		AvatarURL:   "",
+		IsAdmin:     user.IsAdmin,
+		StorageKey:  storageKeyForUser(s.deploymentMode, user),
+		Status:      user.AccountStatus,
 	}
 	if s.deploymentMode == config.DeploymentModeCloudMultiUser {
-		hostedSyncGranted, err := s.entitlementManager.HostedSyncGranted(r.Context(), user.ID)
+		ent, exists, err := s.entitlementManager.HostedSyncEntitlement(r.Context(), user.ID)
 		if err != nil {
 			return runtimeConfig{}, err
 		}
+		if exists {
+			runtime.Entitlement.Status = ent.Status
+			if ent.ValidUntil != nil {
+				runtime.Entitlement.ValidUntil = ent.ValidUntil.UTC().Format(time.RFC3339)
+			}
+		}
+		hostedSyncGranted := exists && ent.Status == store.EntitlementStatusActive
 		runtime.SyncUsable = hostedSyncGranted
 		runtime.Entitlement.HostedSync = hostedSyncGranted
+		if hostedSyncGranted {
+			runtime.SyncPausedReason = ""
+		} else if user.AccountStatus == store.AccountStatusCheckoutPending {
+			runtime.SyncPausedReason = "checkout_pending"
+		} else if exists {
+			runtime.SyncPausedReason = "subscription_inactive"
+		} else {
+			runtime.SyncPausedReason = "subscription_required"
+		}
+	} else if s.deploymentMode == config.DeploymentModeSelfHostedSingleUser {
+		runtime.SyncUsable = true
+		runtime.SyncPausedReason = ""
 	}
 	return runtime, nil
 }
@@ -687,7 +827,7 @@ func (s *Server) setupEnabled() bool {
 }
 
 func (s *Server) signupEnabled() bool {
-	return s.deploymentMode == config.DeploymentModeCloudMultiUser
+	return s.deploymentMode == config.DeploymentModeCloudMultiUser && s.billingAvailable()
 }
 
 func (s *Server) loginEnabled() bool {
@@ -714,7 +854,7 @@ func (s *Server) billingAvailable() bool {
 }
 
 func (s *Server) syncUsableWithoutAuthentication() bool {
-	return s.deploymentMode == config.DeploymentModeSelfHostedSingleUser
+	return false
 }
 
 func (s *Server) billingRoutesEnabled() bool {
@@ -738,7 +878,7 @@ func (s *Server) requireAuthenticatedUserOrLogin(w http.ResponseWriter, r *http.
 func (s *Server) loginPageData(username string) authPageData {
 	body := "Use the local account configured on this server."
 	if s.deploymentMode == config.DeploymentModeCloudMultiUser {
-		body = "Sign in to turn on account-backed sync for this Postbaby board."
+		body = "Sign in to manage billing, reactivate sync, or access your paid account."
 	}
 
 	return authPageData{
@@ -754,14 +894,49 @@ func (s *Server) loginPageData(username string) authPageData {
 
 func (s *Server) signupPageData(username string) authPageData {
 	return authPageData{
-		Title:             "Postbaby Signup",
-		Heading:           "Create a Postbaby account",
-		Body:              "Create an account to sync this Postbaby board across your browsers and devices.",
+		Title:             "Postbaby Upgrade",
+		Heading:           "Upgrade Postbaby",
+		Body:              "Create your account and continue to checkout to sync this board across your devices.",
 		Action:            "/signup",
-		SubmitLabel:       "Create account",
+		SubmitLabel:       "Continue to checkout",
 		Username:          username,
 		ShowConfirm:       true,
 		PasswordMinLength: auth.PasswordMinLength(),
+	}
+}
+
+func (s *Server) authorityModel() string {
+	switch s.deploymentMode {
+	case config.DeploymentModeSelfHostedSingleUser:
+		return "server_authoritative"
+	case config.DeploymentModeCloudMultiUser:
+		return "subscription_sync"
+	default:
+		return "browser_only"
+	}
+}
+
+func (s *Server) defaultSyncPausedReason() string {
+	if s.deploymentMode == config.DeploymentModeCloudMultiUser ||
+		s.deploymentMode == config.DeploymentModeSelfHostedSingleUser {
+		return "auth_required"
+	}
+	return ""
+}
+
+func storageKeyForUser(deploymentMode config.DeploymentMode, user *store.User) string {
+	sum := sha256.Sum256([]byte(string(deploymentMode) + ":" + user.OwnerKey))
+	return hex.EncodeToString(sum[:])
+}
+
+func (s *Server) cleanupExpiredProvisionalUsers(r *http.Request) {
+	if s.deploymentMode != config.DeploymentModeCloudMultiUser {
+		return
+	}
+	if count, err := s.authManager.CleanupExpiredProvisionalUsers(r.Context(), time.Now().UTC()); err != nil {
+		log.Printf("cleanup expired provisional users failed: %v", err)
+	} else if count > 0 {
+		log.Printf("cleanup expired provisional users deleted=%d", count)
 	}
 }
 

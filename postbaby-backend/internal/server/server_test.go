@@ -87,6 +87,7 @@ func TestRuntimeConfigServedWithoutAuth(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		`"deploymentMode":"static_local"`,
+		`"authorityModel":"browser_only"`,
 		`"authAvailable":false`,
 		`"authRequired":false`,
 		`"isAuthenticated":false`,
@@ -94,7 +95,9 @@ func TestRuntimeConfigServedWithoutAuth(t *testing.T) {
 		`"syncAvailable":false`,
 		`"syncRequiresAuth":false`,
 		`"syncUsable":false`,
-		`"entitlement":{"hostedSync":false}`,
+		`"syncPausedReason":""`,
+		`"hostedSync":false`,
+		`"status":"none"`,
 		`"setupAvailable":false`,
 		`"apiBase":""`,
 		`"account":null`,
@@ -123,6 +126,7 @@ func TestRuntimeConfigServedWithoutAuthInCloudMultiUserMode(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		`"deploymentMode":"cloud_multi_user"`,
+		`"authorityModel":"subscription_sync"`,
 		`"authAvailable":true`,
 		`"authRequired":false`,
 		`"isAuthenticated":false`,
@@ -130,7 +134,9 @@ func TestRuntimeConfigServedWithoutAuthInCloudMultiUserMode(t *testing.T) {
 		`"syncAvailable":true`,
 		`"syncRequiresAuth":true`,
 		`"syncUsable":false`,
-		`"entitlement":{"hostedSync":false}`,
+		`"syncPausedReason":"auth_required"`,
+		`"hostedSync":false`,
+		`"status":"none"`,
 		`"setupAvailable":false`,
 		`"apiBase":""`,
 		`"account":null`,
@@ -183,6 +189,7 @@ func TestRuntimeConfigReflectsAuthenticationStateInCloudMultiUserMode(t *testing
 	unauthBody := unauthRec.Body.String()
 	for _, want := range []string{
 		`"deploymentMode":"cloud_multi_user"`,
+		`"authorityModel":"subscription_sync"`,
 		`"authAvailable":true`,
 		`"authRequired":false`,
 		`"isAuthenticated":false`,
@@ -190,7 +197,9 @@ func TestRuntimeConfigReflectsAuthenticationStateInCloudMultiUserMode(t *testing
 		`"syncAvailable":true`,
 		`"syncRequiresAuth":true`,
 		`"syncUsable":false`,
-		`"entitlement":{"hostedSync":false}`,
+		`"syncPausedReason":"auth_required"`,
+		`"hostedSync":false`,
+		`"status":"none"`,
 		`"setupAvailable":false`,
 		`"apiBase":""`,
 		`"account":null`,
@@ -212,11 +221,15 @@ func TestRuntimeConfigReflectsAuthenticationStateInCloudMultiUserMode(t *testing
 		`"isAuthenticated":true`,
 		`"billingAvailable":false`,
 		`"syncUsable":false`,
-		`"entitlement":{"hostedSync":false}`,
+		`"syncPausedReason":"subscription_required"`,
+		`"hostedSync":false`,
+		`"status":"none"`,
 		`"username":"cloud-user"`,
 		`"displayName":"cloud-user"`,
 		`"email":""`,
 		`"avatarUrl":""`,
+		`"isAdmin":false`,
+		`"status":"active"`,
 	} {
 		if body := authRec.Body.String(); !strings.Contains(body, want) {
 			t.Fatalf("expected authenticated cloud runtime config body to contain %q, got %q", want, body)
@@ -250,7 +263,9 @@ func TestRuntimeConfigReflectsHostedSyncEntitlementInCloudMultiUserMode(t *testi
 		`"syncAvailable":true`,
 		`"syncRequiresAuth":true`,
 		`"syncUsable":true`,
-		`"entitlement":{"hostedSync":true}`,
+		`"syncPausedReason":""`,
+		`"hostedSync":true`,
+		`"status":"active"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected entitled cloud runtime config body to contain %q, got %q", want, body)
@@ -276,14 +291,17 @@ func TestRuntimeConfigReflectsAuthenticationStateInSelfHostedMode(t *testing.T) 
 	unauthBody := unauthRec.Body.String()
 	for _, want := range []string{
 		`"deploymentMode":"selfhosted_single_user"`,
+		`"authorityModel":"server_authoritative"`,
 		`"authAvailable":true`,
 		`"authRequired":true`,
 		`"isAuthenticated":false`,
 		`"billingAvailable":false`,
 		`"syncAvailable":true`,
 		`"syncRequiresAuth":true`,
-		`"syncUsable":true`,
-		`"entitlement":{"hostedSync":false}`,
+		`"syncUsable":false`,
+		`"syncPausedReason":"auth_required"`,
+		`"hostedSync":false`,
+		`"status":"none"`,
 		`"setupAvailable":true`,
 		`"apiBase":""`,
 		`"account":null`,
@@ -305,11 +323,15 @@ func TestRuntimeConfigReflectsAuthenticationStateInSelfHostedMode(t *testing.T) 
 		`"isAuthenticated":true`,
 		`"billingAvailable":false`,
 		`"syncUsable":true`,
-		`"entitlement":{"hostedSync":false}`,
+		`"syncPausedReason":""`,
+		`"hostedSync":false`,
+		`"status":"none"`,
 		`"username":"owner"`,
 		`"displayName":"owner"`,
 		`"email":""`,
 		`"avatarUrl":""`,
+		`"isAdmin":true`,
+		`"status":"active"`,
 	} {
 		if body := authRec.Body.String(); !strings.Contains(body, want) {
 			t.Fatalf("expected authenticated runtime config body to contain %q, got %q", want, body)
@@ -348,6 +370,60 @@ func TestSelfHostedSingleUserModeDisablesSignupRoute(t *testing.T) {
 	}
 }
 
+func TestSelfHostedAdminCanCreateAdditionalAccounts(t *testing.T) {
+	t.Parallel()
+
+	env := newServerTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	admin := createInitialUser(t, env)
+	adminCookie := createSessionCookie(t, env, admin.ID)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/accounts", nil)
+	getReq.AddCookie(adminCookie)
+	getRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected admin accounts page status 200, got %d", getRec.Code)
+	}
+
+	form := url.Values{
+		"username":        {"guest"},
+		"password":        {serverTestPassword},
+		"confirmPassword": {serverTestPassword},
+	}
+	postReq := newFormRequest(http.MethodPost, "/admin/accounts", form, "http://example.com", "example.com")
+	postReq.AddCookie(adminCookie)
+	postRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusSeeOther || postRec.Header().Get("Location") != "/admin/accounts" {
+		t.Fatalf("expected admin account creation redirect, got status=%d location=%q", postRec.Code, postRec.Header().Get("Location"))
+	}
+
+	guest, err := env.store.GetUserByUsername(context.Background(), "guest")
+	if err != nil {
+		t.Fatalf("expected guest account to be created: %v", err)
+	}
+	if guest.IsAdmin {
+		t.Fatalf("expected admin-created guest to be non-admin, got %+v", guest)
+	}
+}
+
+func TestSelfHostedNonAdminCannotCreateAdditionalAccounts(t *testing.T) {
+	t.Parallel()
+
+	env := newServerTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	createInitialUser(t, env)
+	guest := createHostedUser(t, env, "guest")
+	guestCookie := createSessionCookie(t, env, guest.ID)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/accounts", nil)
+	req.AddCookie(guestCookie)
+	rec := httptest.NewRecorder()
+	env.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected non-admin account page status 403, got %d", rec.Code)
+	}
+}
+
 func TestCloudMultiUserModeDisablesSetupRoute(t *testing.T) {
 	t.Parallel()
 
@@ -362,10 +438,23 @@ func TestCloudMultiUserModeDisablesSetupRoute(t *testing.T) {
 	}
 }
 
-func TestCloudMultiUserSignupRejectsUnsupportedMethods(t *testing.T) {
+func TestCloudMultiUserSignupRouteRequiresBilling(t *testing.T) {
 	t.Parallel()
 
 	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	req := httptest.NewRequest(http.MethodGet, "/signup", nil)
+	rec := httptest.NewRecorder()
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected /signup to return 404 when billing is unavailable, got %d", rec.Code)
+	}
+}
+
+func TestCloudMultiUserSignupRejectsUnsupportedMethods(t *testing.T) {
+	t.Parallel()
+
+	env, _ := newBillingEnabledCloudServerTestEnv(t)
 	req := httptest.NewRequest(http.MethodPut, "/signup", nil)
 	rec := httptest.NewRecorder()
 	env.handler.ServeHTTP(rec, req)
@@ -381,7 +470,7 @@ func TestCloudMultiUserSignupRejectsUnsupportedMethods(t *testing.T) {
 func TestCloudMultiUserSignupPageAndFlow(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	env, provider := newBillingEnabledCloudServerTestEnv(t)
 
 	getReq := httptest.NewRequest(http.MethodGet, "/signup", nil)
 	getRec := httptest.NewRecorder()
@@ -407,8 +496,11 @@ func TestCloudMultiUserSignupPageAndFlow(t *testing.T) {
 	if postRec.Code != http.StatusSeeOther {
 		t.Fatalf("expected signup redirect, got %d", postRec.Code)
 	}
-	if location := postRec.Header().Get("Location"); location != "/" {
-		t.Fatalf("expected signup redirect to /, got %q", location)
+	if location := postRec.Header().Get("Location"); location != "https://checkout.stripe.test/session" {
+		t.Fatalf("expected signup redirect to checkout, got %q", location)
+	}
+	if provider.checkoutInput == nil || provider.checkoutInput.ProviderCustomerID != "cus_checkout" {
+		t.Fatalf("unexpected checkout provider input: %+v", provider.checkoutInput)
 	}
 	assertNoStore(t, postRec)
 
@@ -426,6 +518,12 @@ func TestCloudMultiUserSignupPageAndFlow(t *testing.T) {
 	}
 	if !strings.Contains(runtimeRec.Body.String(), `"syncUsable":false`) {
 		t.Fatalf("expected authenticated runtime config after signup to keep sync unusable without entitlement, got %q", runtimeRec.Body.String())
+	}
+	if !strings.Contains(runtimeRec.Body.String(), `"syncPausedReason":"checkout_pending"`) {
+		t.Fatalf("expected provisional signup to be checkout pending, got %q", runtimeRec.Body.String())
+	}
+	if !strings.Contains(runtimeRec.Body.String(), `"status":"checkout_pending"`) {
+		t.Fatalf("expected provisional account status after signup, got %q", runtimeRec.Body.String())
 	}
 }
 
@@ -474,7 +572,7 @@ func TestCloudMultiUserSignupValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+			env, _ := newBillingEnabledCloudServerTestEnv(t)
 			req := newFormRequest(http.MethodPost, "/signup", tc.form, "http://example.com", "example.com")
 			rec := httptest.NewRecorder()
 
@@ -497,7 +595,7 @@ func TestCloudMultiUserSignupValidation(t *testing.T) {
 func TestCloudMultiUserDuplicateSignupIsHandledSafely(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	env, _ := newBillingEnabledCloudServerTestEnv(t)
 	createHostedUser(t, env, "cloud-user")
 
 	form := url.Values{
@@ -672,7 +770,7 @@ func TestCloudMultiUserLogoutClearsSessionAndRedirectsHome(t *testing.T) {
 func TestCloudMultiUserSignupRejectsCrossOriginPost(t *testing.T) {
 	t.Parallel()
 
-	env := newServerTestEnv(t, config.DeploymentModeCloudMultiUser)
+	env, _ := newBillingEnabledCloudServerTestEnv(t)
 	req := newFormRequest(http.MethodPost, "/signup", url.Values{
 		"username":        {"cloud-user"},
 		"password":        {serverTestPassword},
@@ -1017,7 +1115,7 @@ func TestBillingWebhookUpdatesEntitlementAndSyncSourceOfTruth(t *testing.T) {
 	runtimeAfterRec := httptest.NewRecorder()
 	env.handler.ServeHTTP(runtimeAfterRec, runtimeAfterReq)
 	body := runtimeAfterRec.Body.String()
-	if !strings.Contains(body, `"billingAvailable":true`) || !strings.Contains(body, `"syncUsable":true`) || !strings.Contains(body, `"entitlement":{"hostedSync":true}`) {
+	if !strings.Contains(body, `"billingAvailable":true`) || !strings.Contains(body, `"syncUsable":true`) || !strings.Contains(body, `"hostedSync":true`) || !strings.Contains(body, `"status":"active"`) {
 		t.Fatalf("expected entitled runtime config after webhook, got %q", body)
 	}
 
@@ -1081,7 +1179,8 @@ func TestBillingWebhookCheckoutCompletionAloneDoesNotGrantHostedSync(t *testing.
 		`"billingAvailable":true`,
 		`"isAuthenticated":true`,
 		`"syncUsable":false`,
-		`"entitlement":{"hostedSync":false}`,
+		`"hostedSync":false`,
+		`"status":"none"`,
 	} {
 		if !strings.Contains(runtimeBody, want) {
 			t.Fatalf("expected runtime config body to contain %q after checkout completion only, got %q", want, runtimeBody)
@@ -1316,6 +1415,23 @@ type serverTestOptions struct {
 
 func newServerTestEnv(t *testing.T, deploymentMode config.DeploymentMode) *serverTestEnv {
 	return newServerTestEnvWithOptions(t, deploymentMode, serverTestOptions{})
+}
+
+func newBillingEnabledCloudServerTestEnv(t *testing.T) (*serverTestEnv, *serverFakeBillingProvider) {
+	t.Helper()
+
+	provider := &serverFakeBillingProvider{
+		available:        true,
+		name:             "stripe",
+		createCustomerID: "cus_checkout",
+		checkoutURL:      "https://checkout.stripe.test/session",
+		portalURL:        "https://billing.stripe.test/session",
+	}
+	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloudMultiUser, serverTestOptions{
+		billingProvider: provider,
+		publicBaseURL:   "http://127.0.0.1:8080",
+	})
+	return env, provider
 }
 
 func newServerTestEnvWithOptions(t *testing.T, deploymentMode config.DeploymentMode, options serverTestOptions) *serverTestEnv {

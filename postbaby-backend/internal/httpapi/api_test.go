@@ -285,7 +285,7 @@ func TestPutDocumentCreatesDocument(t *testing.T) {
 	assertNoStore(t, rec)
 }
 
-func TestPutDocumentOverwritesWithoutVersion(t *testing.T) {
+func TestPutDocumentRejectsReplacingExistingDocumentWithoutVersion(t *testing.T) {
 	t.Parallel()
 
 	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
@@ -299,12 +299,9 @@ func TestPutDocumentOverwritesWithoutVersion(t *testing.T) {
 		"data":  snapshot("tab-2", "[]"),
 	})
 
-	var resp struct {
-		Version int64 `json:"version"`
-	}
-	decodeResponse(t, rec, &resp)
-	if resp.Version != 2 {
-		t.Fatalf("expected version 2, got %d", resp.Version)
+	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid_request")
+	if !strings.Contains(rec.Body.String(), "version is required") {
+		t.Fatalf("expected missing version error, got %q", rec.Body.String())
 	}
 }
 
@@ -323,9 +320,10 @@ func TestPutDocumentSupportsOptimisticLocking(t *testing.T) {
 	decodeResponse(t, first, &firstResp)
 
 	second := performJSONRequest(t, env.handler, env.cookie, http.MethodPut, "/api/document", map[string]any{
-		"appId":   "demo",
-		"data":    snapshot("tab-2", "[]"),
-		"version": firstResp.Version,
+		"appId":              "demo",
+		"data":               snapshot("tab-2", "[]"),
+		"version":            firstResp.Version,
+		"baseServerRevision": firstResp.Version,
 	})
 
 	var secondResp struct {
@@ -334,6 +332,23 @@ func TestPutDocumentSupportsOptimisticLocking(t *testing.T) {
 	decodeResponse(t, second, &secondResp)
 	if secondResp.Version != 2 {
 		t.Fatalf("expected version 2, got %d", secondResp.Version)
+	}
+}
+
+func TestPutDocumentRejectsMismatchedVersionAndBaseServerRevision(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHostedSingleUser)
+	rec := performJSONRequest(t, env.handler, env.cookie, http.MethodPut, "/api/document", map[string]any{
+		"appId":              "demo",
+		"data":               snapshot("tab-1", "[]"),
+		"version":            1,
+		"baseServerRevision": 2,
+	})
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid_request")
+	if !strings.Contains(rec.Body.String(), "version and baseServerRevision must match") {
+		t.Fatalf("expected base revision mismatch error, got %q", rec.Body.String())
 	}
 }
 
@@ -451,6 +466,49 @@ func TestCloudMultiUserDocumentRoutesRequireHostedSyncEntitlement(t *testing.T) 
 	putRec := performJSONRequest(t, env.handler, cookie, http.MethodPut, "/api/document", map[string]any{
 		"appId": "demo",
 		"data":  snapshot("tab-1", "[]"),
+	})
+	assertErrorResponse(t, putRec, http.StatusForbidden, "entitlement_required")
+	assertNoStore(t, putRec)
+}
+
+func TestCloudMultiUserInactiveEntitlementAllowsReadButBlocksWrite(t *testing.T) {
+	t.Parallel()
+
+	env := newTestEnv(t, config.DeploymentModeCloudMultiUser)
+	cookie := createAuthenticatedUserSession(t, env, "inactive-cloud-user")
+	grantHostedSyncEntitlement(t, env, cookie)
+
+	firstPut := performJSONRequest(t, env.handler, cookie, http.MethodPut, "/api/document", map[string]any{
+		"appId": "demo",
+		"data":  snapshot("tab-1", `[{"id":"tab-1","name":"1"}]`),
+	})
+	if firstPut.Code != http.StatusOK {
+		t.Fatalf("expected initial active save status 200, got %d body=%q", firstPut.Code, firstPut.Body.String())
+	}
+
+	setHostedSyncEntitlementStatus(t, env, cookie, store.EntitlementStatusCanceled)
+
+	metaReq := httptest.NewRequest(http.MethodGet, "/api/document/meta?appId=demo", nil)
+	metaReq.AddCookie(cookie)
+	metaRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(metaRec, metaReq)
+	if metaRec.Code != http.StatusOK {
+		t.Fatalf("expected inactive entitlement to read metadata, got %d body=%q", metaRec.Code, metaRec.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/document?appId=demo", nil)
+	getReq.AddCookie(cookie)
+	getRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected inactive entitlement to read document, got %d body=%q", getRec.Code, getRec.Body.String())
+	}
+
+	putRec := performJSONRequest(t, env.handler, cookie, http.MethodPut, "/api/document", map[string]any{
+		"appId":              "demo",
+		"data":               snapshot("tab-2", `[{"id":"tab-2","name":"2"}]`),
+		"version":            1,
+		"baseServerRevision": 1,
 	})
 	assertErrorResponse(t, putRec, http.StatusForbidden, "entitlement_required")
 	assertNoStore(t, putRec)
@@ -647,6 +705,11 @@ func createAuthenticatedUserSession(t *testing.T, env *testEnv, username string)
 
 func grantHostedSyncEntitlement(t *testing.T, env *testEnv, cookie *http.Cookie) {
 	t.Helper()
+	setHostedSyncEntitlementStatus(t, env, cookie, store.EntitlementStatusActive)
+}
+
+func setHostedSyncEntitlementStatus(t *testing.T, env *testEnv, cookie *http.Cookie, status string) {
+	t.Helper()
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.AddCookie(cookie)
@@ -660,11 +723,11 @@ func grantHostedSyncEntitlement(t *testing.T, env *testEnv, cookie *http.Cookie)
 		context.Background(),
 		authenticatedUser.ID,
 		store.EntitlementKeyHostedSync,
-		store.EntitlementStatusActive,
+		status,
 		store.EntitlementSourceManual,
 		nil,
 	); err != nil {
-		t.Fatalf("grant hosted sync entitlement: %v", err)
+		t.Fatalf("set hosted sync entitlement: %v", err)
 	}
 }
 

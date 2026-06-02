@@ -123,6 +123,41 @@ func TestServiceHandleWebhookUpdatesEntitlementAndMappings(t *testing.T) {
 	}
 }
 
+func TestServiceHandleActiveSubscriptionActivatesProvisionalUser(t *testing.T) {
+	t.Parallel()
+
+	sqliteStore := openBillingTestStore(t)
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	user, err := sqliteStore.CreateProvisionalUser(context.Background(), "provisional-user", "argon-hash", "provisional-owner", expiresAt)
+	if err != nil {
+		t.Fatalf("create provisional user: %v", err)
+	}
+	service := NewServiceWithProvider(sqliteStore, &fakeProvider{
+		available: true,
+		name:      "stripe",
+		webhookEvent: WebhookEvent{
+			ID:                     "evt_activate",
+			Type:                   "customer.subscription.created",
+			UserID:                 user.ID,
+			ProviderCustomerID:     "cus_activate",
+			ProviderSubscriptionID: "sub_activate",
+			Status:                 "active",
+		},
+	}, "http://127.0.0.1:8080")
+
+	if err := service.HandleWebhook(context.Background(), []byte(`{}`), "sig"); err != nil {
+		t.Fatalf("handle webhook: %v", err)
+	}
+
+	loaded, err := sqliteStore.GetUserByUsername(context.Background(), "provisional-user")
+	if err != nil {
+		t.Fatalf("load activated user: %v", err)
+	}
+	if loaded.AccountStatus != store.AccountStatusActive || loaded.CheckoutExpiresAt != nil {
+		t.Fatalf("expected active user after subscription event, got %+v", loaded)
+	}
+}
+
 func TestServiceHandleInvoicePaidWebhookUpdatesEntitlementFromCustomerMapping(t *testing.T) {
 	t.Parallel()
 

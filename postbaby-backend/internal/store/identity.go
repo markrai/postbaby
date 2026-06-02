@@ -18,13 +18,20 @@ var (
 )
 
 type User struct {
-	ID           int64
-	Username     string
-	PasswordHash string
-	OwnerKey     string
-	IsAdmin      bool
-	CreatedAt    time.Time
+	ID                int64
+	Username          string
+	PasswordHash      string
+	OwnerKey          string
+	IsAdmin           bool
+	AccountStatus     string
+	CheckoutExpiresAt *time.Time
+	CreatedAt         time.Time
 }
+
+const (
+	AccountStatusActive          = "active"
+	AccountStatusCheckoutPending = "checkout_pending"
+)
 
 type Session struct {
 	ID         int64
@@ -124,12 +131,14 @@ func (s *Store) CreateInitialUser(ctx context.Context, username, passwordHash, o
 	createdAt := time.Now().UTC().Format(time.RFC3339)
 	result, err := tx.ExecContext(
 		ctx,
-		`INSERT INTO users (username, password_hash, owner_key, is_admin, created_at)
-		VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO users (username, password_hash, owner_key, is_admin, account_status, checkout_expires_at, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		username,
 		passwordHash,
 		ownerKey,
 		1,
+		AccountStatusActive,
+		nil,
 		createdAt,
 	)
 	if err != nil {
@@ -151,29 +160,50 @@ func (s *Store) CreateInitialUser(ctx context.Context, username, passwordHash, o
 	s.logDBOperation("create_initial_user", started, nil)
 
 	return User{
-		ID:           id,
-		Username:     username,
-		PasswordHash: passwordHash,
-		OwnerKey:     ownerKey,
-		IsAdmin:      true,
-		CreatedAt:    mustParseTimestamp(createdAt),
+		ID:            id,
+		Username:      username,
+		PasswordHash:  passwordHash,
+		OwnerKey:      ownerKey,
+		IsAdmin:       true,
+		AccountStatus: AccountStatusActive,
+		CreatedAt:     mustParseTimestamp(createdAt),
 	}, nil
 }
 
 func (s *Store) CreateUser(ctx context.Context, username, passwordHash, ownerKey string) (User, error) {
+	return s.createUser(ctx, username, passwordHash, ownerKey, false, AccountStatusActive, nil)
+}
+
+func (s *Store) CreateProvisionalUser(ctx context.Context, username, passwordHash, ownerKey string, checkoutExpiresAt time.Time) (User, error) {
+	expiresAt := checkoutExpiresAt.UTC()
+	return s.createUser(ctx, username, passwordHash, ownerKey, false, AccountStatusCheckoutPending, &expiresAt)
+}
+
+func (s *Store) createUser(ctx context.Context, username, passwordHash, ownerKey string, isAdmin bool, accountStatus string, checkoutExpiresAt *time.Time) (User, error) {
 	started := time.Now()
 	ctx, cancel := withDBTimeout(ctx)
 	defer cancel()
 
 	createdAt := time.Now().UTC().Format(time.RFC3339)
+	isAdminValue := 0
+	if isAdmin {
+		isAdminValue = 1
+	}
+	var checkoutExpiresValue any
+	if checkoutExpiresAt != nil {
+		checkoutExpiresValue = checkoutExpiresAt.UTC().Format(time.RFC3339)
+	}
+
 	result, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO users (username, password_hash, owner_key, is_admin, created_at)
-		VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO users (username, password_hash, owner_key, is_admin, account_status, checkout_expires_at, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		username,
 		passwordHash,
 		ownerKey,
-		0,
+		isAdminValue,
+		accountStatus,
+		checkoutExpiresValue,
 		createdAt,
 	)
 	if err != nil {
@@ -190,13 +220,83 @@ func (s *Store) CreateUser(ctx context.Context, username, passwordHash, ownerKey
 
 	s.logDBOperation("create_user", started, nil)
 	return User{
-		ID:           id,
-		Username:     username,
-		PasswordHash: passwordHash,
-		OwnerKey:     ownerKey,
-		IsAdmin:      false,
-		CreatedAt:    mustParseTimestamp(createdAt),
+		ID:                id,
+		Username:          username,
+		PasswordHash:      passwordHash,
+		OwnerKey:          ownerKey,
+		IsAdmin:           isAdmin,
+		AccountStatus:     accountStatus,
+		CheckoutExpiresAt: cloneTimePointer(checkoutExpiresAt),
+		CreatedAt:         mustParseTimestamp(createdAt),
 	}, nil
+}
+
+func (s *Store) ActivateUser(ctx context.Context, userID int64) error {
+	started := time.Now()
+	ctx, cancel := withDBTimeout(ctx)
+	defer cancel()
+
+	if _, err := s.db.ExecContext(
+		ctx,
+		`UPDATE users SET account_status = ?, checkout_expires_at = NULL WHERE id = ?`,
+		AccountStatusActive,
+		userID,
+	); err != nil {
+		return s.wrapDBError("activate_user", started, fmt.Errorf("activate user: %w", err))
+	}
+
+	s.logDBOperation("activate_user", started, nil)
+	return nil
+}
+
+func (s *Store) DeleteExpiredProvisionalUsers(ctx context.Context, now time.Time) (int64, error) {
+	started := time.Now()
+	ctx, cancel := withDBTimeout(ctx)
+	defer cancel()
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id FROM users WHERE account_status = ? AND checkout_expires_at IS NOT NULL AND checkout_expires_at <= ?`,
+		AccountStatusCheckoutPending,
+		now.UTC().Format(time.RFC3339),
+	)
+	if err != nil {
+		return 0, s.wrapDBError("delete_expired_provisional_query", started, fmt.Errorf("query expired provisional users: %w", err))
+	}
+	defer rows.Close()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return 0, s.wrapDBError("delete_expired_provisional_scan", started, fmt.Errorf("scan expired provisional user: %w", err))
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, s.wrapDBError("delete_expired_provisional_iterate", started, fmt.Errorf("iterate expired provisional users: %w", err))
+	}
+
+	for _, id := range ids {
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, id); err != nil {
+			return 0, s.wrapDBError("delete_expired_provisional_sessions", started, fmt.Errorf("delete sessions: %w", err))
+		}
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM billing_customers WHERE user_id = ?`, id); err != nil {
+			return 0, s.wrapDBError("delete_expired_provisional_customers", started, fmt.Errorf("delete billing customers: %w", err))
+		}
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM billing_subscriptions WHERE user_id = ?`, id); err != nil {
+			return 0, s.wrapDBError("delete_expired_provisional_subscriptions", started, fmt.Errorf("delete billing subscriptions: %w", err))
+		}
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM account_entitlements WHERE user_id = ?`, id); err != nil {
+			return 0, s.wrapDBError("delete_expired_provisional_entitlements", started, fmt.Errorf("delete account entitlements: %w", err))
+		}
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE id = ? AND account_status = ?`, id, AccountStatusCheckoutPending); err != nil {
+			return 0, s.wrapDBError("delete_expired_provisional_users", started, fmt.Errorf("delete users: %w", err))
+		}
+	}
+
+	s.logDBOperation("delete_expired_provisional_users", started, nil)
+	return int64(len(ids)), nil
 }
 
 func (s *Store) GetUserByUsername(ctx context.Context, username string) (User, error) {
@@ -206,7 +306,7 @@ func (s *Store) GetUserByUsername(ctx context.Context, username string) (User, e
 
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, username, password_hash, owner_key, is_admin, created_at
+		`SELECT id, username, password_hash, owner_key, is_admin, account_status, checkout_expires_at, created_at
 		FROM users
 		WHERE username = ? COLLATE NOCASE`,
 		username,
@@ -283,6 +383,8 @@ func (s *Store) GetSessionUserByTokenHash(ctx context.Context, tokenHash string)
 			u.password_hash,
 			u.owner_key,
 			u.is_admin,
+			u.account_status,
+			u.checkout_expires_at,
 			u.created_at
 		FROM sessions s
 		INNER JOIN users u ON u.id = s.user_id
@@ -352,8 +454,10 @@ func scanUser(row interface {
 }) (User, error) {
 	var user User
 	var isAdmin int64
+	var accountStatus sql.NullString
+	var checkoutExpiresAt sql.NullString
 	var createdAt string
-	if err := row.Scan(&user.ID, &user.Username, &user.PasswordHash, &user.OwnerKey, &isAdmin, &createdAt); err != nil {
+	if err := row.Scan(&user.ID, &user.Username, &user.PasswordHash, &user.OwnerKey, &isAdmin, &accountStatus, &checkoutExpiresAt, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return User{}, ErrUserNotFound
 		}
@@ -361,6 +465,14 @@ func scanUser(row interface {
 	}
 
 	user.IsAdmin = isAdmin == 1
+	user.AccountStatus = AccountStatusActive
+	if accountStatus.Valid && strings.TrimSpace(accountStatus.String) != "" {
+		user.AccountStatus = strings.TrimSpace(accountStatus.String)
+	}
+	if checkoutExpiresAt.Valid && strings.TrimSpace(checkoutExpiresAt.String) != "" {
+		parsed := mustParseTimestamp(checkoutExpiresAt.String)
+		user.CheckoutExpiresAt = &parsed
+	}
 	user.CreatedAt = mustParseTimestamp(createdAt)
 	return user, nil
 }
@@ -373,6 +485,8 @@ func scanSessionUser(row interface {
 	var createdAt string
 	var lastSeenAt string
 	var isAdmin int64
+	var accountStatus sql.NullString
+	var checkoutExpiresAt sql.NullString
 	var userCreatedAt string
 	if err := row.Scan(
 		&sessionUser.Session.ID,
@@ -386,6 +500,8 @@ func scanSessionUser(row interface {
 		&sessionUser.User.PasswordHash,
 		&sessionUser.User.OwnerKey,
 		&isAdmin,
+		&accountStatus,
+		&checkoutExpiresAt,
 		&userCreatedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -395,6 +511,14 @@ func scanSessionUser(row interface {
 	}
 
 	sessionUser.User.IsAdmin = isAdmin == 1
+	sessionUser.User.AccountStatus = AccountStatusActive
+	if accountStatus.Valid && strings.TrimSpace(accountStatus.String) != "" {
+		sessionUser.User.AccountStatus = strings.TrimSpace(accountStatus.String)
+	}
+	if checkoutExpiresAt.Valid && strings.TrimSpace(checkoutExpiresAt.String) != "" {
+		parsed := mustParseTimestamp(checkoutExpiresAt.String)
+		sessionUser.User.CheckoutExpiresAt = &parsed
+	}
 	sessionUser.Session.ExpiresAt = mustParseTimestamp(expiresAt)
 	sessionUser.Session.CreatedAt = mustParseTimestamp(createdAt)
 	sessionUser.Session.LastSeenAt = mustParseTimestamp(lastSeenAt)

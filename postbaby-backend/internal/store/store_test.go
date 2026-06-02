@@ -201,6 +201,84 @@ func TestCreateUserAllowsAdditionalAccounts(t *testing.T) {
 	}
 }
 
+func TestProvisionalUserLifecycle(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	expiresAt := time.Now().UTC().Add(time.Hour)
+
+	user, err := docStore.CreateProvisionalUser(ctx, "checkout-user", "argon-hash", "checkout-owner-key", expiresAt)
+	if err != nil {
+		t.Fatalf("create provisional user: %v", err)
+	}
+	if user.AccountStatus != AccountStatusCheckoutPending || user.CheckoutExpiresAt == nil {
+		t.Fatalf("expected checkout-pending user with expiry, got %+v", user)
+	}
+
+	loaded, err := docStore.GetUserByUsername(ctx, "checkout-user")
+	if err != nil {
+		t.Fatalf("load provisional user: %v", err)
+	}
+	if loaded.AccountStatus != AccountStatusCheckoutPending || loaded.CheckoutExpiresAt == nil {
+		t.Fatalf("unexpected loaded provisional user: %+v", loaded)
+	}
+
+	if err := docStore.ActivateUser(ctx, user.ID); err != nil {
+		t.Fatalf("activate provisional user: %v", err)
+	}
+	activated, err := docStore.GetUserByUsername(ctx, "checkout-user")
+	if err != nil {
+		t.Fatalf("load activated user: %v", err)
+	}
+	if activated.AccountStatus != AccountStatusActive || activated.CheckoutExpiresAt != nil {
+		t.Fatalf("expected active user after activation, got %+v", activated)
+	}
+}
+
+func TestDeleteExpiredProvisionalUsersRemovesAccountsAndSessions(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	expired, err := docStore.CreateProvisionalUser(ctx, "expired-checkout", "argon-hash", "expired-owner", now.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("create expired provisional user: %v", err)
+	}
+	current, err := docStore.CreateProvisionalUser(ctx, "current-checkout", "argon-hash", "current-owner", now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("create current provisional user: %v", err)
+	}
+	if _, err := docStore.CreateSession(ctx, expired.ID, "expired-token", now.Add(time.Hour)); err != nil {
+		t.Fatalf("create expired provisional session: %v", err)
+	}
+	if _, err := docStore.CreateSession(ctx, current.ID, "current-token", now.Add(time.Hour)); err != nil {
+		t.Fatalf("create current provisional session: %v", err)
+	}
+
+	deleted, err := docStore.DeleteExpiredProvisionalUsers(ctx, now)
+	if err != nil {
+		t.Fatalf("delete expired provisional users: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected one expired provisional user deleted, got %d", deleted)
+	}
+	if _, err := docStore.GetUserByUsername(ctx, "expired-checkout"); !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("expected expired provisional user removed, got %v", err)
+	}
+	if _, err := docStore.GetSessionUserByTokenHash(ctx, "expired-token"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("expected expired provisional session removed, got %v", err)
+	}
+	if _, err := docStore.GetUserByUsername(ctx, "current-checkout"); err != nil {
+		t.Fatalf("expected current provisional user to remain: %v", err)
+	}
+	if _, err := docStore.GetSessionUserByTokenHash(ctx, "current-token"); err != nil {
+		t.Fatalf("expected current provisional session to remain: %v", err)
+	}
+}
+
 func TestCreateUserRejectsDuplicateUsername(t *testing.T) {
 	t.Parallel()
 

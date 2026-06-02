@@ -211,6 +211,11 @@ func (s *Service) applySubscriptionEvent(ctx context.Context, event WebhookEvent
 	}
 
 	entitlementStatus := mapSubscriptionStatusToEntitlement(event.Status)
+	if entitlementStatus == store.EntitlementStatusActive {
+		if err := s.store.ActivateUser(ctx, userID); err != nil {
+			return err
+		}
+	}
 	if _, err := s.store.PutBillingSubscription(ctx, userID, s.provider.Name(), event.ProviderSubscriptionID, entitlementStatus, event.ValidUntil); err != nil {
 		return err
 	}

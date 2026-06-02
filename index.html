@@ -288,18 +288,17 @@
 
             <div id="accountLoggedOutPanel" class="account-panel">
                 <p id="accountLocalOnlyCopy" class="account-copy" hidden>
-                    Notes stay in this browser until you sign in. Account sync keeps your snapshots available across
-                    browsers and devices on this server.
+                    Your notes are stored in this browser for now. Upgrade to sync them across your devices.
                 </p>
                 <p id="accountUnavailableCopy" class="account-copy">
                     Account sync is unavailable in this build. Your notes stay saved locally in this browser.
                 </p>
                 <div id="authLinks" class="account-auth-links" hidden>
                     <a id="loginLink" class="account-auth-link" href="/login">Log In</a>
-                    <a id="signupLink" class="account-auth-link" href="/signup">Sign Up</a>
+                    <a id="signupLink" class="account-auth-link" href="/signup">Upgrade</a>
                 </div>
                 <p id="accountBenefitsCopy" class="account-copy account-benefits" hidden>
-                    Sign in to sync notes across browsers, keep account-backed backups, and pick up where you left off
+                    Upgrade to sync notes across browsers, keep account-backed backups, and pick up where you left off
                     on another device.
                 </p>
             </div>
@@ -313,7 +312,7 @@
 
                 <div class="settings-sync-panel">
                     <p class="settings-sync-title">Sync</p>
-                    <span class="settings-sync-copy">Browser storage stays primary. When you sign in, Postbaby keeps your account-backed snapshots in sync automatically across your browsers and devices on this server.</span>
+                    <span class="settings-sync-copy">Your data stays in this browser on this device.</span>
                     <span id="syncStateStatus" class="settings-sync-status">Saved locally</span>
                     <span id="syncVersionStatus" class="settings-sync-status">Server version: not yet synced</span>
                     <div class="settings-billing-actions">
@@ -323,6 +322,7 @@
                         <form id="billingPortalForm" method="post" action="/billing/portal" hidden>
                             <button type="submit" class="modal-button">Manage Billing</button>
                         </form>
+                        <a id="adminAccountsLink" class="account-auth-link" href="/admin/accounts" hidden>Manage Accounts</a>
                     </div>
                     <form id="logoutForm" class="settings-sync-logout" method="post" action="/logout" hidden>
                         <button type="submit" class="modal-button">Log Out</button>

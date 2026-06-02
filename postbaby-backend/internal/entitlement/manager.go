@@ -28,3 +28,15 @@ func (m *Manager) HostedSyncGranted(ctx context.Context, userID int64) (bool, er
 
 	return entitlement.Status == store.EntitlementStatusActive, nil
 }
+
+func (m *Manager) HostedSyncEntitlement(ctx context.Context, userID int64) (store.AccountEntitlement, bool, error) {
+	entitlement, err := m.store.GetAccountEntitlement(ctx, userID, store.EntitlementKeyHostedSync)
+	if err != nil {
+		if errors.Is(err, store.ErrEntitlementNotFound) {
+			return store.AccountEntitlement{}, false, nil
+		}
+		return store.AccountEntitlement{}, false, err
+	}
+
+	return entitlement, true, nil
+}
