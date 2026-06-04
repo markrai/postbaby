@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -20,6 +21,25 @@ import (
 )
 
 const serverTestPassword = "correct-horse-battery"
+
+func extractRuntimeConfigFromJS(t *testing.T, body string) runtimeConfig {
+	t.Helper()
+
+	const prefix = "window.POSTBABY_RUNTIME = "
+	if !strings.HasPrefix(body, prefix) {
+		t.Fatalf("expected runtime config prefix %q, got %q", prefix, body)
+	}
+
+	payload := strings.TrimSpace(strings.TrimPrefix(body, prefix))
+	payload = strings.TrimSuffix(payload, ";")
+
+	var cfg runtimeConfig
+	if err := json.Unmarshal([]byte(payload), &cfg); err != nil {
+		t.Fatalf("unmarshal runtime config: %v\nbody=%q", err, body)
+	}
+
+	return cfg
+}
 
 func TestNewHandlerServesRootWithoutAuthInStaticLocalMode(t *testing.T) {
 	t.Parallel()
@@ -169,6 +189,26 @@ func TestRuntimeConfigReflectsBillingAvailabilityInCloudMultiUserMode(t *testing
 	}
 	if body := rec.Body.String(); !strings.Contains(body, `"billingAvailable":true`) {
 		t.Fatalf("expected billingAvailable true, got %q", body)
+	}
+}
+
+func TestRuntimeConfigNormalizesCloudAliasToCloud(t *testing.T) {
+	t.Setenv("POSTBABY_DEPLOYMENT_MODE", "cloud_multi_user")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	env := newServerTestEnv(t, cfg.DeploymentMode)
+	req := httptest.NewRequest(http.MethodGet, "/runtime-config.js", nil)
+	rec := httptest.NewRecorder()
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected runtime config status 200, got %d", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `"deploymentMode":"cloud"`) {
+		t.Fatalf("expected runtime config to emit deploymentMode cloud, got %q", body)
 	}
 }
 
@@ -337,8 +377,111 @@ func TestRuntimeConfigReflectsAuthenticationStateInSelfHostedMode(t *testing.T) 
 			t.Fatalf("expected authenticated runtime config body to contain %q, got %q", want, body)
 		}
 	}
+	authConfig := extractRuntimeConfigFromJS(t, authRec.Body.String())
+	if authConfig.Account == nil {
+		t.Fatal("expected authenticated self-hosted runtime config to include an account")
+	}
+	if authConfig.Account.StorageKey == "" {
+		t.Fatal("expected authenticated self-hosted runtime config to include a non-empty storage key")
+	}
 	assertNoStore(t, unauthRec)
 	assertNoStore(t, authRec)
+}
+
+func TestSelfHostedRuntimeConfigStorageKeyIsStablePerUser(t *testing.T) {
+	t.Parallel()
+
+	env := newServerTestEnv(t, config.DeploymentModeSelfHosted)
+	user := createInitialUser(t, env)
+	cookie := createSessionCookie(t, env, user.ID)
+
+	reqA := httptest.NewRequest(http.MethodGet, "/runtime-config.js", nil)
+	reqA.AddCookie(cookie)
+	recA := httptest.NewRecorder()
+	env.handler.ServeHTTP(recA, reqA)
+	if recA.Code != http.StatusOK {
+		t.Fatalf("expected first runtime config request status 200, got %d", recA.Code)
+	}
+
+	reqB := httptest.NewRequest(http.MethodGet, "/runtime-config.js", nil)
+	reqB.AddCookie(cookie)
+	recB := httptest.NewRecorder()
+	env.handler.ServeHTTP(recB, reqB)
+	if recB.Code != http.StatusOK {
+		t.Fatalf("expected second runtime config request status 200, got %d", recB.Code)
+	}
+
+	configA := extractRuntimeConfigFromJS(t, recA.Body.String())
+	configB := extractRuntimeConfigFromJS(t, recB.Body.String())
+	if configA.Account == nil || configB.Account == nil {
+		t.Fatal("expected authenticated runtime config to include an account")
+	}
+	if configA.Account.StorageKey == "" {
+		t.Fatal("expected first runtime config to include a non-empty storage key")
+	}
+	if configA.Account.StorageKey != configB.Account.StorageKey {
+		t.Fatalf("expected self-hosted storage key to stay stable across requests, got %q and %q", configA.Account.StorageKey, configB.Account.StorageKey)
+	}
+	if strings.Contains(configA.Account.StorageKey, user.OwnerKey) {
+		t.Fatalf("expected storage key to avoid exposing raw owner key, got %q", configA.Account.StorageKey)
+	}
+}
+
+func TestSelfHostedRuntimeConfigStorageKeysDifferAcrossUsers(t *testing.T) {
+	t.Parallel()
+
+	env := newServerTestEnv(t, config.DeploymentModeSelfHosted)
+	admin := createInitialUser(t, env)
+	guest := createHostedUser(t, env, "guest")
+
+	adminReq := httptest.NewRequest(http.MethodGet, "/runtime-config.js", nil)
+	adminReq.AddCookie(createSessionCookie(t, env, admin.ID))
+	adminRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(adminRec, adminReq)
+	if adminRec.Code != http.StatusOK {
+		t.Fatalf("expected admin runtime config status 200, got %d", adminRec.Code)
+	}
+
+	guestReq := httptest.NewRequest(http.MethodGet, "/runtime-config.js", nil)
+	guestReq.AddCookie(createSessionCookie(t, env, guest.ID))
+	guestRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(guestRec, guestReq)
+	if guestRec.Code != http.StatusOK {
+		t.Fatalf("expected guest runtime config status 200, got %d", guestRec.Code)
+	}
+
+	adminConfig := extractRuntimeConfigFromJS(t, adminRec.Body.String())
+	guestConfig := extractRuntimeConfigFromJS(t, guestRec.Body.String())
+	if adminConfig.Account == nil || guestConfig.Account == nil {
+		t.Fatal("expected authenticated runtime config to include an account")
+	}
+	if adminConfig.Account.StorageKey == guestConfig.Account.StorageKey {
+		t.Fatalf("expected different self-hosted users to receive different storage keys, got %q", adminConfig.Account.StorageKey)
+	}
+}
+
+func TestSelfHostedRuntimeConfigFailsForAuthenticatedUserWithoutOwnerKey(t *testing.T) {
+	t.Parallel()
+
+	env := newServerTestEnv(t, config.DeploymentModeSelfHosted)
+	passwordHash, err := auth.HashPassword(serverTestPassword)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+
+	brokenUser, err := env.store.CreateUser(context.Background(), "broken", passwordHash, "")
+	if err != nil {
+		t.Fatalf("create broken user: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/runtime-config.js", nil)
+	req.AddCookie(createSessionCookie(t, env, brokenUser.ID))
+	rec := httptest.NewRecorder()
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected runtime config request to fail for missing owner key, got %d", rec.Code)
+	}
 }
 
 func TestStaticLocalModeDisablesAuthRoutes(t *testing.T) {
@@ -384,6 +527,18 @@ func TestSelfHostedAdminCanCreateAdditionalAccounts(t *testing.T) {
 	if getRec.Code != http.StatusOK {
 		t.Fatalf("expected admin accounts page status 200, got %d", getRec.Code)
 	}
+	getBody := getRec.Body.String()
+	for _, want := range []string{
+		"Manage Postbaby accounts",
+		"Existing accounts",
+		"Create another local account",
+		"owner",
+		"Current account",
+	} {
+		if !strings.Contains(getBody, want) {
+			t.Fatalf("expected accounts page to contain %q, got %q", want, getBody)
+		}
+	}
 
 	form := url.Values{
 		"username":        {"guest"},
@@ -404,6 +559,17 @@ func TestSelfHostedAdminCanCreateAdditionalAccounts(t *testing.T) {
 	}
 	if guest.IsAdmin {
 		t.Fatalf("expected admin-created guest to be non-admin, got %+v", guest)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/admin/accounts", nil)
+	listReq.AddCookie(adminCookie)
+	listRec := httptest.NewRecorder()
+	env.handler.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("expected refreshed admin accounts page status 200, got %d", listRec.Code)
+	}
+	if body := listRec.Body.String(); !strings.Contains(body, "guest") {
+		t.Fatalf("expected refreshed accounts page to list guest, got %q", body)
 	}
 }
 

@@ -70,6 +70,38 @@ func (s *Store) UsersExist(ctx context.Context) (bool, error) {
 	return count > 0, nil
 }
 
+func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
+	started := time.Now()
+	ctx, cancel := withDBTimeout(ctx)
+	defer cancel()
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, username, password_hash, owner_key, is_admin, account_status, checkout_expires_at, created_at
+		FROM users
+		ORDER BY is_admin DESC, username COLLATE NOCASE ASC`,
+	)
+	if err != nil {
+		return nil, s.wrapDBError("list_users", started, fmt.Errorf("query users: %w", err))
+	}
+	defer rows.Close()
+
+	var users []User
+	for rows.Next() {
+		user, scanErr := scanUser(rows)
+		if scanErr != nil {
+			return nil, s.wrapDBError("list_users_scan", started, scanErr)
+		}
+		users = append(users, user)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, s.wrapDBError("list_users_iterate", started, fmt.Errorf("iterate users: %w", err))
+	}
+
+	s.logDBOperation("list_users", started, nil)
+	return users, nil
+}
+
 func (s *Store) BootstrapOwnerKey(ctx context.Context) (string, error) {
 	started := time.Now()
 	ctx, cancel := withDBTimeout(ctx)

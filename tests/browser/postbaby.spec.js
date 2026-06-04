@@ -114,6 +114,20 @@ function buildServerPayload(noteText, version) {
   };
 }
 
+function normalizeScopeKey(scopeKey = PRIMARY_RECORD_ID) {
+  return typeof scopeKey === 'string' && scopeKey.trim()
+    ? scopeKey.trim()
+    : PRIMARY_RECORD_ID;
+}
+
+function storageKeyForScope(scopeKey, key) {
+  const normalizedScope = normalizeScopeKey(scopeKey);
+  if (normalizedScope === PRIMARY_RECORD_ID) {
+    return key;
+  }
+  return `postbabyScope:${encodeURIComponent(normalizedScope)}:${key}`;
+}
+
 async function prepareBlankPage(page) {
   await page.goto('/tests/browser/blank.html');
   await page.evaluate(async ({ dbName }) => {
@@ -128,15 +142,21 @@ async function prepareBlankPage(page) {
   }, { dbName: DB_NAME });
 }
 
-async function seedLocalStorage(page, snapshot) {
-  await page.evaluate((data) => {
+async function seedLocalStorage(page, snapshot, scopeKey = PRIMARY_RECORD_ID) {
+  await page.evaluate(({ data, targetScopeKey }) => {
     Object.entries(data).forEach(([key, value]) => {
-      window.localStorage.setItem(key, value);
+      const storageKey = targetScopeKey === 'primary'
+        ? key
+        : `postbabyScope:${encodeURIComponent(targetScopeKey)}:${key}`;
+      window.localStorage.setItem(storageKey, value);
     });
-  }, snapshot);
+  }, {
+    data: snapshot,
+    targetScopeKey: normalizeScopeKey(scopeKey)
+  });
 }
 
-async function seedIndexedDB(page, snapshot, meta) {
+async function seedIndexedDB(page, snapshot, meta, recordId = PRIMARY_RECORD_ID) {
   await page.evaluate(async ({ dbName, snapshotsStore, metaStore, recordId, snapshotData, metaRecord }) => {
     await new Promise((resolve, reject) => {
       const request = window.indexedDB.open(dbName, 1);
@@ -177,7 +197,7 @@ async function seedIndexedDB(page, snapshot, meta) {
     dbName: DB_NAME,
     snapshotsStore: SNAPSHOTS_STORE,
     metaStore: META_STORE,
-    recordId: PRIMARY_RECORD_ID,
+    recordId,
     snapshotData: snapshot,
     metaRecord: meta
   });
@@ -205,7 +225,7 @@ async function exportCurrentSnapshot(page) {
   return JSON.parse(fs.readFileSync(downloadPath, 'utf8'));
 }
 
-async function readIndexedDBState(page) {
+async function readIndexedDBState(page, recordId = PRIMARY_RECORD_ID) {
   return page.evaluate(async ({ dbName, snapshotsStore, metaStore, recordId }) => {
     return new Promise((resolve, reject) => {
       const request = window.indexedDB.open(dbName, 1);
@@ -235,18 +255,24 @@ async function readIndexedDBState(page) {
     dbName: DB_NAME,
     snapshotsStore: SNAPSHOTS_STORE,
     metaStore: META_STORE,
-    recordId: PRIMARY_RECORD_ID
+    recordId
   });
 }
 
-async function getLocalStorageValues(page, keys) {
-  return page.evaluate((requestedKeys) => {
+async function getLocalStorageValues(page, keys, scopeKey = PRIMARY_RECORD_ID) {
+  return page.evaluate(({ requestedKeys, targetScopeKey }) => {
     const result = {};
     requestedKeys.forEach((key) => {
-      result[key] = window.localStorage.getItem(key);
+      const storageKey = targetScopeKey === 'primary'
+        ? key
+        : `postbabyScope:${encodeURIComponent(targetScopeKey)}:${key}`;
+      result[key] = window.localStorage.getItem(storageKey);
     });
     return result;
-  }, keys);
+  }, {
+    requestedKeys: keys,
+    targetScopeKey: normalizeScopeKey(scopeKey)
+  });
 }
 
 async function openSettingsModal(page) {
@@ -834,6 +860,15 @@ async function enableMockedSync(page, options = {}) {
   const metaPayload = options.metaPayload || { ok: true, exists: false, version: 0, updatedAt: TIMESTAMP };
   const documentPayload = options.documentPayload || buildServerPayload('Server Snapshot', metaPayload.version || 1);
   const onSave = options.onSave || null;
+  const runtimeAccount = Object.assign({
+    username: 'owner',
+    displayName: 'owner',
+    email: '',
+    avatarUrl: '',
+    isAdmin: true,
+    storageKey: 'owner-scope',
+    status: 'active'
+  }, options.runtimeAccount || {});
 
   await page.route('**/runtime-config.js', async (route) => {
     await route.fulfill({
@@ -854,15 +889,7 @@ async function enableMockedSync(page, options = {}) {
         '  syncPausedReason: "",',
         '  entitlement: { hostedSync: false, status: "none" },',
         '  apiBase: "",',
-        '  account: {',
-        '    username: "owner",',
-        '    displayName: "owner",',
-        '    email: "",',
-        '    avatarUrl: "",',
-        '    isAdmin: true,',
-        '    storageKey: "",',
-        '    status: "active"',
-        '  }',
+        `  account: ${JSON.stringify(runtimeAccount)}`,
         '};'
       ].join('\n')
     });
@@ -4162,6 +4189,269 @@ test.describe('Mocked sync startup reconciliation', () => {
     expect(JSON.parse(capturedSaveBody.data.tabs)[0].items[0].name).toBe('Anonymous Claim Note');
   });
 
+  test('self-hosted authenticated startup blocks when account storage key is missing', async ({ page }) => {
+    const leakedPrimarySnapshot = buildLocalSnapshot('Primary Leak Note');
+    const syncRequests = [];
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, leakedPrimarySnapshot);
+    await mockRuntimeConfig(page, {
+      deploymentMode: 'selfhosted',
+      authorityModel: 'server_authoritative',
+      authAvailable: true,
+      authRequired: true,
+      isAuthenticated: true,
+      syncAvailable: true,
+      syncRequiresAuth: true,
+      syncUsable: true,
+      syncPausedReason: '',
+      account: {
+        username: 'broken-user',
+        displayName: 'broken-user',
+        email: '',
+        avatarUrl: '',
+        isAdmin: false,
+        storageKey: '',
+        status: 'active'
+      }
+    });
+
+    page.on('request', (request) => {
+      const url = request.url();
+      if (url.includes('/api/document/meta') || url.includes('/api/document')) {
+        syncRequests.push(url);
+      }
+    });
+
+    await page.goto('/index.html');
+
+    await expect(page.locator('.postbaby-startup-blocked')).toBeVisible();
+    await expect(page.locator('.postbaby-startup-blocked')).toContainText('missing its private browser storage scope');
+    await expect(page.locator('.grid-item span').filter({ hasText: 'Primary Leak Note' })).toHaveCount(0);
+
+    const debugState = await page.evaluate(async () => ({
+      storage: await window.postbabyDebugStorage(),
+      sync: window.postbabyDebugSync()
+    }));
+
+    expect(syncRequests).toEqual([]);
+    expect(debugState.storage.startupBlockedReason).toBe('missing-storage-key');
+    expect(debugState.sync.startupBlockedReason).toBe('missing-storage-key');
+    expect(debugState.sync.storageScopeKey).toBeNull();
+  });
+
+  test('self-hosted new account ignores primary browser data and starts blank', async ({ page }) => {
+    const leakedPrimarySnapshot = buildLocalSnapshot('Primary Leak Note');
+    let capturedSaveBody = null;
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, leakedPrimarySnapshot);
+    await mockRuntimeConfig(page, {
+      deploymentMode: 'selfhosted',
+      authorityModel: 'server_authoritative',
+      authAvailable: true,
+      authRequired: true,
+      isAuthenticated: true,
+      syncAvailable: true,
+      syncRequiresAuth: true,
+      syncUsable: true,
+      syncPausedReason: '',
+      account: {
+        username: 'fresh-user',
+        displayName: 'fresh-user',
+        email: '',
+        avatarUrl: '',
+        isAdmin: false,
+        storageKey: 'fresh-user-scope',
+        status: 'active'
+      }
+    });
+    await page.route(/\/api\/document\/meta(?:\?.*)?$/, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=utf-8',
+        headers: { 'Cache-Control': 'no-store' },
+        body: JSON.stringify({ ok: true, exists: false })
+      });
+    });
+    await page.route(/\/api\/document(?:\?.*)?$/, async (route) => {
+      const request = route.request();
+      if (request.method() === 'PUT') {
+        capturedSaveBody = JSON.parse(request.postData() || '{}');
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json; charset=utf-8',
+          headers: { 'Cache-Control': 'no-store' },
+          body: JSON.stringify({ ok: true, version: 1, updatedAt: TIMESTAMP })
+        });
+        return;
+      }
+
+      await route.fulfill({
+        status: 404,
+        contentType: 'application/json; charset=utf-8',
+        headers: { 'Cache-Control': 'no-store' },
+        body: JSON.stringify({ ok: false, error: { code: 'document_not_found' } })
+      });
+    });
+
+    await page.goto('/index.html');
+
+    await expect(page.locator('.grid-item span').filter({ hasText: 'Primary Leak Note' })).toHaveCount(0);
+    await expect(page.locator('.grid-item')).toHaveCount(0);
+    await page.waitForTimeout(2200);
+    expect(capturedSaveBody).toBeNull();
+
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    expect(debugState.storageScopeKey).toBe('fresh-user-scope');
+  });
+
+  test('self-hosted accounts stay isolated across two users in the same browser', async ({ page }) => {
+    const serverSnapshots = new Map();
+    const users = {
+      alice: {
+        username: 'alice',
+        displayName: 'alice',
+        email: '',
+        avatarUrl: '',
+        isAdmin: true,
+        storageKey: 'alice-scope',
+        status: 'active'
+      },
+      bob: {
+        username: 'bob',
+        displayName: 'bob',
+        email: '',
+        avatarUrl: '',
+        isAdmin: false,
+        storageKey: 'bob-scope',
+        status: 'active'
+      }
+    };
+    let activeUser = users.alice;
+
+    await prepareBlankPage(page);
+    await page.route('**/runtime-config.js', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/javascript; charset=utf-8',
+        headers: { 'Cache-Control': 'no-store' },
+        body: [
+          'window.POSTBABY_RUNTIME = {',
+          '  deploymentMode: "selfhosted",',
+          '  authorityModel: "server_authoritative",',
+          '  authAvailable: true,',
+          '  authRequired: true,',
+          '  isAuthenticated: true,',
+          '  syncAvailable: true,',
+          '  syncRequiresAuth: true,',
+          '  syncUsable: true,',
+          '  syncPausedReason: "",',
+          '  entitlement: { hostedSync: false, status: "none" },',
+          '  apiBase: "",',
+          `  account: ${JSON.stringify(activeUser)}`,
+          '};'
+        ].join('\n')
+      });
+    });
+    await page.route(/\/api\/document\/meta(?:\?.*)?$/, async (route) => {
+      const snapshot = serverSnapshots.get(activeUser.username) || null;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=utf-8',
+        headers: { 'Cache-Control': 'no-store' },
+        body: JSON.stringify(snapshot
+          ? { ok: true, exists: true, version: snapshot.version, updatedAt: snapshot.updatedAt }
+          : { ok: true, exists: false })
+      });
+    });
+    await page.route(/\/api\/document(?:\?.*)?$/, async (route) => {
+      const request = route.request();
+      const currentSnapshot = serverSnapshots.get(activeUser.username) || null;
+
+      if (request.method() === 'GET') {
+        if (!currentSnapshot) {
+          await route.fulfill({
+            status: 404,
+            contentType: 'application/json; charset=utf-8',
+            headers: { 'Cache-Control': 'no-store' },
+            body: JSON.stringify({ ok: false, error: { code: 'document_not_found' } })
+          });
+          return;
+        }
+
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json; charset=utf-8',
+          headers: { 'Cache-Control': 'no-store' },
+          body: JSON.stringify(currentSnapshot)
+        });
+        return;
+      }
+
+      if (request.method() === 'PUT') {
+        const requestBody = JSON.parse(request.postData() || '{}');
+        const nextVersion = currentSnapshot ? currentSnapshot.version + 1 : 1;
+        const nextSnapshot = {
+          version: nextVersion,
+          updatedAt: TIMESTAMP,
+          data: requestBody.data
+        };
+        serverSnapshots.set(activeUser.username, nextSnapshot);
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json; charset=utf-8',
+          headers: { 'Cache-Control': 'no-store' },
+          body: JSON.stringify({ ok: true, version: nextVersion, updatedAt: TIMESTAMP })
+        });
+        return;
+      }
+
+      await route.fallback();
+    });
+
+    await page.goto('/index.html');
+
+    const grid = page.locator('.grid-container').first();
+    await expect(grid).toBeVisible();
+    await grid.evaluate((element) => {
+      element.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        button: 2,
+        clientX: 900,
+        clientY: 300
+      }));
+    });
+
+    const textarea = page.locator('textarea.edit-textarea');
+    await expect(textarea).toBeVisible();
+    await textarea.fill('Alice Private Note');
+    await textarea.press('Escape');
+    await expectNoteVisible(page, 'Alice Private Note');
+    await expect.poll(() => {
+      const snapshot = serverSnapshots.get('alice');
+      if (!snapshot) {
+        return null;
+      }
+      return JSON.parse(snapshot.data.tabs)[0].items[0].name;
+    }).toBe('Alice Private Note');
+
+    activeUser = users.bob;
+    await page.reload();
+    await expect(page.locator('.grid-item span').filter({ hasText: 'Alice Private Note' })).toHaveCount(0);
+    await page.waitForTimeout(2200);
+    expect(serverSnapshots.has('bob')).toBe(false);
+    const bobDebugState = await page.evaluate(() => window.postbabyDebugSync());
+    expect(bobDebugState.storageScopeKey).toBe('bob-scope');
+
+    activeUser = users.alice;
+    await page.reload();
+    await expectNoteVisible(page, 'Alice Private Note');
+    const aliceDebugState = await page.evaluate(() => window.postbabyDebugSync());
+    expect(aliceDebugState.storageScopeKey).toBe('alice-scope');
+  });
+
   test('reactivation prompts before uploading local fork with base revision', async ({ page }) => {
     const localSnapshot = buildLocalSnapshot('Inactive Fork Note', { syncVersion: 100 });
     const dialogs = [];
@@ -4173,7 +4463,8 @@ test.describe('Mocked sync startup reconciliation', () => {
     localSnapshot.postbabySyncLocalForkCreatedAt = TIMESTAMP;
 
     await prepareBlankPage(page);
-    await seedLocalStorage(page, localSnapshot);
+    await seedLocalStorage(page, localSnapshot, 'paid-account-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'paid-account-scope' }), 'paid-account-scope');
     await mockRuntimeConfig(page, {
       deploymentMode: 'cloud',
       authorityModel: 'subscription_sync',
@@ -4192,7 +4483,7 @@ test.describe('Mocked sync startup reconciliation', () => {
         email: '',
         avatarUrl: '',
         isAdmin: false,
-        storageKey: '',
+        storageKey: 'paid-account-scope',
         status: 'active'
       }
     });
@@ -4249,7 +4540,8 @@ test.describe('Mocked sync startup reconciliation', () => {
     localSnapshot.postbabySyncLocalForkCreatedAt = TIMESTAMP;
 
     await prepareBlankPage(page);
-    await seedLocalStorage(page, localSnapshot);
+    await seedLocalStorage(page, localSnapshot, 'paid-account-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'paid-account-scope' }), 'paid-account-scope');
     await mockRuntimeConfig(page, {
       deploymentMode: 'cloud',
       authorityModel: 'subscription_sync',
@@ -4268,7 +4560,7 @@ test.describe('Mocked sync startup reconciliation', () => {
         email: '',
         avatarUrl: '',
         isAdmin: false,
-        storageKey: '',
+        storageKey: 'paid-account-scope',
         status: 'active'
       }
     });
@@ -4316,7 +4608,8 @@ test.describe('Mocked sync startup reconciliation', () => {
     const dialogs = [];
 
     await prepareBlankPage(page);
-    await seedLocalStorage(page, localSnapshot);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
     await enableMockedSync(page, {
       metaPayload: { ok: true, exists: true, version: 13, updatedAt: TIMESTAMP },
       documentPayload: buildServerPayload('Account Notes From Server', 13)
@@ -4342,7 +4635,8 @@ test.describe('Mocked sync startup reconciliation', () => {
     let capturedSaveBody = null;
 
     await prepareBlankPage(page);
-    await seedLocalStorage(page, localSnapshot);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
     await enableMockedSync(page, {
       metaPayload: { ok: true, exists: true, version: 13, updatedAt: TIMESTAMP },
       documentPayload: buildServerPayload('Server Snapshot 13', 13),
@@ -4392,7 +4686,7 @@ test.describe('Mocked sync startup reconciliation', () => {
       height: 190
     });
 
-    const indexedDBState = await readIndexedDBState(page);
+    const indexedDBState = await readIndexedDBState(page, 'owner-scope');
     expect(indexedDBState.snapshot.postbabySyncVersion).toBe('14');
   });
 
@@ -4419,7 +4713,8 @@ test.describe('Mocked sync startup reconciliation', () => {
     let capturedSaveBody = null;
 
     await prepareBlankPage(page);
-    await seedLocalStorage(page, localSnapshot);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
     await enableMockedSync(page, {
       metaPayload: { ok: true, exists: true, version: 13, updatedAt: TIMESTAMP },
       documentPayload: buildServerPayload('Server Snapshot 13', 13),
@@ -4475,7 +4770,8 @@ test.describe('Mocked sync startup reconciliation', () => {
     const dialogs = [];
 
     await prepareBlankPage(page);
-    await seedLocalStorage(page, localSnapshot);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
     await enableMockedSync(page, {
       metaPayload: { ok: true, exists: true, version: 13, updatedAt: TIMESTAMP },
       documentPayload: buildServerPayload('Server Snapshot 13', 13)
@@ -4509,7 +4805,8 @@ test.describe('Mocked sync startup reconciliation', () => {
     const dialogs = [];
 
     await prepareBlankPage(page);
-    await seedLocalStorage(page, localSnapshot);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
     await enableMockedSync(page, {
       metaPayload: { ok: true, exists: true, version: 11, updatedAt: TIMESTAMP },
       documentPayload: buildServerPayload('Server Version 11', 11)
@@ -4566,12 +4863,19 @@ test.describe('Settings and Account UI', () => {
     await expect(page.locator('#staticSettingsNote')).toContainText('This static version saves notes only in this browser on this device.');
   });
 
-  test('optional-auth logged-out account modal shows local-only copy and auth actions', async ({ page }) => {
+  test('cloud logged-out account modal shows local-only copy and auth actions', async ({ page }) => {
     await prepareBlankPage(page);
     await mockRuntimeConfig(page, {
-      deploymentMode: 'selfhosted',
+      deploymentMode: 'cloud',
+      authorityModel: 'subscription_sync',
       authAvailable: true,
       authRequired: false,
+      billingAvailable: true,
+      syncAvailable: true,
+      syncRequiresAuth: true,
+      syncUsable: false,
+      syncPausedReason: 'auth_required',
+      entitlement: { hostedSync: false, status: 'none' },
       account: null
     });
     await page.goto('/index.html');
@@ -4580,8 +4884,10 @@ test.describe('Settings and Account UI', () => {
     await expect(page.locator('#accountLocalOnlyCopy')).toBeVisible();
     await expect(page.locator('#accountUnavailableCopy')).toBeHidden();
     await expect(page.locator('#loginLink')).toBeVisible();
-    await expect(page.locator('#signupLink')).toBeHidden();
+    await expect(page.locator('#signupLink')).toBeVisible();
+    await expect(page.locator('#signupLink')).toHaveText('Upgrade');
     await expect(page.locator('#loginLink')).toHaveAttribute('href', '/login');
+    await expect(page.locator('#signupLink')).toHaveAttribute('href', '/signup');
   });
 
   test('cloud logged-out account modal uses upgrade wording', async ({ page }) => {
@@ -4608,6 +4914,119 @@ test.describe('Settings and Account UI', () => {
     await expect(page.locator('#signupLink')).toHaveText('Upgrade');
   });
 
+  test('cloud logged-out account modal hides upgrade when billing is unavailable', async ({ page }) => {
+    await prepareBlankPage(page);
+    await mockRuntimeConfig(page, {
+      deploymentMode: 'cloud',
+      authorityModel: 'subscription_sync',
+      authAvailable: true,
+      authRequired: false,
+      isAuthenticated: false,
+      billingAvailable: false,
+      syncAvailable: true,
+      syncRequiresAuth: true,
+      syncUsable: false,
+      syncPausedReason: 'auth_required',
+      entitlement: { hostedSync: false, status: 'none' },
+      account: null
+    });
+    await page.goto('/index.html');
+
+    await openAccountModal(page);
+    await expect(page.locator('#accountLocalOnlyCopy')).toContainText('Log in to access any existing account on this server.');
+    await expect(page.locator('#accountLocalOnlyCopy')).not.toContainText('Upgrade to sync');
+    await expect(page.locator('#accountUnavailableCopy')).toBeVisible();
+    await expect(page.locator('#accountUnavailableCopy')).toContainText('Billing is not configured on this server right now');
+    await expect(page.locator('#accountBenefitsCopy')).toBeHidden();
+    await expect(page.locator('#loginLink')).toBeVisible();
+    await expect(page.locator('#signupLink')).toBeHidden();
+  });
+
+  test('cloud unentitled account shows upgrade copy only when billing is available', async ({ page }) => {
+    await prepareBlankPage(page);
+    await mockRuntimeConfig(page, {
+      deploymentMode: 'cloud',
+      authorityModel: 'subscription_sync',
+      authAvailable: true,
+      authRequired: false,
+      isAuthenticated: true,
+      billingAvailable: true,
+      syncAvailable: true,
+      syncRequiresAuth: true,
+      syncUsable: false,
+      syncPausedReason: 'subscription_required',
+      entitlement: { hostedSync: false, status: 'none' },
+      account: {
+        username: 'new-user',
+        displayName: 'New User',
+        email: '',
+        avatarUrl: '',
+        isAdmin: false,
+        storageKey: 'new-user-scope',
+        status: 'active'
+      }
+    });
+    await page.route(/\/api\/document\/meta(?:\?.*)?$/, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=utf-8',
+        headers: { 'Cache-Control': 'no-store' },
+        body: JSON.stringify({ ok: true, exists: false })
+      });
+    });
+    await page.goto('/index.html');
+
+    await openAccountModal(page);
+    await expect(page.locator('.settings-sync-copy')).toContainText('Cloud sync is not active for this account yet.');
+    await expect(page.locator('.settings-sync-copy')).not.toContainText('subscription is inactive');
+    await expect(page.locator('#syncStateStatus')).toContainText('Upgrade to start account sync');
+    await expect(page.locator('#billingCheckoutForm')).toBeVisible();
+    await expect(page.locator('#billingCheckoutForm button')).toHaveText('Upgrade');
+    await expect(page.locator('#billingPortalForm')).toBeHidden();
+  });
+
+  test('cloud unentitled account explains billing-disabled fallback', async ({ page }) => {
+    await prepareBlankPage(page);
+    await mockRuntimeConfig(page, {
+      deploymentMode: 'cloud',
+      authorityModel: 'subscription_sync',
+      authAvailable: true,
+      authRequired: false,
+      isAuthenticated: true,
+      billingAvailable: false,
+      syncAvailable: true,
+      syncRequiresAuth: true,
+      syncUsable: false,
+      syncPausedReason: 'subscription_required',
+      entitlement: { hostedSync: false, status: 'none' },
+      account: {
+        username: 'new-user',
+        displayName: 'New User',
+        email: '',
+        avatarUrl: '',
+        isAdmin: false,
+        storageKey: 'new-user-scope',
+        status: 'active'
+      }
+    });
+    await page.route(/\/api\/document\/meta(?:\?.*)?$/, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=utf-8',
+        headers: { 'Cache-Control': 'no-store' },
+        body: JSON.stringify({ ok: true, exists: false })
+      });
+    });
+    await page.goto('/index.html');
+
+    await openAccountModal(page);
+    await expect(page.locator('.settings-sync-copy')).toContainText('Cloud sync is not active for this account yet.');
+    await expect(page.locator('.settings-sync-copy')).toContainText('Billing is not configured on this server right now, so upgrades are unavailable here.');
+    await expect(page.locator('#syncStateStatus')).toContainText('Account sync unavailable on this server');
+    await expect(page.locator('#billingCheckoutForm')).toBeHidden();
+    await expect(page.locator('#billingPortalForm')).toBeHidden();
+  });
+
   test('cloud inactive account shows paused copy and reactivation controls', async ({ page }) => {
     await prepareBlankPage(page);
     await mockRuntimeConfig(page, {
@@ -4628,7 +5047,7 @@ test.describe('Settings and Account UI', () => {
         email: '',
         avatarUrl: '',
         isAdmin: false,
-        storageKey: '',
+        storageKey: 'paid-account-scope',
         status: 'active'
       }
     });
@@ -4643,11 +5062,136 @@ test.describe('Settings and Account UI', () => {
     await page.goto('/index.html');
 
     await openAccountModal(page);
-    await expect(page.locator('.settings-sync-copy')).toContainText('Sync is paused because your subscription is inactive');
+    await expect(page.locator('.settings-sync-copy')).toContainText('Cloud sync is paused because your subscription is inactive');
     await expect(page.locator('#syncStateStatus')).toContainText('Sync paused');
     await expect(page.locator('#billingCheckoutForm')).toBeVisible();
     await expect(page.locator('#billingCheckoutForm button')).toHaveText('Reactivate');
     await expect(page.locator('#billingPortalForm')).toBeVisible();
+  });
+
+  test('cloud inactive account explains billing-disabled fallback', async ({ page }) => {
+    await prepareBlankPage(page);
+    await mockRuntimeConfig(page, {
+      deploymentMode: 'cloud',
+      authorityModel: 'subscription_sync',
+      authAvailable: true,
+      authRequired: false,
+      isAuthenticated: true,
+      billingAvailable: false,
+      syncAvailable: true,
+      syncRequiresAuth: true,
+      syncUsable: false,
+      syncPausedReason: 'subscription_inactive',
+      entitlement: { hostedSync: false, status: 'canceled' },
+      account: {
+        username: 'paid-user',
+        displayName: 'Paid User',
+        email: '',
+        avatarUrl: '',
+        isAdmin: false,
+        storageKey: 'paid-account-scope',
+        status: 'active'
+      }
+    });
+    await page.route(/\/api\/document\/meta(?:\?.*)?$/, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=utf-8',
+        headers: { 'Cache-Control': 'no-store' },
+        body: JSON.stringify({ ok: true, exists: false })
+      });
+    });
+    await page.goto('/index.html');
+
+    await openAccountModal(page);
+    await expect(page.locator('.settings-sync-copy')).toContainText('Cloud sync is paused because your subscription is inactive');
+    await expect(page.locator('.settings-sync-copy')).toContainText('reactivation is unavailable here');
+    await expect(page.locator('#billingCheckoutForm')).toBeHidden();
+    await expect(page.locator('#billingPortalForm')).toBeHidden();
+  });
+
+  test('cloud checkout-pending account shows continue-checkout state when billing is available', async ({ page }) => {
+    await prepareBlankPage(page);
+    await mockRuntimeConfig(page, {
+      deploymentMode: 'cloud',
+      authorityModel: 'subscription_sync',
+      authAvailable: true,
+      authRequired: false,
+      isAuthenticated: true,
+      billingAvailable: true,
+      syncAvailable: true,
+      syncRequiresAuth: true,
+      syncUsable: false,
+      syncPausedReason: 'checkout_pending',
+      entitlement: { hostedSync: false, status: 'none' },
+      account: {
+        username: 'checkout-user',
+        displayName: 'Checkout User',
+        email: '',
+        avatarUrl: '',
+        isAdmin: false,
+        storageKey: 'checkout-user-scope',
+        status: 'checkout_pending'
+      }
+    });
+    await page.route(/\/api\/document\/meta(?:\?.*)?$/, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=utf-8',
+        headers: { 'Cache-Control': 'no-store' },
+        body: JSON.stringify({ ok: true, exists: false })
+      });
+    });
+    await page.goto('/index.html');
+
+    await openAccountModal(page);
+    await expect(page.locator('.settings-sync-copy')).toContainText('Cloud sync is waiting for checkout to finish.');
+    await expect(page.locator('#syncStateStatus')).toContainText('Checkout incomplete');
+    await expect(page.locator('#billingCheckoutForm')).toBeVisible();
+    await expect(page.locator('#billingCheckoutForm button')).toHaveText('Continue checkout');
+    await expect(page.locator('#billingPortalForm')).toBeHidden();
+  });
+
+  test('cloud checkout-pending account explains billing-disabled fallback', async ({ page }) => {
+    await prepareBlankPage(page);
+    await mockRuntimeConfig(page, {
+      deploymentMode: 'cloud',
+      authorityModel: 'subscription_sync',
+      authAvailable: true,
+      authRequired: false,
+      isAuthenticated: true,
+      billingAvailable: false,
+      syncAvailable: true,
+      syncRequiresAuth: true,
+      syncUsable: false,
+      syncPausedReason: 'checkout_pending',
+      entitlement: { hostedSync: false, status: 'none' },
+      account: {
+        username: 'checkout-user',
+        displayName: 'Checkout User',
+        email: '',
+        avatarUrl: '',
+        isAdmin: false,
+        storageKey: 'checkout-user-scope',
+        status: 'checkout_pending'
+      }
+    });
+    await page.route(/\/api\/document\/meta(?:\?.*)?$/, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=utf-8',
+        headers: { 'Cache-Control': 'no-store' },
+        body: JSON.stringify({ ok: true, exists: false })
+      });
+    });
+    await page.goto('/index.html');
+
+    await openAccountModal(page);
+    await expect(page.locator('.settings-sync-copy')).toContainText('Cloud sync is waiting for checkout to finish.');
+    await expect(page.locator('.settings-sync-copy')).toContainText('checkout cannot continue here');
+    await expect(page.locator('#syncStateStatus')).toContainText('Checkout incomplete - saved locally only');
+    await expect(page.locator('#billingCheckoutForm')).toBeHidden();
+    await expect(page.locator('#billingPortalForm')).toBeHidden();
   });
 
   test('logged-in UI shows initials and Account identity label on the account button', async ({ page }) => {
@@ -4655,13 +5199,14 @@ test.describe('Settings and Account UI', () => {
     await mockRuntimeConfig(page, {
       deploymentMode: 'selfhosted',
       authAvailable: true,
-      authRequired: false,
+      authRequired: true,
       isAuthenticated: true,
       account: {
         username: 'owner',
         displayName: 'Owner Name',
         email: '',
-        avatarUrl: ''
+        avatarUrl: '',
+        storageKey: 'owner-scope'
       }
     });
     await page.goto('/index.html');
@@ -4677,18 +5222,73 @@ test.describe('Settings and Account UI', () => {
     await expect(page.locator('#logoutForm')).toBeVisible();
   });
 
+  test('self-hosted logout copy does not claim notes stay locally available', async ({ page }) => {
+    const dialogs = [];
+
+    await prepareBlankPage(page);
+    await mockRuntimeConfig(page, {
+      deploymentMode: 'selfhosted',
+      authorityModel: 'server_authoritative',
+      authAvailable: true,
+      authRequired: true,
+      isAuthenticated: true,
+      syncAvailable: true,
+      syncRequiresAuth: true,
+      syncUsable: true,
+      syncPausedReason: '',
+      account: {
+        username: 'owner',
+        displayName: 'owner',
+        email: '',
+        avatarUrl: '',
+        isAdmin: true,
+        storageKey: 'owner-scope',
+        status: 'active'
+      }
+    });
+    await page.route(/\/api\/document\/meta(?:\?.*)?$/, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=utf-8',
+        headers: { 'Cache-Control': 'no-store' },
+        body: JSON.stringify({ ok: true, exists: false })
+      });
+    });
+    await page.route(/\/api\/document(?:\?.*)?$/, async (route) => {
+      await route.fulfill({
+        status: 404,
+        contentType: 'application/json; charset=utf-8',
+        headers: { 'Cache-Control': 'no-store' },
+        body: JSON.stringify({ ok: false, error: { code: 'document_not_found' } })
+      });
+    });
+    attachDialogHandler(page, [{
+      type: 'confirm',
+      action: 'dismiss',
+      messageIncludes: 'workspace will not be available again until you sign back into this account'
+    }], dialogs);
+
+    await page.goto('/index.html');
+    await openAccountModal(page);
+    await page.locator('#logoutForm button').click();
+
+    expect(dialogs).toHaveLength(1);
+    expect(dialogs[0].message).not.toContain('Your local notes stay saved in this browser on this device.');
+  });
+
   test('Settings modal contains only local settings plus import and export', async ({ page }) => {
     await prepareBlankPage(page);
     await mockRuntimeConfig(page, {
       deploymentMode: 'selfhosted',
       authAvailable: true,
-      authRequired: false,
+      authRequired: true,
       isAuthenticated: true,
       account: {
         username: 'owner',
         displayName: 'owner',
         email: '',
-        avatarUrl: ''
+        avatarUrl: '',
+        storageKey: 'owner-scope'
       }
     });
     await page.goto('/index.html');
