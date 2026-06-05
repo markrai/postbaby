@@ -12,6 +12,7 @@ const FREEFORM_FOOTPRINT_SHAPES = ['default', 'oval'];
 const FIXED_RATIO_SHAPES = ITEM_SHAPES.filter((shape) => !FREEFORM_FOOTPRINT_SHAPES.includes(shape));
 const FIXED_SQUARE_RESIZE_SHAPES = ['square', 'circle', 'diamond'];
 const DERIVED_HEIGHT_RESIZE_SHAPES = ['triangle', 'upsideDownTriangle', 'hexagon'];
+const NON_RECTANGULAR_SHAPES = ['circle', 'triangle', 'diamond', 'upsideDownTriangle', 'hexagon', 'oval'];
 const RESIZABLE_FIXED_RATIO_SHAPES = FIXED_SQUARE_RESIZE_SHAPES.concat(DERIVED_HEIGHT_RESIZE_SHAPES);
 const FIXED_RATIO_HEIGHT_BY_WIDTH = {
   square: 1,
@@ -30,6 +31,16 @@ const SHAPE_TEXT_INSETS = {
   upsideDownTriangle: { top: 22, right: 30, bottom: 34, left: 30 },
   hexagon: { top: 26, right: 34, bottom: 26, left: 34 },
   oval: { top: 24, right: 34, bottom: 24, left: 34 }
+};
+const SHAPE_TEXT_ALIGNMENT = {
+  default: { horizontalAlign: 'left', verticalAlign: 'top' },
+  square: { horizontalAlign: 'left', verticalAlign: 'top' },
+  circle: { horizontalAlign: 'center', verticalAlign: 'center' },
+  diamond: { horizontalAlign: 'center', verticalAlign: 'center' },
+  triangle: { horizontalAlign: 'center', verticalAlign: 'center' },
+  upsideDownTriangle: { horizontalAlign: 'left', verticalAlign: 'top' },
+  hexagon: { horizontalAlign: 'center', verticalAlign: 'top' },
+  oval: { horizontalAlign: 'left', verticalAlign: 'top' }
 };
 const SYNC_HASH_STORAGE_KEYS = [
   'tabs',
@@ -55,6 +66,79 @@ function expectItemUsesSharedSizeFieldsOnly(item) {
 
 function getExpectedFixedRatioHeight(shape, width) {
   return Math.round(width * FIXED_RATIO_HEIGHT_BY_WIDTH[shape]);
+}
+
+function getExpectedResponsiveInset(value, minimum) {
+  return Math.max(minimum, Math.round(value));
+}
+
+function getExpectedShapeTextBounds(shape, width, height) {
+  const minimumInsets = SHAPE_TEXT_INSETS[shape] || SHAPE_TEXT_INSETS.default;
+  let insets = minimumInsets;
+
+  if (Number.isFinite(width) && Number.isFinite(height)) {
+    if (shape === 'circle') {
+      const horizontalInset = getExpectedResponsiveInset(width * 0.214, minimumInsets.left);
+      const verticalInset = getExpectedResponsiveInset(height * 0.214, minimumInsets.top);
+      insets = { top: verticalInset, right: horizontalInset, bottom: verticalInset, left: horizontalInset };
+    } else if (shape === 'diamond') {
+      const horizontalInset = getExpectedResponsiveInset(width * 0.243, minimumInsets.left);
+      const verticalInset = getExpectedResponsiveInset(height * 0.243, minimumInsets.top);
+      insets = { top: verticalInset, right: horizontalInset, bottom: verticalInset, left: horizontalInset };
+    } else if (shape === 'triangle') {
+      const horizontalInset = getExpectedResponsiveInset(width * 0.182, minimumInsets.left);
+      insets = {
+        top: getExpectedResponsiveInset(height * 0.293, 44),
+        right: horizontalInset,
+        bottom: getExpectedResponsiveInset(height * 0.120, 18),
+        left: horizontalInset
+      };
+    } else if (shape === 'upsideDownTriangle') {
+      const horizontalInset = getExpectedResponsiveInset(width * 0.182, minimumInsets.left);
+      insets = {
+        top: getExpectedResponsiveInset(height * 0.120, 18),
+        right: horizontalInset,
+        bottom: getExpectedResponsiveInset(height * 0.293, 44),
+        left: horizontalInset
+      };
+    } else if (shape === 'hexagon') {
+      const horizontalInset = getExpectedResponsiveInset(width * 0.2, minimumInsets.left);
+      const verticalInset = getExpectedResponsiveInset(height * 0.193, minimumInsets.top);
+      insets = { top: verticalInset, right: horizontalInset, bottom: verticalInset, left: horizontalInset };
+    } else if (shape === 'oval') {
+      const horizontalInset = getExpectedResponsiveInset(width * 0.121, minimumInsets.left);
+      const verticalInset = getExpectedResponsiveInset(height * 0.126, minimumInsets.top);
+      insets = { top: verticalInset, right: horizontalInset, bottom: verticalInset, left: horizontalInset };
+    }
+  }
+
+  const textWidth = Number.isFinite(width)
+    ? Math.max(0, Math.round(width - insets.left - insets.right))
+    : undefined;
+  const textHeight = Number.isFinite(height)
+    ? Math.max(0, Math.round(height - insets.top - insets.bottom))
+    : undefined;
+  const alignment = SHAPE_TEXT_ALIGNMENT[shape] || SHAPE_TEXT_ALIGNMENT.default;
+
+  return {
+    top: insets.top,
+    right: insets.right,
+    bottom: insets.bottom,
+    left: insets.left,
+    width: textWidth,
+    height: textHeight,
+    minContentHeight: textHeight === undefined ? 0 : textHeight,
+    horizontalAlign: alignment.horizontalAlign,
+    verticalAlign: alignment.verticalAlign
+  };
+}
+
+function getExpectedTextJustifyContent(verticalAlign) {
+  return verticalAlign === 'center' ? 'center' : 'flex-start';
+}
+
+function getExpectedTextAlign(horizontalAlign) {
+  return horizontalAlign === 'center' ? 'center' : 'left';
 }
 
 function buildLocalSnapshot(noteText, options = {}) {
@@ -113,6 +197,72 @@ function buildLocalSnapshotWithItems(items, options = {}) {
   }
 
   return snapshot;
+}
+
+function buildGeometryRegressionSnapshot() {
+  return buildLocalSnapshotWithItems([
+    buildNoteItem('Default fixture note', {
+      itemId: 'fixture-default',
+      position: { top: '40px', left: '40px' },
+      width: 260,
+      height: 170
+    }),
+    buildNoteItem('Square fixture note', {
+      itemId: 'fixture-square',
+      shape: 'square',
+      position: { top: '40px', left: '360px' },
+      width: 240,
+      height: 180
+    }),
+    buildNoteItem('Circle short text', {
+      itemId: 'fixture-circle',
+      shape: 'circle',
+      position: { top: '60px', left: '640px' },
+      width: 240,
+      height: 180
+    }),
+    buildNoteItem('Oval fixture note with longer wrapped copy to keep the safe rectangle honest.', {
+      itemId: 'fixture-oval',
+      shape: 'oval',
+      position: { top: '280px', left: '40px' },
+      width: 320,
+      height: 190
+    }),
+    buildNoteItem('Diamond short', {
+      itemId: 'fixture-diamond',
+      shape: 'diamond',
+      position: { top: '280px', left: '420px' },
+      width: 240,
+      height: 190
+    }),
+    buildNoteItem('Triangle fixture note with wrapped text for the lower safe area.', {
+      itemId: 'fixture-triangle',
+      shape: 'triangle',
+      position: { top: '280px', left: '720px' },
+      width: 280,
+      height: 190
+    }),
+    buildNoteItem('Upside-down triangle fixture text.', {
+      itemId: 'fixture-updown-triangle',
+      shape: 'upsideDownTriangle',
+      position: { top: '560px', left: '80px' },
+      width: 280,
+      height: 190
+    }),
+    buildNoteItem('Hexagon fixture text that wraps to a second line.', {
+      itemId: 'fixture-hexagon',
+      shape: 'hexagon',
+      position: { top: '560px', left: '460px' },
+      width: 280,
+      height: 190
+    })
+  ], {
+    edges: [
+      { id: 'fixture-edge-1', fromItemId: 'fixture-default', toItemId: 'fixture-circle', kind: 'arrow' },
+      { id: 'fixture-edge-2', fromItemId: 'fixture-oval', toItemId: 'fixture-triangle', kind: 'line' },
+      { id: 'fixture-edge-3', fromItemId: 'fixture-updown-triangle', toItemId: 'fixture-hexagon', kind: 'arrow' }
+    ]
+  });
 }
 
 function buildIndexedDBMeta(snapshot, overrides = {}) {
@@ -501,25 +651,39 @@ async function readNotePresentation(locator) {
 async function readItemTextFlowPresentation(locator) {
   return locator.evaluate((element) => {
     const text = element.querySelector('.grid-item-text');
+    const content = text ? text.querySelector('.grid-item-text-content') : null;
     const textStyle = text ? window.getComputedStyle(text) : null;
     const noteStyle = window.getComputedStyle(element);
     const noteRect = element.getBoundingClientRect();
     const textRect = text ? text.getBoundingClientRect() : null;
+    const contentRect = content ? content.getBoundingClientRect() : null;
     const paddingTop = Number.parseFloat(noteStyle.paddingTop) || 0;
     const paddingRight = Number.parseFloat(noteStyle.paddingRight) || 0;
     const paddingBottom = Number.parseFloat(noteStyle.paddingBottom) || 0;
     const paddingLeft = Number.parseFloat(noteStyle.paddingLeft) || 0;
     return {
+      noteWidth: element.offsetWidth,
+      noteHeight: element.offsetHeight,
       flowHeight: textStyle ? textStyle.minHeight : '',
+      textBoxMinHeight: textStyle ? Number.parseFloat(textStyle.minHeight) || 0 : 0,
+      textAlign: textStyle ? textStyle.textAlign : '',
+      justifyContent: textStyle ? textStyle.justifyContent : '',
       paddingTop,
       paddingRight,
       paddingBottom,
       paddingLeft,
+      safeWidth: Math.max(0, element.clientWidth - paddingLeft - paddingRight),
+      safeHeight: Math.max(0, element.clientHeight - paddingTop - paddingBottom),
       availableWidth: Math.max(0, element.clientWidth - paddingLeft - paddingRight),
       availableHeight: Math.max(0, element.clientHeight - paddingTop - paddingBottom),
       textTop: textRect ? textRect.top - noteRect.top : null,
       textLeft: textRect ? textRect.left - noteRect.left : null,
       textWidth: textRect ? textRect.width : 0,
+      textHeight: textRect ? textRect.height : 0,
+      contentTop: contentRect ? contentRect.top - noteRect.top : null,
+      contentLeft: contentRect ? contentRect.left - noteRect.left : null,
+      contentWidth: contentRect ? contentRect.width : 0,
+      contentHeight: contentRect ? contentRect.height : 0,
       shaperCount: element.querySelectorAll('.grid-item-text-shaper').length
     };
   });
@@ -539,6 +703,7 @@ async function readEditTextareaPresentation(locator) {
       top: textareaRect.top - noteRect.top,
       left: textareaRect.left - noteRect.left,
       width: textareaRect.width,
+      height: textareaRect.height,
       minHeight: Number.parseFloat(textareaStyle.minHeight) || 0,
       paddingTop: Number.parseFloat(textareaStyle.paddingTop) || 0,
       paddingRight: Number.parseFloat(textareaStyle.paddingRight) || 0,
@@ -546,6 +711,34 @@ async function readEditTextareaPresentation(locator) {
       paddingLeft: Number.parseFloat(textareaStyle.paddingLeft) || 0
     };
   });
+}
+
+function expectTextLayoutMatchesBounds(layout, expectedBounds) {
+  expect(layout.shaperCount).toBe(0);
+  expect(layout.paddingTop).toBe(expectedBounds.top);
+  expect(layout.paddingRight).toBe(expectedBounds.right);
+  expect(layout.paddingBottom).toBe(expectedBounds.bottom);
+  expect(layout.paddingLeft).toBe(expectedBounds.left);
+  expect(layout.safeWidth).toBe(expectedBounds.width);
+  expect(layout.safeHeight).toBe(expectedBounds.height);
+  expect(layout.textBoxMinHeight).toBe(expectedBounds.minContentHeight);
+  expect(layout.textTop).toBeGreaterThanOrEqual(expectedBounds.top - 1);
+  expect(layout.textLeft).toBeGreaterThanOrEqual(expectedBounds.left - 1);
+  expect(layout.textWidth).toBeLessThanOrEqual(expectedBounds.width + 1);
+  expect(layout.contentWidth).toBeLessThanOrEqual(expectedBounds.width + 1);
+  expect(layout.contentTop).toBeGreaterThanOrEqual(expectedBounds.top - 1);
+}
+
+function expectTextAlignmentMatches(layout, expectedBounds) {
+  expect(layout.textAlign).toBe(getExpectedTextAlign(expectedBounds.horizontalAlign));
+  expect(layout.justifyContent).toBe(getExpectedTextJustifyContent(expectedBounds.verticalAlign));
+
+  if (expectedBounds.verticalAlign === 'center') {
+    const centeredTop = expectedBounds.top + ((expectedBounds.height - layout.contentHeight) / 2);
+    expect(Math.abs(layout.contentTop - centeredTop)).toBeLessThanOrEqual(2);
+  } else {
+    expect(Math.abs(layout.contentTop - expectedBounds.top)).toBeLessThanOrEqual(2);
+  }
 }
 
 async function readEdgeCoordinates(locator) {
@@ -1624,9 +1817,9 @@ test.describe('Static behavior', () => {
     });
   }
 
-  for (const shape of ['triangle', 'upsideDownTriangle']) {
-    test(`${shape} uses a safe rectangular text box that grows with the note height`, async ({ page }) => {
-      const localSnapshot = buildLocalSnapshot(`${shape} text should stay aligned inside the safe text box after resize`, {
+  for (const shape of NON_RECTANGULAR_SHAPES) {
+    test(`${shape} uses responsive safe text bounds and alignment before and after resize`, async ({ page }) => {
+      const localSnapshot = buildLocalSnapshot(`${shape} short text`, {
         shape,
         width: 280,
         height: 190
@@ -1635,39 +1828,82 @@ test.describe('Static behavior', () => {
       await prepareBlankPage(page);
       await seedLocalStorage(page, localSnapshot);
       await page.goto('/index.html');
+      await page.waitForTimeout(650);
 
       const note = page.locator('.grid-item[data-id="item-1"]');
       await expect(note).toHaveAttribute('data-shape', shape);
       await expect(note.locator('.grid-item-text')).toBeVisible();
 
-      const expectedInsets = SHAPE_TEXT_INSETS[shape];
+      const beforeSize = await readNoteSize(note);
+      const beforeExpectedBounds = getExpectedShapeTextBounds(shape, beforeSize.width, beforeSize.height);
       const beforeLayout = await readItemTextFlowPresentation(note);
-      expect(beforeLayout.shaperCount).toBe(0);
-      expect(beforeLayout.paddingTop).toBe(expectedInsets.top);
-      expect(beforeLayout.paddingRight).toBe(expectedInsets.right);
-      expect(beforeLayout.paddingBottom).toBe(expectedInsets.bottom);
-      expect(beforeLayout.paddingLeft).toBe(expectedInsets.left);
-      expect(beforeLayout.availableHeight).toBeGreaterThan(100);
-      expect(beforeLayout.textTop).toBeGreaterThanOrEqual(expectedInsets.top - 1);
-      expect(beforeLayout.textLeft).toBeGreaterThanOrEqual(expectedInsets.left - 1);
+      expectTextLayoutMatchesBounds(beforeLayout, beforeExpectedBounds);
+      expectTextAlignmentMatches(beforeLayout, beforeExpectedBounds);
+
+      if (shape === 'triangle') {
+        expect(beforeLayout.paddingTop).toBeGreaterThan(SHAPE_TEXT_INSETS.default.top);
+      }
+
+      if (shape === 'upsideDownTriangle') {
+        expect(beforeLayout.paddingBottom).toBeGreaterThan(SHAPE_TEXT_INSETS.default.bottom);
+      }
 
       await resizeNoteBy(page, note, 90, 30);
+      await page.waitForTimeout(650);
+
+      const afterSize = await readNoteSize(note);
+      const afterExpectedBounds = getExpectedShapeTextBounds(shape, afterSize.width, afterSize.height);
       const afterLayout = await readItemTextFlowPresentation(note);
-      expect(afterLayout.shaperCount).toBe(0);
-      expect(afterLayout.paddingTop).toBe(expectedInsets.top);
-      expect(afterLayout.paddingRight).toBe(expectedInsets.right);
-      expect(afterLayout.paddingBottom).toBe(expectedInsets.bottom);
-      expect(afterLayout.paddingLeft).toBe(expectedInsets.left);
-      expect(afterLayout.availableHeight).toBeGreaterThan(beforeLayout.availableHeight);
-      expect(afterLayout.textTop).toBeGreaterThanOrEqual(expectedInsets.top - 1);
-      expect(afterLayout.textLeft).toBeGreaterThanOrEqual(expectedInsets.left - 1);
-      await expectNoteVisible(page, `${shape} text should stay aligned inside the safe text box after resize`);
+      expectTextLayoutMatchesBounds(afterLayout, afterExpectedBounds);
+      expectTextAlignmentMatches(afterLayout, afterExpectedBounds);
+      expect(afterLayout.safeHeight).toBeGreaterThan(beforeLayout.safeHeight);
+      await expectNoteVisible(page, `${shape} short text`);
     });
   }
 
-  for (const shape of ITEM_SHAPES) {
-    test(`${shape} edit mode reuses the same safe text box as read-only rendering`, async ({ page }) => {
-      const localSnapshot = buildLocalSnapshot(`${shape} edit alignment should reuse the rendered text box`, {
+  for (const shape of NON_RECTANGULAR_SHAPES) {
+    test(`${shape} keeps long wrapped text inside the responsive safe text box after resize`, async ({ page }) => {
+      const localSnapshot = buildLocalSnapshot(
+        `${shape} wrapped text stays inside the responsive safe bounds after resize.`,
+        {
+          shape,
+          width: 280,
+          height: 190
+        }
+      );
+
+      await prepareBlankPage(page);
+      await seedLocalStorage(page, localSnapshot);
+      await page.goto('/index.html');
+      await page.waitForTimeout(650);
+
+      const note = page.locator('.grid-item[data-id="item-1"]');
+      await expect(note).toHaveAttribute('data-shape', shape);
+      await expect(note.locator('.grid-item-text')).toBeVisible();
+
+      const beforeSize = await readNoteSize(note);
+      const beforeExpectedBounds = getExpectedShapeTextBounds(shape, beforeSize.width, beforeSize.height);
+      const beforeLayout = await readItemTextFlowPresentation(note);
+      expectTextLayoutMatchesBounds(beforeLayout, beforeExpectedBounds);
+      expect(beforeLayout.contentHeight).toBeLessThanOrEqual(beforeExpectedBounds.height + 1);
+      expect(beforeLayout.textHeight).toBeLessThanOrEqual(beforeExpectedBounds.height + 1);
+
+      await resizeNoteBy(page, note, 90, 30);
+      await page.waitForTimeout(650);
+
+      const afterSize = await readNoteSize(note);
+      const afterExpectedBounds = getExpectedShapeTextBounds(shape, afterSize.width, afterSize.height);
+      const afterLayout = await readItemTextFlowPresentation(note);
+      expectTextLayoutMatchesBounds(afterLayout, afterExpectedBounds);
+      expect(afterLayout.contentHeight).toBeLessThanOrEqual(afterExpectedBounds.height + 1);
+      expect(afterLayout.textHeight).toBeLessThanOrEqual(afterExpectedBounds.height + 1);
+      await expectNoteVisible(page, `${shape} wrapped text stays inside the responsive safe bounds after resize.`);
+    });
+  }
+
+  for (const shape of NON_RECTANGULAR_SHAPES) {
+    test(`${shape} edit mode reuses the same responsive safe text box after resize`, async ({ page }) => {
+      const localSnapshot = buildLocalSnapshot(`${shape} edit alignment should reuse the responsive text box`, {
         shape,
         width: 280,
         height: 190
@@ -1676,17 +1912,20 @@ test.describe('Static behavior', () => {
       await prepareBlankPage(page);
       await seedLocalStorage(page, localSnapshot);
       await page.goto('/index.html');
+      await page.waitForTimeout(650);
 
       const note = page.locator('.grid-item[data-id="item-1"]');
       await expect(note).toHaveAttribute('data-shape', shape);
       await expect(note.locator('.grid-item-text')).toBeVisible();
 
-      const expectedInsets = SHAPE_TEXT_INSETS[shape];
+      await resizeNoteBy(page, note, 90, 30);
+      await page.waitForTimeout(650);
+
+      const resizedNoteSize = await readNoteSize(note);
+      const expectedBounds = getExpectedShapeTextBounds(shape, resizedNoteSize.width, resizedNoteSize.height);
       const readOnlyLayout = await readItemTextFlowPresentation(note);
-      expect(readOnlyLayout.paddingTop).toBe(expectedInsets.top);
-      expect(readOnlyLayout.paddingRight).toBe(expectedInsets.right);
-      expect(readOnlyLayout.paddingBottom).toBe(expectedInsets.bottom);
-      expect(readOnlyLayout.paddingLeft).toBe(expectedInsets.left);
+      expectTextLayoutMatchesBounds(readOnlyLayout, expectedBounds);
+      expectTextAlignmentMatches(readOnlyLayout, expectedBounds);
 
       await note.dblclick();
       const textarea = note.locator('textarea.edit-textarea');
@@ -1698,16 +1937,57 @@ test.describe('Static behavior', () => {
       expect(editLayout.paddingRight).toBe(15);
       expect(editLayout.paddingBottom).toBe(10);
       expect(editLayout.paddingLeft).toBe(10);
-      expect(Math.abs(editLayout.top - expectedInsets.top)).toBeLessThanOrEqual(1);
-      expect(Math.abs(editLayout.left - expectedInsets.left)).toBeLessThanOrEqual(1);
-      expect(Math.abs(editLayout.width - readOnlyLayout.availableWidth)).toBeLessThanOrEqual(1);
-      expect(editLayout.minHeight).toBe(Math.min(Math.max(readOnlyLayout.availableHeight, 40), 200));
+      expect(Math.abs(editLayout.top - expectedBounds.top)).toBeLessThanOrEqual(1);
+      expect(Math.abs(editLayout.left - expectedBounds.left)).toBeLessThanOrEqual(1);
+      expect(Math.abs(editLayout.width - expectedBounds.width)).toBeLessThanOrEqual(1);
+      expect(editLayout.minHeight).toBe(Math.min(Math.max(expectedBounds.height, 40), 200));
 
       await textarea.press('Escape');
       await expect(textarea).toHaveCount(0);
-      await expectNoteVisible(page, `${shape} edit alignment should reuse the rendered text box`);
+      await expectNoteVisible(page, `${shape} edit alignment should reuse the responsive text box`);
     });
   }
+
+  test('geometry regression fixture keeps non-rectangular safe bounds, edges, and marquee selection stable', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildGeometryRegressionSnapshot());
+    await page.goto('/index.html');
+    await page.waitForTimeout(650);
+
+    await expect(page.locator('.grid-item')).toHaveCount(8);
+    await expect(page.locator('.edge-line')).toHaveCount(3);
+
+    const fixtureExpectations = [
+      { itemId: 'fixture-circle', shape: 'circle' },
+      { itemId: 'fixture-oval', shape: 'oval' },
+      { itemId: 'fixture-diamond', shape: 'diamond' },
+      { itemId: 'fixture-triangle', shape: 'triangle' },
+      { itemId: 'fixture-updown-triangle', shape: 'upsideDownTriangle' },
+      { itemId: 'fixture-hexagon', shape: 'hexagon' }
+    ];
+
+    for (const { itemId, shape } of fixtureExpectations) {
+      const note = page.locator(`.grid-item[data-id="${itemId}"]`);
+      const noteSize = await readNoteSize(note);
+      const expectedBounds = getExpectedShapeTextBounds(shape, noteSize.width, noteSize.height);
+      const layout = await readItemTextFlowPresentation(note);
+      expectTextLayoutMatchesBounds(layout, expectedBounds);
+      expectTextAlignmentMatches(layout, expectedBounds);
+    }
+
+    const edgeMarkers = await page.locator('.edge-line').evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute('marker-end') || '')
+    );
+    expect(edgeMarkers.filter((marker) => /^url\(#.+-arrow\)$/.test(marker)).length).toBe(2);
+    expect(edgeMarkers.filter((marker) => marker === '').length).toBe(1);
+
+    const circleNote = page.locator('.grid-item[data-id="fixture-circle"]');
+    const diamondNote = page.locator('.grid-item[data-id="fixture-diamond"]');
+    await marqueeSelectNotes(page, [circleNote, diamondNote], { margin: 8 });
+    await expect(circleNote).toHaveClass(/selected/);
+    await expect(diamondNote).toHaveClass(/selected/);
+    await expect(page.locator('.grid-selection-marquee')).toHaveCount(0);
+  });
 
   for (const shape of FIXED_SQUARE_RESIZE_SHAPES) {
     test(`${shape} resize keeps a fixed-ratio box, preserves interactions, and rerenders attached edges`, async ({ page }) => {

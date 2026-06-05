@@ -78,6 +78,32 @@
             left: 34
         })
     });
+    const DEFAULT_SHAPE_TEXT_ALIGNMENT = Object.freeze({
+        horizontalAlign: 'left',
+        verticalAlign: 'top'
+    });
+    const SHAPE_TEXT_ALIGNMENT = Object.freeze({
+        default: DEFAULT_SHAPE_TEXT_ALIGNMENT,
+        square: DEFAULT_SHAPE_TEXT_ALIGNMENT,
+        circle: Object.freeze({
+            horizontalAlign: 'center',
+            verticalAlign: 'center'
+        }),
+        diamond: Object.freeze({
+            horizontalAlign: 'center',
+            verticalAlign: 'center'
+        }),
+        triangle: Object.freeze({
+            horizontalAlign: 'center',
+            verticalAlign: 'center'
+        }),
+        upsideDownTriangle: DEFAULT_SHAPE_TEXT_ALIGNMENT,
+        hexagon: Object.freeze({
+            horizontalAlign: 'center',
+            verticalAlign: 'top'
+        }),
+        oval: DEFAULT_SHAPE_TEXT_ALIGNMENT
+    });
     const MIN_RESIZABLE_ITEM_WIDTH = 120;
     const MIN_RESIZABLE_ITEM_HEIGHT = 80;
     const MAX_RESIZABLE_ITEM_WIDTH = 600;
@@ -177,8 +203,92 @@
         return SHAPE_TEXT_INSETS[normalizedShape] || DEFAULT_SHAPE_TEXT_INSETS;
     }
 
+    function getShapeTextAlignment(itemOrShape) {
+        const normalizedShape = getNormalizedItemShape(itemOrShape);
+        return SHAPE_TEXT_ALIGNMENT[normalizedShape] || DEFAULT_SHAPE_TEXT_ALIGNMENT;
+    }
+
+    function getResponsiveInset(value, minimum) {
+        return Math.max(minimum, Math.round(value));
+    }
+
+    function getShapeResponsiveTextInsets(itemOrShape, outerWidth, outerHeight) {
+        const normalizedShape = getNormalizedItemShape(itemOrShape);
+        const minimumInsets = getShapeTextInsets(normalizedShape);
+        if (!Number.isFinite(outerWidth) || !Number.isFinite(outerHeight)) {
+            return minimumInsets;
+        }
+
+        if (normalizedShape === 'circle') {
+            const horizontalInset = getResponsiveInset(outerWidth * 0.214, minimumInsets.left);
+            const verticalInset = getResponsiveInset(outerHeight * 0.214, minimumInsets.top);
+            return {
+                top: verticalInset,
+                right: horizontalInset,
+                bottom: verticalInset,
+                left: horizontalInset
+            };
+        }
+
+        if (normalizedShape === 'diamond') {
+            const horizontalInset = getResponsiveInset(outerWidth * 0.243, minimumInsets.left);
+            const verticalInset = getResponsiveInset(outerHeight * 0.243, minimumInsets.top);
+            return {
+                top: verticalInset,
+                right: horizontalInset,
+                bottom: verticalInset,
+                left: horizontalInset
+            };
+        }
+
+        if (normalizedShape === 'triangle') {
+            const horizontalInset = getResponsiveInset(outerWidth * 0.182, minimumInsets.left);
+            return {
+                top: getResponsiveInset(outerHeight * 0.293, 44),
+                right: horizontalInset,
+                bottom: getResponsiveInset(outerHeight * 0.120, 18),
+                left: horizontalInset
+            };
+        }
+
+        if (normalizedShape === 'upsideDownTriangle') {
+            const horizontalInset = getResponsiveInset(outerWidth * 0.182, minimumInsets.left);
+            return {
+                top: getResponsiveInset(outerHeight * 0.120, 18),
+                right: horizontalInset,
+                bottom: getResponsiveInset(outerHeight * 0.293, 44),
+                left: horizontalInset
+            };
+        }
+
+        if (normalizedShape === 'hexagon') {
+            const horizontalInset = getResponsiveInset(outerWidth * 0.200, minimumInsets.left);
+            const verticalInset = getResponsiveInset(outerHeight * 0.193, minimumInsets.top);
+            return {
+                top: verticalInset,
+                right: horizontalInset,
+                bottom: verticalInset,
+                left: horizontalInset
+            };
+        }
+
+        if (normalizedShape === 'oval') {
+            const horizontalInset = getResponsiveInset(outerWidth * 0.121, minimumInsets.left);
+            const verticalInset = getResponsiveInset(outerHeight * 0.126, minimumInsets.top);
+            return {
+                top: verticalInset,
+                right: horizontalInset,
+                bottom: verticalInset,
+                left: horizontalInset
+            };
+        }
+
+        return minimumInsets;
+    }
+
     function getShapeTextBounds(itemOrShape, outerWidth, outerHeight) {
-        const textInsets = getShapeTextInsets(itemOrShape);
+        const textInsets = getShapeResponsiveTextInsets(itemOrShape, outerWidth, outerHeight);
+        const textAlignment = getShapeTextAlignment(itemOrShape);
         const textWidth = Number.isFinite(outerWidth)
             ? Math.max(0, Math.round(outerWidth - textInsets.left - textInsets.right))
             : undefined;
@@ -192,7 +302,10 @@
             bottom: textInsets.bottom,
             left: textInsets.left,
             width: textWidth,
-            height: textHeight
+            height: textHeight,
+            minContentHeight: textHeight === undefined ? 0 : textHeight,
+            horizontalAlign: textAlignment.horizontalAlign,
+            verticalAlign: textAlignment.verticalAlign
         };
     }
 

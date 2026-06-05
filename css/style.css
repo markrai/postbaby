@@ -595,6 +595,9 @@ body {
     --shape-text-pad-right: 20px;
     --shape-text-pad-bottom: 20px;
     --shape-text-pad-left: 20px;
+    --shape-text-box-min-height: 0px;
+    --shape-text-justify: flex-start;
+    --shape-text-text-align: left;
     z-index: 2;
     background-color: transparent;
     color: var(--note-default-text);
@@ -1065,10 +1068,14 @@ h1 {
 }
 
 .grid-item-text {
-    display: block;
+    display: flex;
+    flex-direction: column;
+    justify-content: var(--shape-text-justify);
+    min-height: var(--shape-text-box-min-height);
     color: #000000;
     line-height: 1.35;
     text-decoration: none;
+    text-align: var(--shape-text-text-align);
     white-space: pre-wrap;
     word-break: break-word;
     overflow-wrap: break-word;
@@ -1076,6 +1083,7 @@ h1 {
 
 .grid-item-text-content {
     display: block;
+    width: 100%;
     white-space: inherit;
 }
 
