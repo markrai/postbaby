@@ -21,6 +21,16 @@ const FIXED_RATIO_HEIGHT_BY_WIDTH = {
   upsideDownTriangle: 150 / 170,
   hexagon: 135 / 170
 };
+const SHAPE_TEXT_INSETS = {
+  default: { top: 20, right: 20, bottom: 20, left: 20 },
+  square: { top: 26, right: 26, bottom: 26, left: 26 },
+  circle: { top: 30, right: 30, bottom: 30, left: 30 },
+  diamond: { top: 34, right: 34, bottom: 34, left: 34 },
+  triangle: { top: 30, right: 30, bottom: 24, left: 30 },
+  upsideDownTriangle: { top: 22, right: 30, bottom: 34, left: 30 },
+  hexagon: { top: 26, right: 34, bottom: 26, left: 34 },
+  oval: { top: 24, right: 34, bottom: 24, left: 34 }
+};
 const SYNC_HASH_STORAGE_KEYS = [
   'tabs',
   'activeTabId',
@@ -492,16 +502,48 @@ async function readItemTextFlowPresentation(locator) {
   return locator.evaluate((element) => {
     const text = element.querySelector('.grid-item-text');
     const textStyle = text ? window.getComputedStyle(text) : null;
-    const leftShaper = element.querySelector('.grid-item-text-shaper--left');
-    const rightShaper = element.querySelector('.grid-item-text-shaper--right');
-    const leftStyle = leftShaper ? window.getComputedStyle(leftShaper) : null;
-    const rightStyle = rightShaper ? window.getComputedStyle(rightShaper) : null;
+    const noteStyle = window.getComputedStyle(element);
+    const noteRect = element.getBoundingClientRect();
+    const textRect = text ? text.getBoundingClientRect() : null;
+    const paddingTop = Number.parseFloat(noteStyle.paddingTop) || 0;
+    const paddingRight = Number.parseFloat(noteStyle.paddingRight) || 0;
+    const paddingBottom = Number.parseFloat(noteStyle.paddingBottom) || 0;
+    const paddingLeft = Number.parseFloat(noteStyle.paddingLeft) || 0;
     return {
       flowHeight: textStyle ? textStyle.minHeight : '',
-      beforeFloat: leftStyle ? leftStyle.float : '',
-      beforeShapeOutside: leftStyle ? leftStyle.getPropertyValue('shape-outside') : '',
-      afterFloat: rightStyle ? rightStyle.float : '',
-      afterShapeOutside: rightStyle ? rightStyle.getPropertyValue('shape-outside') : ''
+      paddingTop,
+      paddingRight,
+      paddingBottom,
+      paddingLeft,
+      availableWidth: Math.max(0, element.clientWidth - paddingLeft - paddingRight),
+      availableHeight: Math.max(0, element.clientHeight - paddingTop - paddingBottom),
+      textTop: textRect ? textRect.top - noteRect.top : null,
+      textLeft: textRect ? textRect.left - noteRect.left : null,
+      textWidth: textRect ? textRect.width : 0,
+      shaperCount: element.querySelectorAll('.grid-item-text-shaper').length
+    };
+  });
+}
+
+async function readEditTextareaPresentation(locator) {
+  return locator.evaluate((element) => {
+    const noteRect = element.getBoundingClientRect();
+    const textarea = element.querySelector('.edit-textarea');
+    if (!textarea) {
+      return null;
+    }
+
+    const textareaRect = textarea.getBoundingClientRect();
+    const textareaStyle = window.getComputedStyle(textarea);
+    return {
+      top: textareaRect.top - noteRect.top,
+      left: textareaRect.left - noteRect.left,
+      width: textareaRect.width,
+      minHeight: Number.parseFloat(textareaStyle.minHeight) || 0,
+      paddingTop: Number.parseFloat(textareaStyle.paddingTop) || 0,
+      paddingRight: Number.parseFloat(textareaStyle.paddingRight) || 0,
+      paddingBottom: Number.parseFloat(textareaStyle.paddingBottom) || 0,
+      paddingLeft: Number.parseFloat(textareaStyle.paddingLeft) || 0
     };
   });
 }
@@ -1583,8 +1625,8 @@ test.describe('Static behavior', () => {
   }
 
   for (const shape of ['triangle', 'upsideDownTriangle']) {
-    test(`${shape} uses tapered text flow that grows with the note height`, async ({ page }) => {
-      const localSnapshot = buildLocalSnapshot(`${shape} text should stay visually contained inside the tapered note shape after resize`, {
+    test(`${shape} uses a safe rectangular text box that grows with the note height`, async ({ page }) => {
+      const localSnapshot = buildLocalSnapshot(`${shape} text should stay aligned inside the safe text box after resize`, {
         shape,
         width: 280,
         height: 190
@@ -1598,19 +1640,72 @@ test.describe('Static behavior', () => {
       await expect(note).toHaveAttribute('data-shape', shape);
       await expect(note.locator('.grid-item-text')).toBeVisible();
 
-      const beforeFlow = await readItemTextFlowPresentation(note);
-      expect(Number.parseFloat(beforeFlow.flowHeight || '0')).toBeGreaterThan(100);
-      expect(beforeFlow.beforeFloat).toBe('left');
-      expect(beforeFlow.afterFloat).toBe('right');
-      expect(beforeFlow.beforeShapeOutside).not.toBe('none');
-      expect(beforeFlow.afterShapeOutside).not.toBe('none');
+      const expectedInsets = SHAPE_TEXT_INSETS[shape];
+      const beforeLayout = await readItemTextFlowPresentation(note);
+      expect(beforeLayout.shaperCount).toBe(0);
+      expect(beforeLayout.paddingTop).toBe(expectedInsets.top);
+      expect(beforeLayout.paddingRight).toBe(expectedInsets.right);
+      expect(beforeLayout.paddingBottom).toBe(expectedInsets.bottom);
+      expect(beforeLayout.paddingLeft).toBe(expectedInsets.left);
+      expect(beforeLayout.availableHeight).toBeGreaterThan(100);
+      expect(beforeLayout.textTop).toBeGreaterThanOrEqual(expectedInsets.top - 1);
+      expect(beforeLayout.textLeft).toBeGreaterThanOrEqual(expectedInsets.left - 1);
 
       await resizeNoteBy(page, note, 90, 30);
-      const afterFlow = await readItemTextFlowPresentation(note);
-      expect(Number.parseFloat(afterFlow.flowHeight || '0')).toBeGreaterThan(Number.parseFloat(beforeFlow.flowHeight || '0'));
-      expect(afterFlow.beforeShapeOutside).not.toBe('none');
-      expect(afterFlow.afterShapeOutside).not.toBe('none');
-      await expectNoteVisible(page, `${shape} text should stay visually contained inside the tapered note shape after resize`);
+      const afterLayout = await readItemTextFlowPresentation(note);
+      expect(afterLayout.shaperCount).toBe(0);
+      expect(afterLayout.paddingTop).toBe(expectedInsets.top);
+      expect(afterLayout.paddingRight).toBe(expectedInsets.right);
+      expect(afterLayout.paddingBottom).toBe(expectedInsets.bottom);
+      expect(afterLayout.paddingLeft).toBe(expectedInsets.left);
+      expect(afterLayout.availableHeight).toBeGreaterThan(beforeLayout.availableHeight);
+      expect(afterLayout.textTop).toBeGreaterThanOrEqual(expectedInsets.top - 1);
+      expect(afterLayout.textLeft).toBeGreaterThanOrEqual(expectedInsets.left - 1);
+      await expectNoteVisible(page, `${shape} text should stay aligned inside the safe text box after resize`);
+    });
+  }
+
+  for (const shape of ITEM_SHAPES) {
+    test(`${shape} edit mode reuses the same safe text box as read-only rendering`, async ({ page }) => {
+      const localSnapshot = buildLocalSnapshot(`${shape} edit alignment should reuse the rendered text box`, {
+        shape,
+        width: 280,
+        height: 190
+      });
+
+      await prepareBlankPage(page);
+      await seedLocalStorage(page, localSnapshot);
+      await page.goto('/index.html');
+
+      const note = page.locator('.grid-item[data-id="item-1"]');
+      await expect(note).toHaveAttribute('data-shape', shape);
+      await expect(note.locator('.grid-item-text')).toBeVisible();
+
+      const expectedInsets = SHAPE_TEXT_INSETS[shape];
+      const readOnlyLayout = await readItemTextFlowPresentation(note);
+      expect(readOnlyLayout.paddingTop).toBe(expectedInsets.top);
+      expect(readOnlyLayout.paddingRight).toBe(expectedInsets.right);
+      expect(readOnlyLayout.paddingBottom).toBe(expectedInsets.bottom);
+      expect(readOnlyLayout.paddingLeft).toBe(expectedInsets.left);
+
+      await note.dblclick();
+      const textarea = note.locator('textarea.edit-textarea');
+      await expect(textarea).toBeVisible();
+
+      const editLayout = await readEditTextareaPresentation(note);
+      expect(editLayout).not.toBeNull();
+      expect(editLayout.paddingTop).toBe(10);
+      expect(editLayout.paddingRight).toBe(15);
+      expect(editLayout.paddingBottom).toBe(10);
+      expect(editLayout.paddingLeft).toBe(10);
+      expect(Math.abs(editLayout.top - expectedInsets.top)).toBeLessThanOrEqual(1);
+      expect(Math.abs(editLayout.left - expectedInsets.left)).toBeLessThanOrEqual(1);
+      expect(Math.abs(editLayout.width - readOnlyLayout.availableWidth)).toBeLessThanOrEqual(1);
+      expect(editLayout.minHeight).toBe(Math.min(Math.max(readOnlyLayout.availableHeight, 40), 200));
+
+      await textarea.press('Escape');
+      await expect(textarea).toHaveCount(0);
+      await expectNoteVisible(page, `${shape} edit alignment should reuse the rendered text box`);
     });
   }
 

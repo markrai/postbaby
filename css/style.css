@@ -428,7 +428,9 @@
 
     .edit-textarea {
         font-size: 16px;
+        line-height: 1.35;
         padding: 10px;
+        padding-right: 15px;
         border: 1px solid var(--textarea-border);
         border-radius: 10px;
         box-sizing: border-box;
@@ -589,11 +591,15 @@ body {
 
 .grid-item {
     --note-fill: var(--note-default-bg);
+    --shape-text-pad-top: 20px;
+    --shape-text-pad-right: 20px;
+    --shape-text-pad-bottom: 20px;
+    --shape-text-pad-left: 20px;
     z-index: 2;
     background-color: transparent;
     color: var(--note-default-text);
     border-radius: 15px;
-    padding: 20px;
+    padding: var(--shape-text-pad-top) var(--shape-text-pad-right) var(--shape-text-pad-bottom) var(--shape-text-pad-left);
     text-align: left;
     box-sizing: border-box;
     cursor: pointer;
@@ -680,33 +686,8 @@ body {
     overflow: visible;
 }
 
-.grid-item[data-shape="circle"]:not(.editing) {
-    padding: 30px;
-}
-
 .grid-item[data-shape="square"]:not(.editing) {
-    padding: 26px;
     border-radius: 0;
-}
-
-.grid-item[data-shape="triangle"]:not(.editing) {
-    padding: 30px 30px 24px;
-}
-
-.grid-item[data-shape="diamond"]:not(.editing) {
-    padding: 34px;
-}
-
-.grid-item[data-shape="upsideDownTriangle"]:not(.editing) {
-    padding: 22px 30px 34px;
-}
-
-.grid-item[data-shape="hexagon"]:not(.editing) {
-    padding: 26px 34px;
-}
-
-.grid-item[data-shape="oval"]:not(.editing) {
-    padding: 24px 34px;
 }
 
 .grid-item[data-shape="square"]:not(.editing)::before {
@@ -850,12 +831,11 @@ body {
 
 .edit-textarea {
     font-size: 16px;
+    line-height: 1.35;
     padding: 10px;
-
     padding-right: 15px; /* Extra space to accommodate the scrollbar */
-
     border: 1px solid var(--textarea-border);
-    border-radius: 10px; /* Match grid-item corners */
+    border-radius: 10px;
     box-sizing: border-box; /* Consistent padding and size */
     resize: none; /* Prevent user resizing */
     width: 100%;
@@ -1086,50 +1066,17 @@ h1 {
 
 .grid-item-text {
     display: block;
+    color: #000000;
+    line-height: 1.35;
+    text-decoration: none;
     white-space: pre-wrap;
     word-break: break-word;
     overflow-wrap: break-word;
 }
 
-.grid-item-text-shaper {
-    display: none;
-    width: 50%;
-    height: var(--shape-text-flow-height, 0px);
-    shape-margin: 2px;
-}
-
 .grid-item-text-content {
-    white-space: inherit;
-}
-
-.grid-item[data-shape="triangle"]:not(.editing) .grid-item-text,
-.grid-item[data-shape="upsideDownTriangle"]:not(.editing) .grid-item-text {
-    min-height: var(--shape-text-flow-height, 0px);
-}
-
-.grid-item[data-shape="triangle"]:not(.editing) .grid-item-text-shaper,
-.grid-item[data-shape="upsideDownTriangle"]:not(.editing) .grid-item-text-shaper {
     display: block;
-}
-
-.grid-item[data-shape="triangle"]:not(.editing) .grid-item-text-shaper--left {
-    float: left;
-    shape-outside: polygon(0 0, 60% 0, 12% 100%, 0 100%);
-}
-
-.grid-item[data-shape="triangle"]:not(.editing) .grid-item-text-shaper--right {
-    float: right;
-    shape-outside: polygon(40% 0, 100% 0, 100% 100%, 88% 100%);
-}
-
-.grid-item[data-shape="upsideDownTriangle"]:not(.editing) .grid-item-text-shaper--left {
-    float: left;
-    shape-outside: polygon(0 0, 18% 0, 78% 100%, 0 100%);
-}
-
-.grid-item[data-shape="upsideDownTriangle"]:not(.editing) .grid-item-text-shaper--right {
-    float: right;
-    shape-outside: polygon(82% 0, 100% 0, 100% 100%, 22% 100%);
+    white-space: inherit;
 }
 
 /* Toast Styles */
