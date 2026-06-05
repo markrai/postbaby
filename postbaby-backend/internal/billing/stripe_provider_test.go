@@ -115,6 +115,45 @@ func TestStripeProviderCreatePortalSessionUsesCustomerPortal(t *testing.T) {
 	}
 }
 
+func TestStripeProviderParseWebhookMapsCheckoutCompletionToCustomerLinked(t *testing.T) {
+	t.Parallel()
+
+	provider := NewStripeProvider(StripeProviderOptions{
+		SecretKey:     "sk_test_123",
+		WebhookSecret: "whsec_test",
+		PriceID:       "price_123",
+	})
+
+	payload := map[string]any{
+		"id":   "evt_checkout",
+		"type": "checkout.session.completed",
+		"data": map[string]any{
+			"object": map[string]any{
+				"customer":            "cus_123",
+				"subscription":        "sub_123",
+				"client_reference_id": "42",
+				"metadata": map[string]string{
+					"user_id": "42",
+				},
+			},
+		},
+	}
+	rawBody, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	signatureHeader := signedStripeHeader(t, "whsec_test", rawBody, time.Now().UTC().Unix())
+
+	event, err := provider.ParseWebhook(context.Background(), rawBody, http.Header{"Stripe-Signature": []string{signatureHeader}})
+	if err != nil {
+		t.Fatalf("parse webhook: %v", err)
+	}
+
+	if event.Kind != WebhookEventKindCustomerLinked || event.RawType != "checkout.session.completed" || event.UserID != 42 || event.ProviderCustomerID != "cus_123" || event.ProviderSubscriptionID != "sub_123" {
+		t.Fatalf("unexpected parsed event: %+v", event)
+	}
+}
+
 func TestStripeProviderParseWebhookVerifiesSignatureAndMapsSubscriptionEvent(t *testing.T) {
 	t.Parallel()
 
@@ -145,12 +184,12 @@ func TestStripeProviderParseWebhookVerifiesSignatureAndMapsSubscriptionEvent(t *
 	}
 	signatureHeader := signedStripeHeader(t, "whsec_test", rawBody, time.Now().UTC().Unix())
 
-	event, err := provider.ParseWebhook(context.Background(), rawBody, signatureHeader)
+	event, err := provider.ParseWebhook(context.Background(), rawBody, http.Header{"Stripe-Signature": []string{signatureHeader}})
 	if err != nil {
 		t.Fatalf("parse webhook: %v", err)
 	}
 
-	if event.Type != "customer.subscription.updated" || event.UserID != 42 || event.ProviderCustomerID != "cus_123" || event.ProviderSubscriptionID != "sub_123" || event.Status != "active" {
+	if event.Kind != WebhookEventKindSubscriptionStateChanged || event.RawType != "customer.subscription.updated" || event.UserID != 42 || event.ProviderCustomerID != "cus_123" || event.ProviderSubscriptionID != "sub_123" || event.EntitlementStatus != store.EntitlementStatusActive {
 		t.Fatalf("unexpected parsed event: %+v", event)
 	}
 	if event.ValidUntil == nil || event.ValidUntil.UTC().Unix() != 1770000000 {
@@ -202,12 +241,12 @@ func TestStripeProviderParseWebhookMapsInvoicePaidEvent(t *testing.T) {
 	}
 	signatureHeader := signedStripeHeader(t, "whsec_test", rawBody, time.Now().UTC().Unix())
 
-	event, err := provider.ParseWebhook(context.Background(), rawBody, signatureHeader)
+	event, err := provider.ParseWebhook(context.Background(), rawBody, http.Header{"Stripe-Signature": []string{signatureHeader}})
 	if err != nil {
 		t.Fatalf("parse webhook: %v", err)
 	}
 
-	if event.Type != "invoice.paid" || event.UserID != 42 || event.ProviderCustomerID != "cus_123" || event.ProviderSubscriptionID != "sub_123" || event.Status != "active" {
+	if event.Kind != WebhookEventKindSubscriptionStateChanged || event.RawType != "invoice.paid" || event.UserID != 42 || event.ProviderCustomerID != "cus_123" || event.ProviderSubscriptionID != "sub_123" || event.EntitlementStatus != store.EntitlementStatusActive {
 		t.Fatalf("unexpected parsed event: %+v", event)
 	}
 	if event.ValidUntil == nil || event.ValidUntil.UTC().Unix() != 1775000000 {
@@ -224,7 +263,7 @@ func TestStripeProviderRejectsInvalidWebhookSignature(t *testing.T) {
 		PriceID:       "price_123",
 	})
 
-	if _, err := provider.ParseWebhook(context.Background(), []byte(`{"id":"evt","type":"checkout.session.completed","data":{"object":{}}}`), "t=1,v1=bogus"); !errors.Is(err, ErrInvalidWebhookSignature) {
+	if _, err := provider.ParseWebhook(context.Background(), []byte(`{"id":"evt","type":"checkout.session.completed","data":{"object":{}}}`), http.Header{"Stripe-Signature": []string{"t=1,v1=bogus"}}); !errors.Is(err, ErrInvalidWebhookSignature) {
 		t.Fatalf("expected invalid signature error, got %v", err)
 	}
 }

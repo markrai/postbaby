@@ -133,7 +133,11 @@ func (p *StripeProvider) CreatePortalSession(ctx context.Context, input PortalSe
 	return response.URL, nil
 }
 
-func (p *StripeProvider) ParseWebhook(ctx context.Context, rawBody []byte, signatureHeader string) (WebhookEvent, error) {
+func (p *StripeProvider) ParseWebhook(ctx context.Context, rawBody []byte, headers http.Header) (WebhookEvent, error) {
+	signatureHeader := ""
+	if headers != nil {
+		signatureHeader = strings.TrimSpace(headers.Get("Stripe-Signature"))
+	}
 	if err := p.verifyWebhookSignature(rawBody, signatureHeader); err != nil {
 		return WebhookEvent{}, err
 	}
@@ -162,8 +166,9 @@ func (p *StripeProvider) ParseWebhook(ctx context.Context, rawBody []byte, signa
 		}
 
 		return WebhookEvent{
+			Kind:                   WebhookEventKindCustomerLinked,
 			ID:                     envelope.ID,
-			Type:                   envelope.Type,
+			RawType:                envelope.Type,
 			UserID:                 parseStripeUserID(session.ClientReferenceID, session.Metadata),
 			ProviderCustomerID:     decodeStripeID(session.Customer),
 			ProviderSubscriptionID: decodeStripeID(session.Subscription),
@@ -186,12 +191,13 @@ func (p *StripeProvider) ParseWebhook(ctx context.Context, rawBody []byte, signa
 		}
 
 		return WebhookEvent{
+			Kind:                   WebhookEventKindSubscriptionStateChanged,
 			ID:                     envelope.ID,
-			Type:                   envelope.Type,
+			RawType:                envelope.Type,
 			UserID:                 parseStripeUserID("", subscription.Metadata),
 			ProviderCustomerID:     decodeStripeID(subscription.Customer),
 			ProviderSubscriptionID: strings.TrimSpace(subscription.ID),
-			Status:                 status,
+			EntitlementStatus:      normalizeStripeSubscriptionEntitlementStatus(status),
 			ValidUntil:             stripeTimestampPointer(subscription.CurrentPeriodEnd),
 		}, nil
 	case "invoice.paid", "invoice.payment_succeeded":
@@ -258,18 +264,20 @@ func (p *StripeProvider) ParseWebhook(ctx context.Context, rawBody []byte, signa
 		}
 
 		return WebhookEvent{
+			Kind:                   WebhookEventKindSubscriptionStateChanged,
 			ID:                     envelope.ID,
-			Type:                   envelope.Type,
+			RawType:                envelope.Type,
 			UserID:                 parseStripeUserID("", metadata),
 			ProviderCustomerID:     decodeStripeID(invoice.Customer),
 			ProviderSubscriptionID: subscriptionID,
-			Status:                 status,
+			EntitlementStatus:      normalizeStripeSubscriptionEntitlementStatus(status),
 			ValidUntil:             stripeTimestampPointer(validUntilUnix),
 		}, nil
 	default:
 		return WebhookEvent{
-			ID:   envelope.ID,
-			Type: envelope.Type,
+			Kind:    WebhookEventKindIgnore,
+			ID:      envelope.ID,
+			RawType: envelope.Type,
 		}, nil
 	}
 }
@@ -384,4 +392,19 @@ func stripeTimestampPointer(unixSeconds int64) *time.Time {
 
 	value := time.Unix(unixSeconds, 0).UTC()
 	return &value
+}
+
+func normalizeStripeSubscriptionEntitlementStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "active", "trialing":
+		return store.EntitlementStatusActive
+	case "past_due":
+		return store.EntitlementStatusPastDue
+	case "canceled":
+		return store.EntitlementStatusCanceled
+	case "unpaid", "incomplete", "incomplete_expired", "paused", "deleted":
+		return store.EntitlementStatusExpired
+	default:
+		return store.EntitlementStatusExpired
+	}
 }

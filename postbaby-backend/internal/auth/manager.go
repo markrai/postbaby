@@ -75,6 +75,10 @@ func (m *Manager) SetupRequired(ctx context.Context) (bool, error) {
 	return !usersExist, nil
 }
 
+func (m *Manager) ListUsers(ctx context.Context) ([]store.User, error) {
+	return m.store.ListUsers(ctx)
+}
+
 func (m *Manager) CreateInitialUser(ctx context.Context, username, password string) (store.User, error) {
 	passwordHash, err := HashPassword(password)
 	if err != nil {

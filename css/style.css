@@ -71,12 +71,18 @@
     font-family: 'Kalam', sans-serif;
 }
 
+.top-app-sync-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+}
+
 @media (max-width: 768px) {
     .top-app-controls {
         position: fixed;
         top: 10px;
         right: 14px;
-        max-width: min(120px, calc(100vw - 220px));
+        max-width: min(150px, calc(100vw - 220px));
     }
 }
 
@@ -121,6 +127,111 @@
     width: 18px;
     height: 18px;
     display: block;
+}
+
+.top-app-sync-button[data-sync-state="synced"] {
+    border-color: color-mix(in srgb, #2f9d62 62%, var(--border-tab-bar));
+}
+
+.top-app-sync-button[data-sync-state="saving"] {
+    border-color: color-mix(in srgb, #2a7de1 62%, var(--border-tab-bar));
+}
+
+.top-app-sync-button[data-sync-state="dirty"] {
+    border-color: color-mix(in srgb, #c88a19 68%, var(--border-tab-bar));
+}
+
+.top-app-sync-button[data-sync-state="offline"],
+.top-app-sync-button[data-sync-state="error"],
+.top-app-sync-button[data-sync-state="conflict"] {
+    border-color: color-mix(in srgb, #c43d4b 68%, var(--border-tab-bar));
+}
+
+.sync-status-panel {
+    position: absolute;
+    top: 42px;
+    right: 0;
+    width: min(300px, calc(100vw - 24px));
+    padding: 12px;
+    border: 1px solid var(--border-tab-bar);
+    border-radius: 8px;
+    background-color: var(--bg-modal);
+    color: var(--text-primary);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+    font-family: 'Kalam', sans-serif;
+    z-index: 20;
+}
+
+.sync-status-panel[hidden] {
+    display: none;
+}
+
+.sync-status-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.sync-status-panel-state {
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.sync-status-details {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+}
+
+.sync-status-details div {
+    display: grid;
+    grid-template-columns: minmax(112px, 1fr) minmax(0, 1.2fr);
+    gap: 8px;
+    align-items: baseline;
+}
+
+.sync-status-details dt,
+.sync-status-details dd {
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.25;
+}
+
+.sync-status-details dt {
+    opacity: 0.72;
+}
+
+.sync-status-details dd {
+    overflow-wrap: anywhere;
+}
+
+.sync-status-actions {
+    display: grid;
+    gap: 6px;
+    margin-top: 12px;
+}
+
+.sync-panel-button {
+    width: 100%;
+    min-height: 32px;
+    padding: 6px 10px;
+    border: 1px solid var(--border-tab-bar);
+    border-radius: 8px;
+    background-color: var(--bg-tab);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.sync-panel-button:hover {
+    opacity: 0.86;
+}
+
+.sync-panel-button:disabled {
+    cursor: default;
+    opacity: 0.55;
 }
 
 .top-app-account-icon {
@@ -317,7 +428,9 @@
 
     .edit-textarea {
         font-size: 16px;
+        line-height: 1.35;
         padding: 10px;
+        padding-right: 15px;
         border: 1px solid var(--textarea-border);
         border-radius: 10px;
         box-sizing: border-box;
@@ -478,11 +591,15 @@ body {
 
 .grid-item {
     --note-fill: var(--note-default-bg);
+    --shape-text-pad-top: 20px;
+    --shape-text-pad-right: 20px;
+    --shape-text-pad-bottom: 20px;
+    --shape-text-pad-left: 20px;
     z-index: 2;
     background-color: transparent;
     color: var(--note-default-text);
     border-radius: 15px;
-    padding: 20px;
+    padding: var(--shape-text-pad-top) var(--shape-text-pad-right) var(--shape-text-pad-bottom) var(--shape-text-pad-left);
     text-align: left;
     box-sizing: border-box;
     cursor: pointer;
@@ -569,33 +686,8 @@ body {
     overflow: visible;
 }
 
-.grid-item[data-shape="circle"]:not(.editing) {
-    padding: 30px;
-}
-
 .grid-item[data-shape="square"]:not(.editing) {
-    padding: 26px;
     border-radius: 0;
-}
-
-.grid-item[data-shape="triangle"]:not(.editing) {
-    padding: 30px 30px 24px;
-}
-
-.grid-item[data-shape="diamond"]:not(.editing) {
-    padding: 34px;
-}
-
-.grid-item[data-shape="upsideDownTriangle"]:not(.editing) {
-    padding: 22px 30px 34px;
-}
-
-.grid-item[data-shape="hexagon"]:not(.editing) {
-    padding: 26px 34px;
-}
-
-.grid-item[data-shape="oval"]:not(.editing) {
-    padding: 24px 34px;
 }
 
 .grid-item[data-shape="square"]:not(.editing)::before {
@@ -739,12 +831,11 @@ body {
 
 .edit-textarea {
     font-size: 16px;
+    line-height: 1.35;
     padding: 10px;
-
     padding-right: 15px; /* Extra space to accommodate the scrollbar */
-
     border: 1px solid var(--textarea-border);
-    border-radius: 10px; /* Match grid-item corners */
+    border-radius: 10px;
     box-sizing: border-box; /* Consistent padding and size */
     resize: none; /* Prevent user resizing */
     width: 100%;
@@ -975,50 +1066,17 @@ h1 {
 
 .grid-item-text {
     display: block;
+    color: #000000;
+    line-height: 1.35;
+    text-decoration: none;
     white-space: pre-wrap;
     word-break: break-word;
     overflow-wrap: break-word;
 }
 
-.grid-item-text-shaper {
-    display: none;
-    width: 50%;
-    height: var(--shape-text-flow-height, 0px);
-    shape-margin: 2px;
-}
-
 .grid-item-text-content {
-    white-space: inherit;
-}
-
-.grid-item[data-shape="triangle"]:not(.editing) .grid-item-text,
-.grid-item[data-shape="upsideDownTriangle"]:not(.editing) .grid-item-text {
-    min-height: var(--shape-text-flow-height, 0px);
-}
-
-.grid-item[data-shape="triangle"]:not(.editing) .grid-item-text-shaper,
-.grid-item[data-shape="upsideDownTriangle"]:not(.editing) .grid-item-text-shaper {
     display: block;
-}
-
-.grid-item[data-shape="triangle"]:not(.editing) .grid-item-text-shaper--left {
-    float: left;
-    shape-outside: polygon(0 0, 60% 0, 12% 100%, 0 100%);
-}
-
-.grid-item[data-shape="triangle"]:not(.editing) .grid-item-text-shaper--right {
-    float: right;
-    shape-outside: polygon(40% 0, 100% 0, 100% 100%, 88% 100%);
-}
-
-.grid-item[data-shape="upsideDownTriangle"]:not(.editing) .grid-item-text-shaper--left {
-    float: left;
-    shape-outside: polygon(0 0, 18% 0, 78% 100%, 0 100%);
-}
-
-.grid-item[data-shape="upsideDownTriangle"]:not(.editing) .grid-item-text-shaper--right {
-    float: right;
-    shape-outside: polygon(82% 0, 100% 0, 100% 100%, 22% 100%);
+    white-space: inherit;
 }
 
 /* Toast Styles */

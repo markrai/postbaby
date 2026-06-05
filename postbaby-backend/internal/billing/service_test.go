@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -30,7 +31,7 @@ func TestServiceCheckoutCreatesBillingCustomerMapping(t *testing.T) {
 	user := createBillingTestUser(t, sqliteStore, "checkout-user")
 	provider := &fakeProvider{
 		available:        true,
-		name:             "stripe",
+		name:             "portablepay",
 		createCustomerID: "cus_checkout",
 		checkoutURL:      "https://checkout.stripe.test/session",
 	}
@@ -51,7 +52,7 @@ func TestServiceCheckoutCreatesBillingCustomerMapping(t *testing.T) {
 		t.Fatalf("unexpected checkout input: %+v", provider.checkoutInput)
 	}
 
-	customer, err := sqliteStore.GetBillingCustomer(context.Background(), user.ID, "stripe")
+	customer, err := sqliteStore.GetBillingCustomer(context.Background(), user.ID, "portablepay")
 	if err != nil {
 		t.Fatalf("load billing customer: %v", err)
 	}
@@ -67,7 +68,7 @@ func TestServicePortalRequiresExistingCustomer(t *testing.T) {
 	user := createBillingTestUser(t, sqliteStore, "portal-user")
 	service := NewServiceWithProvider(sqliteStore, &fakeProvider{
 		available: true,
-		name:      "stripe",
+		name:      "portablepay",
 	}, "http://127.0.0.1:8080")
 
 	if _, err := service.CreatePortalSession(context.Background(), &user); !errors.Is(err, ErrBillingCustomerNotFound) {
@@ -82,23 +83,24 @@ func TestServiceHandleWebhookUpdatesEntitlementAndMappings(t *testing.T) {
 	user := createBillingTestUser(t, sqliteStore, "webhook-user")
 	service := NewServiceWithProvider(sqliteStore, &fakeProvider{
 		available: true,
-		name:      "stripe",
+		name:      "portablepay",
 		webhookEvent: WebhookEvent{
+			Kind:                   WebhookEventKindSubscriptionStateChanged,
 			ID:                     "evt_1",
-			Type:                   "customer.subscription.updated",
+			RawType:                "portable.subscription.updated",
 			UserID:                 user.ID,
 			ProviderCustomerID:     "cus_webhook",
 			ProviderSubscriptionID: "sub_webhook",
-			Status:                 "active",
+			EntitlementStatus:      store.EntitlementStatusActive,
 			ValidUntil:             stripeTimestampPointer(time.Date(2026, time.May, 20, 12, 0, 0, 0, time.UTC).Unix()),
 		},
 	}, "http://127.0.0.1:8080")
 
-	if err := service.HandleWebhook(context.Background(), []byte(`{}`), "sig"); err != nil {
+	if err := service.HandleWebhook(context.Background(), []byte(`{}`), http.Header{"X-Provider-Signature": []string{"sig"}}); err != nil {
 		t.Fatalf("handle webhook: %v", err)
 	}
 
-	customer, err := sqliteStore.GetBillingCustomer(context.Background(), user.ID, "stripe")
+	customer, err := sqliteStore.GetBillingCustomer(context.Background(), user.ID, "portablepay")
 	if err != nil {
 		t.Fatalf("load billing customer: %v", err)
 	}
@@ -106,7 +108,7 @@ func TestServiceHandleWebhookUpdatesEntitlementAndMappings(t *testing.T) {
 		t.Fatalf("unexpected billing customer: %+v", customer)
 	}
 
-	subscription, err := sqliteStore.GetBillingSubscriptionByProviderSubscriptionID(context.Background(), "stripe", "sub_webhook")
+	subscription, err := sqliteStore.GetBillingSubscriptionByProviderSubscriptionID(context.Background(), "portablepay", "sub_webhook")
 	if err != nil {
 		t.Fatalf("load billing subscription: %v", err)
 	}
@@ -118,7 +120,7 @@ func TestServiceHandleWebhookUpdatesEntitlementAndMappings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load entitlement: %v", err)
 	}
-	if entitlement.Status != store.EntitlementStatusActive || entitlement.Source != store.EntitlementSourceStripe {
+	if entitlement.Status != store.EntitlementStatusActive || entitlement.Source != "portablepay" {
 		t.Fatalf("unexpected entitlement: %+v", entitlement)
 	}
 }
@@ -134,18 +136,19 @@ func TestServiceHandleActiveSubscriptionActivatesProvisionalUser(t *testing.T) {
 	}
 	service := NewServiceWithProvider(sqliteStore, &fakeProvider{
 		available: true,
-		name:      "stripe",
+		name:      "portablepay",
 		webhookEvent: WebhookEvent{
+			Kind:                   WebhookEventKindSubscriptionStateChanged,
 			ID:                     "evt_activate",
-			Type:                   "customer.subscription.created",
+			RawType:                "portable.subscription.created",
 			UserID:                 user.ID,
 			ProviderCustomerID:     "cus_activate",
 			ProviderSubscriptionID: "sub_activate",
-			Status:                 "active",
+			EntitlementStatus:      store.EntitlementStatusActive,
 		},
 	}, "http://127.0.0.1:8080")
 
-	if err := service.HandleWebhook(context.Background(), []byte(`{}`), "sig"); err != nil {
+	if err := service.HandleWebhook(context.Background(), []byte(`{}`), http.Header{}); err != nil {
 		t.Fatalf("handle webhook: %v", err)
 	}
 
@@ -163,27 +166,28 @@ func TestServiceHandleInvoicePaidWebhookUpdatesEntitlementFromCustomerMapping(t 
 
 	sqliteStore := openBillingTestStore(t)
 	user := createBillingTestUser(t, sqliteStore, "invoice-paid-user")
-	if _, err := sqliteStore.PutBillingCustomer(context.Background(), user.ID, "stripe", "cus_invoice"); err != nil {
+	if _, err := sqliteStore.PutBillingCustomer(context.Background(), user.ID, "portablepay", "cus_invoice"); err != nil {
 		t.Fatalf("seed billing customer: %v", err)
 	}
 	service := NewServiceWithProvider(sqliteStore, &fakeProvider{
 		available: true,
-		name:      "stripe",
+		name:      "portablepay",
 		webhookEvent: WebhookEvent{
+			Kind:                   WebhookEventKindSubscriptionStateChanged,
 			ID:                     "evt_invoice_paid",
-			Type:                   "invoice.paid",
+			RawType:                "portable.invoice.paid",
 			ProviderCustomerID:     "cus_invoice",
 			ProviderSubscriptionID: "sub_invoice",
-			Status:                 "active",
+			EntitlementStatus:      store.EntitlementStatusActive,
 			ValidUntil:             stripeTimestampPointer(time.Date(2026, time.June, 20, 12, 0, 0, 0, time.UTC).Unix()),
 		},
 	}, "http://127.0.0.1:8080")
 
-	if err := service.HandleWebhook(context.Background(), []byte(`{}`), "sig"); err != nil {
+	if err := service.HandleWebhook(context.Background(), []byte(`{}`), http.Header{}); err != nil {
 		t.Fatalf("handle invoice webhook: %v", err)
 	}
 
-	subscription, err := sqliteStore.GetBillingSubscriptionByProviderSubscriptionID(context.Background(), "stripe", "sub_invoice")
+	subscription, err := sqliteStore.GetBillingSubscriptionByProviderSubscriptionID(context.Background(), "portablepay", "sub_invoice")
 	if err != nil {
 		t.Fatalf("load billing subscription: %v", err)
 	}
@@ -195,7 +199,7 @@ func TestServiceHandleInvoicePaidWebhookUpdatesEntitlementFromCustomerMapping(t 
 	if err != nil {
 		t.Fatalf("load entitlement: %v", err)
 	}
-	if entitlement.Status != store.EntitlementStatusActive || entitlement.Source != store.EntitlementSourceStripe {
+	if entitlement.Status != store.EntitlementStatusActive || entitlement.Source != "portablepay" {
 		t.Fatalf("unexpected entitlement: %+v", entitlement)
 	}
 }
@@ -244,7 +248,7 @@ func TestServiceHandleInvoicePaidWebhookUpdatesEntitlementFromUserMetadataWithou
 		t.Fatalf("marshal invoice-first payload: %v", err)
 	}
 
-	if err := service.HandleWebhook(context.Background(), rawBody, signedStripeHeader(t, "whsec_test", rawBody, time.Now().UTC().Unix())); err != nil {
+	if err := service.HandleWebhook(context.Background(), rawBody, http.Header{"Stripe-Signature": []string{signedStripeHeader(t, "whsec_test", rawBody, time.Now().UTC().Unix())}}); err != nil {
 		t.Fatalf("handle invoice-first webhook: %v", err)
 	}
 
@@ -273,6 +277,93 @@ func TestServiceHandleInvoicePaidWebhookUpdatesEntitlementFromUserMetadataWithou
 	}
 }
 
+func TestServiceHandleNonActiveSubscriptionDoesNotActivateProvisionalUser(t *testing.T) {
+	t.Parallel()
+
+	sqliteStore := openBillingTestStore(t)
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	user, err := sqliteStore.CreateProvisionalUser(context.Background(), "provisional-past-due", "argon-hash", "provisional-owner-past-due", expiresAt)
+	if err != nil {
+		t.Fatalf("create provisional user: %v", err)
+	}
+	service := NewServiceWithProvider(sqliteStore, &fakeProvider{
+		available: true,
+		name:      "portablepay",
+		webhookEvent: WebhookEvent{
+			Kind:                   WebhookEventKindSubscriptionStateChanged,
+			ID:                     "evt_past_due",
+			RawType:                "portable.subscription.updated",
+			UserID:                 user.ID,
+			ProviderCustomerID:     "cus_past_due",
+			ProviderSubscriptionID: "sub_past_due",
+			EntitlementStatus:      store.EntitlementStatusPastDue,
+			ValidUntil:             stripeTimestampPointer(time.Date(2026, time.August, 20, 12, 0, 0, 0, time.UTC).Unix()),
+		},
+	}, "http://127.0.0.1:8080")
+
+	if err := service.HandleWebhook(context.Background(), []byte(`{}`), http.Header{}); err != nil {
+		t.Fatalf("handle webhook: %v", err)
+	}
+
+	loaded, err := sqliteStore.GetUserByUsername(context.Background(), "provisional-past-due")
+	if err != nil {
+		t.Fatalf("load provisional user: %v", err)
+	}
+	if loaded.AccountStatus != store.AccountStatusCheckoutPending {
+		t.Fatalf("expected provisional user to remain checkout_pending, got %+v", loaded)
+	}
+	if loaded.CheckoutExpiresAt == nil {
+		t.Fatalf("expected provisional checkout expiry to remain set, got %+v", loaded)
+	}
+
+	subscription, err := sqliteStore.GetBillingSubscriptionByProviderSubscriptionID(context.Background(), "portablepay", "sub_past_due")
+	if err != nil {
+		t.Fatalf("load billing subscription: %v", err)
+	}
+	if subscription.Status != store.EntitlementStatusPastDue {
+		t.Fatalf("expected past_due billing subscription status, got %+v", subscription)
+	}
+
+	entitlement, err := sqliteStore.GetAccountEntitlement(context.Background(), user.ID, store.EntitlementKeyHostedSync)
+	if err != nil {
+		t.Fatalf("load entitlement: %v", err)
+	}
+	if entitlement.Status != store.EntitlementStatusPastDue || entitlement.Source != "portablepay" {
+		t.Fatalf("unexpected entitlement: %+v", entitlement)
+	}
+}
+
+func TestServiceHandleWebhookRejectsInvalidNormalizedEntitlementStatus(t *testing.T) {
+	t.Parallel()
+
+	sqliteStore := openBillingTestStore(t)
+	user := createBillingTestUser(t, sqliteStore, "invalid-status-user")
+	service := NewServiceWithProvider(sqliteStore, &fakeProvider{
+		available: true,
+		name:      "portablepay",
+		webhookEvent: WebhookEvent{
+			Kind:                   WebhookEventKindSubscriptionStateChanged,
+			ID:                     "evt_invalid_status",
+			RawType:                "portable.subscription.updated",
+			UserID:                 user.ID,
+			ProviderCustomerID:     "cus_invalid_status",
+			ProviderSubscriptionID: "sub_invalid_status",
+			EntitlementStatus:      "bogus_status",
+		},
+	}, "http://127.0.0.1:8080")
+
+	if err := service.HandleWebhook(context.Background(), []byte(`{}`), http.Header{}); err == nil {
+		t.Fatal("expected invalid normalized entitlement status to be rejected")
+	}
+
+	if _, err := sqliteStore.GetAccountEntitlement(context.Background(), user.ID, store.EntitlementKeyHostedSync); !errors.Is(err, store.ErrEntitlementNotFound) {
+		t.Fatalf("expected no hosted sync entitlement for invalid normalized status, got %v", err)
+	}
+	if _, err := sqliteStore.GetBillingSubscriptionByProviderSubscriptionID(context.Background(), "portablepay", "sub_invalid_status"); !errors.Is(err, store.ErrBillingSubscriptionNotFound) {
+		t.Fatalf("expected no billing subscription for invalid normalized status, got %v", err)
+	}
+}
+
 func TestServiceHandlePaidInvoiceWithoutSubscriptionDoesNotGrantHostedSync(t *testing.T) {
 	t.Parallel()
 
@@ -280,24 +371,25 @@ func TestServiceHandlePaidInvoiceWithoutSubscriptionDoesNotGrantHostedSync(t *te
 	user := createBillingTestUser(t, sqliteStore, "invoice-no-subscription-user")
 	service := NewServiceWithProvider(sqliteStore, &fakeProvider{
 		available: true,
-		name:      "stripe",
+		name:      "portablepay",
 		webhookEvent: WebhookEvent{
+			Kind:               WebhookEventKindSubscriptionStateChanged,
 			ID:                 "evt_invoice_no_subscription",
-			Type:               "invoice.paid",
+			RawType:            "portable.invoice.paid",
 			UserID:             user.ID,
 			ProviderCustomerID: "cus_no_subscription",
-			Status:             "active",
+			EntitlementStatus:  store.EntitlementStatusActive,
 		},
 	}, "http://127.0.0.1:8080")
 
-	if err := service.HandleWebhook(context.Background(), []byte(`{}`), "sig"); err != nil {
+	if err := service.HandleWebhook(context.Background(), []byte(`{}`), http.Header{}); err != nil {
 		t.Fatalf("handle non-subscription invoice webhook: %v", err)
 	}
 
 	if _, err := sqliteStore.GetAccountEntitlement(context.Background(), user.ID, store.EntitlementKeyHostedSync); !errors.Is(err, store.ErrEntitlementNotFound) {
 		t.Fatalf("expected no hosted sync entitlement for invoice without subscription, got %v", err)
 	}
-	if _, err := sqliteStore.GetBillingCustomer(context.Background(), user.ID, "stripe"); !errors.Is(err, store.ErrBillingCustomerNotFound) {
+	if _, err := sqliteStore.GetBillingCustomer(context.Background(), user.ID, "portablepay"); !errors.Is(err, store.ErrBillingCustomerNotFound) {
 		t.Fatalf("expected no billing customer for invoice without subscription, got %v", err)
 	}
 }
@@ -309,22 +401,23 @@ func TestServiceHandleWebhookIsIdempotentEnoughForRepeatedEvents(t *testing.T) {
 	user := createBillingTestUser(t, sqliteStore, "repeat-webhook-user")
 	provider := &fakeProvider{
 		available: true,
-		name:      "stripe",
+		name:      "portablepay",
 		webhookEvent: WebhookEvent{
+			Kind:                   WebhookEventKindSubscriptionStateChanged,
 			ID:                     "evt_repeat",
-			Type:                   "customer.subscription.updated",
+			RawType:                "portable.subscription.updated",
 			UserID:                 user.ID,
 			ProviderCustomerID:     "cus_repeat",
 			ProviderSubscriptionID: "sub_repeat",
-			Status:                 "past_due",
+			EntitlementStatus:      store.EntitlementStatusPastDue,
 		},
 	}
 	service := NewServiceWithProvider(sqliteStore, provider, "http://127.0.0.1:8080")
 
-	if err := service.HandleWebhook(context.Background(), []byte(`{}`), "sig"); err != nil {
+	if err := service.HandleWebhook(context.Background(), []byte(`{}`), http.Header{}); err != nil {
 		t.Fatalf("first handle webhook: %v", err)
 	}
-	if err := service.HandleWebhook(context.Background(), []byte(`{}`), "sig"); err != nil {
+	if err := service.HandleWebhook(context.Background(), []byte(`{}`), http.Header{}); err != nil {
 		t.Fatalf("second handle webhook: %v", err)
 	}
 
@@ -375,7 +468,7 @@ func (p *fakeProvider) CreatePortalSession(ctx context.Context, input PortalSess
 	return p.portalURL, nil
 }
 
-func (p *fakeProvider) ParseWebhook(ctx context.Context, rawBody []byte, signatureHeader string) (WebhookEvent, error) {
+func (p *fakeProvider) ParseWebhook(ctx context.Context, rawBody []byte, headers http.Header) (WebhookEvent, error) {
 	if p.webhookErr != nil {
 		return WebhookEvent{}, p.webhookErr
 	}

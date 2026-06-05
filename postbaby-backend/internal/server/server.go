@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -41,6 +42,23 @@ type authPageData struct {
 	Username          string
 	ShowConfirm       bool
 	PasswordMinLength int
+}
+
+type manageAccountsPageData struct {
+	Title             string
+	Heading           string
+	Body              string
+	Error             string
+	Username          string
+	SubmitLabel       string
+	PasswordMinLength int
+	Accounts          []manageAccountsPageRow
+}
+
+type manageAccountsPageRow struct {
+	Username  string
+	IsAdmin   bool
+	IsCurrent bool
 }
 
 type runtimeAccount struct {
@@ -495,15 +513,12 @@ func (s *Server) handleAdminAccounts(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		renderAuthPage(w, http.StatusOK, authPageData{
-			Title:             "Postbaby Accounts",
-			Heading:           "Create a Postbaby account",
-			Body:              "Create another local account for this server.",
-			Action:            "/admin/accounts",
-			SubmitLabel:       "Create account",
-			ShowConfirm:       true,
-			PasswordMinLength: auth.PasswordMinLength(),
-		})
+		page, pageErr := s.buildAdminAccountsPageData(r.Context(), user, "", "")
+		if pageErr != nil {
+			http.Error(w, "failed to load accounts page", http.StatusInternalServerError)
+			return
+		}
+		renderManageAccountsPage(w, http.StatusOK, page)
 	case http.MethodPost:
 		s.handleAdminAccountsPost(w, r)
 	default:
@@ -525,37 +540,54 @@ func (s *Server) handleAdminAccountsPost(w http.ResponseWriter, r *http.Request)
 	username := strings.TrimSpace(r.FormValue("username"))
 	password := r.FormValue("password")
 	confirmPassword := r.FormValue("confirmPassword")
-	page := authPageData{
-		Title:             "Postbaby Accounts",
-		Heading:           "Create a Postbaby account",
-		Body:              "Create another local account for this server.",
-		Action:            "/admin/accounts",
-		SubmitLabel:       "Create account",
-		Username:          username,
-		ShowConfirm:       true,
-		PasswordMinLength: auth.PasswordMinLength(),
+	currentUser, err := s.requireAuthenticatedUserOrLogin(w, r)
+	if err != nil {
+		return
+	}
+	if !currentUser.IsAdmin {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	buildPage := func(errorMessage string) (manageAccountsPageData, error) {
+		return s.buildAdminAccountsPageData(r.Context(), currentUser, username, errorMessage)
 	}
 
 	if username == "" || password == "" {
-		page.Error = "Enter both username and password."
-		renderAuthPage(w, http.StatusBadRequest, page)
+		page, pageErr := buildPage("Enter both username and password.")
+		if pageErr != nil {
+			http.Error(w, "failed to load accounts page", http.StatusInternalServerError)
+			return
+		}
+		renderManageAccountsPage(w, http.StatusBadRequest, page)
 		return
 	}
 	if len(password) < auth.PasswordMinLength() {
-		page.Error = "Choose a longer password."
-		renderAuthPage(w, http.StatusBadRequest, page)
+		page, pageErr := buildPage("Choose a longer password.")
+		if pageErr != nil {
+			http.Error(w, "failed to load accounts page", http.StatusInternalServerError)
+			return
+		}
+		renderManageAccountsPage(w, http.StatusBadRequest, page)
 		return
 	}
 	if password != confirmPassword {
-		page.Error = "Passwords do not match."
-		renderAuthPage(w, http.StatusBadRequest, page)
+		page, pageErr := buildPage("Passwords do not match.")
+		if pageErr != nil {
+			http.Error(w, "failed to load accounts page", http.StatusInternalServerError)
+			return
+		}
+		renderManageAccountsPage(w, http.StatusBadRequest, page)
 		return
 	}
 
 	if _, err := s.authManager.CreateUser(r.Context(), username, password); err != nil {
 		if errors.Is(err, store.ErrUsernameTaken) {
-			page.Error = "That username is already in use."
-			renderAuthPage(w, http.StatusConflict, page)
+			page, pageErr := buildPage("That username is already in use.")
+			if pageErr != nil {
+				http.Error(w, "failed to load accounts page", http.StatusInternalServerError)
+				return
+			}
+			renderManageAccountsPage(w, http.StatusConflict, page)
 			return
 		}
 		http.Error(w, "failed to create account", http.StatusInternalServerError)
@@ -704,7 +736,7 @@ func (s *Server) handleBillingWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.billingService.HandleWebhook(r.Context(), rawBody, strings.TrimSpace(r.Header.Get("Stripe-Signature"))); err != nil {
+	if err := s.billingService.HandleWebhook(r.Context(), rawBody, r.Header); err != nil {
 		switch {
 		case errors.Is(err, billing.ErrInvalidWebhookSignature):
 			http.Error(w, "invalid webhook signature", http.StatusBadRequest)
@@ -762,13 +794,17 @@ func (s *Server) currentRuntimeConfig(w http.ResponseWriter, r *http.Request) (r
 	}
 
 	runtime.IsAuthenticated = true
+	storageKey, err := storageKeyForUser(s.deploymentMode, user)
+	if err != nil {
+		return runtimeConfig{}, err
+	}
 	runtime.Account = &runtimeAccount{
 		Username:    user.Username,
 		DisplayName: user.Username,
 		Email:       "",
 		AvatarURL:   "",
 		IsAdmin:     user.IsAdmin,
-		StorageKey:  storageKeyForUser(s.deploymentMode, user),
+		StorageKey:  storageKey,
 		Status:      user.AccountStatus,
 	}
 	if s.deploymentMode == config.DeploymentModeCloud {
@@ -905,6 +941,37 @@ func (s *Server) signupPageData(username string) authPageData {
 	}
 }
 
+func (s *Server) buildAdminAccountsPageData(ctx context.Context, currentUser *store.User, username, errorMessage string) (manageAccountsPageData, error) {
+	users, err := s.authManager.ListUsers(ctx)
+	if err != nil {
+		return manageAccountsPageData{}, err
+	}
+
+	rows := make([]manageAccountsPageRow, 0, len(users))
+	currentUserID := int64(0)
+	if currentUser != nil {
+		currentUserID = currentUser.ID
+	}
+	for _, user := range users {
+		rows = append(rows, manageAccountsPageRow{
+			Username:  user.Username,
+			IsAdmin:   user.IsAdmin,
+			IsCurrent: currentUser != nil && user.ID == currentUserID,
+		})
+	}
+
+	return manageAccountsPageData{
+		Title:             "Manage Postbaby accounts",
+		Heading:           "Manage Postbaby accounts",
+		Body:              "Manage the local accounts on this Postbaby server and create additional user accounts.",
+		Error:             errorMessage,
+		Username:          username,
+		SubmitLabel:       "Create account",
+		PasswordMinLength: auth.PasswordMinLength(),
+		Accounts:          rows,
+	}, nil
+}
+
 func (s *Server) authorityModel() string {
 	switch s.deploymentMode {
 	case config.DeploymentModeSelfHosted:
@@ -924,9 +991,18 @@ func (s *Server) defaultSyncPausedReason() string {
 	return ""
 }
 
-func storageKeyForUser(deploymentMode config.DeploymentMode, user *store.User) string {
-	sum := sha256.Sum256([]byte(string(deploymentMode) + ":" + user.OwnerKey))
-	return hex.EncodeToString(sum[:])
+func storageKeyForUser(deploymentMode config.DeploymentMode, user *store.User) (string, error) {
+	if user == nil {
+		return "", errors.New("authenticated account missing user identity")
+	}
+
+	ownerKey := strings.TrimSpace(user.OwnerKey)
+	if ownerKey == "" {
+		return "", errors.New("authenticated account missing owner key")
+	}
+
+	sum := sha256.Sum256([]byte(string(deploymentMode) + ":" + ownerKey))
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func (s *Server) cleanupExpiredProvisionalUsers(r *http.Request) {
@@ -971,4 +1047,10 @@ func renderAuthPage(w http.ResponseWriter, status int, data authPageData) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = authPageTemplate.Execute(w, data)
+}
+
+func renderManageAccountsPage(w http.ResponseWriter, status int, data manageAccountsPageData) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_ = manageAccountsPageTemplate.Execute(w, data)
 }

@@ -15,6 +15,7 @@ type DocumentStore interface {
 
 type IdentityStore interface {
 	UsersExist(ctx context.Context) (bool, error)
+	ListUsers(ctx context.Context) ([]User, error)
 	BootstrapOwnerKey(ctx context.Context) (string, error)
 	CreateInitialUser(ctx context.Context, username, passwordHash, ownerKey string) (User, error)
 	CreateUser(ctx context.Context, username, passwordHash, ownerKey string) (User, error)
