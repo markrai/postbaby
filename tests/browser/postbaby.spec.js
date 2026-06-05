@@ -21,6 +21,18 @@ const FIXED_RATIO_HEIGHT_BY_WIDTH = {
   upsideDownTriangle: 150 / 170,
   hexagon: 135 / 170
 };
+const SYNC_HASH_STORAGE_KEYS = [
+  'tabs',
+  'activeTabId',
+  'theme',
+  'disableColorChange',
+  'disableNoteResize',
+  'hideInstructions',
+  'corporateMode',
+  'defaultColorEnabled',
+  'defaultColor',
+  'hasRunBefore'
+];
 const FORBIDDEN_SHAPE_SIZE_FIELDS = ITEM_SHAPES
   .flatMap((shape) => [`${shape}Width`, `${shape}Height`])
   .concat(['shapeSizes', 'sizeByShape']);
@@ -104,6 +116,51 @@ function buildIndexedDBMeta(snapshot, overrides = {}) {
     lastWriteAt: TIMESTAMP,
     snapshotKeyCount: Object.keys(snapshot).length
   }, overrides);
+}
+
+function hashStringForTest(value) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `fnv1a32:${(hash >>> 0).toString(16).padStart(8, '0')}:${value.length}`;
+}
+
+function computeTestSnapshotHash(snapshot) {
+  const canonical = {};
+  SYNC_HASH_STORAGE_KEYS.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(snapshot, key) && typeof snapshot[key] === 'string') {
+      canonical[key] = snapshot[key];
+    }
+  });
+  return hashStringForTest(JSON.stringify(canonical));
+}
+
+function addDurableCloudSyncMetadata(snapshot, options = {}) {
+  const localHash = options.localHash || computeTestSnapshotHash(snapshot);
+  const uploadedHash = options.uploadedHash === undefined ? localHash : options.uploadedHash;
+  const revision = typeof options.revision === 'number' ? options.revision : null;
+
+  snapshot.postbabyLocalSnapshotHash = localHash;
+  if (uploadedHash !== null) {
+    snapshot.postbabyLastUploadedSnapshotHash = uploadedHash;
+  }
+  snapshot.postbabyPendingCloudUpload = options.pending ? 'true' : 'false';
+  if (options.pending) {
+    snapshot.postbabyLocalModifiedAt = options.localModifiedAt || new Date().toISOString();
+  }
+  if (options.lastCloudUploadedAt) {
+    snapshot.postbabyLastCloudUploadedAt = options.lastCloudUploadedAt;
+  }
+  if (revision !== null) {
+    snapshot.postbabyLastKnownServerRevision = String(revision);
+    snapshot.postbabyLastSuccessfulUploadServerRevision = String(revision);
+  }
+  if (options.lastError) {
+    snapshot.postbabyLastSyncError = options.lastError;
+  }
+  return snapshot;
 }
 
 function buildServerPayload(noteText, version) {
@@ -4816,6 +4873,282 @@ test.describe('Mocked sync startup reconciliation', () => {
     await page.goto('/index.html');
     await expectNoteVisible(page, 'Server Version 11');
     expect(dialogs).toEqual([]);
+  });
+
+  test('repairs durable pending upload after reload when server revision is unchanged', async ({ page }) => {
+    const localSnapshot = addDurableCloudSyncMetadata(
+      buildLocalSnapshot('Quick Close Repair Note', { syncVersion: 6 }),
+      {
+        pending: true,
+        uploadedHash: 'previous-uploaded-hash',
+        revision: 6,
+        localModifiedAt: new Date().toISOString(),
+        lastCloudUploadedAt: TIMESTAMP
+      }
+    );
+    let capturedSaveBody = null;
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Server Version 6', 6),
+      onSave: async (body) => {
+        capturedSaveBody = body;
+        return {
+          status: 200,
+          body: { ok: true, version: 7, updatedAt: TIMESTAMP }
+        };
+      }
+    });
+
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Quick Close Repair Note');
+    await expect.poll(() => capturedSaveBody !== null).toBe(true);
+    expect(capturedSaveBody.baseServerRevision).toBe(6);
+    expect(JSON.parse(capturedSaveBody.data.tabs)[0].items[0].name).toBe('Quick Close Repair Note');
+
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    expect(debugState.syncStoredVersion).toBe(7);
+    expect(debugState.durablePendingCloudUpload).toBe(false);
+    expect(debugState.durableSyncMetadata.pendingCloudUpload).toBe(false);
+    expect(debugState.durableSyncMetadata.localSnapshotHash).toBe(debugState.durableSyncMetadata.lastUploadedSnapshotHash);
+  });
+
+  test('shows pending instead of synced when local hash differs while server revision matches', async ({ page }) => {
+    const localSnapshot = addDurableCloudSyncMetadata(
+      buildLocalSnapshot('Pending Equal Revision Note', { syncVersion: 6 }),
+      {
+        pending: true,
+        uploadedHash: 'previous-uploaded-hash',
+        revision: 6,
+        localModifiedAt: new Date().toISOString()
+      }
+    );
+    let releaseMeta;
+    const metaGate = new Promise((resolve) => {
+      releaseMeta = resolve;
+    });
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await mockRuntimeConfig(page, {
+      deploymentMode: 'selfhosted',
+      authorityModel: 'server_authoritative',
+      authAvailable: true,
+      authRequired: true,
+      isAuthenticated: true,
+      syncAvailable: true,
+      syncRequiresAuth: true,
+      syncUsable: true,
+      syncPausedReason: '',
+      account: {
+        username: 'owner',
+        displayName: 'owner',
+        email: '',
+        avatarUrl: '',
+        isAdmin: true,
+        storageKey: 'owner-scope',
+        status: 'active'
+      }
+    });
+    await page.route(/\/api\/document\/meta(?:\?.*)?$/, async (route) => {
+      await metaGate;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=utf-8',
+        headers: { 'Cache-Control': 'no-store' },
+        body: JSON.stringify({ ok: true, exists: true, version: 6, updatedAt: TIMESTAMP })
+      });
+    });
+    await page.route(/\/api\/document(?:\?.*)?$/, async (route) => {
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json; charset=utf-8',
+        headers: { 'Cache-Control': 'no-store' },
+        body: JSON.stringify({ ok: false })
+      });
+    });
+
+    await page.goto('/index.html');
+    await expect(page.locator('#syncStateStatus')).toContainText('Sync pending');
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    expect(debugState.syncState).toBe('dirty');
+    expect(debugState.durablePendingCloudUpload).toBe(true);
+    releaseMeta();
+  });
+
+  test('manual Sync now uploads pending changes and clears durable pending only after success', async ({ page }) => {
+    const localSnapshot = addDurableCloudSyncMetadata(
+      buildLocalSnapshot('Manual Sync Success', { syncVersion: 6 }),
+      {
+        pending: false,
+        revision: 6,
+        lastCloudUploadedAt: TIMESTAMP
+      }
+    );
+    let capturedSaveBody = null;
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Server Version 6', 6),
+      onSave: async (body) => {
+        capturedSaveBody = body;
+        return {
+          status: 200,
+          body: { ok: true, version: 7, updatedAt: TIMESTAMP }
+        };
+      }
+    });
+
+    await page.goto('/index.html');
+    await page.locator('#syncStatusButton').click();
+    await page.locator('#syncNowButton').click();
+    await expect.poll(() => capturedSaveBody !== null).toBe(true);
+
+    await expect.poll(async () => {
+      const state = await page.evaluate(() => window.postbabyDebugSync());
+      return state.syncStoredVersion;
+    }).toBe(7);
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    expect(capturedSaveBody.baseServerRevision).toBe(6);
+    expect(debugState.durablePendingCloudUpload).toBe(false);
+  });
+
+  test('manual Sync now preserves durable pending state on upload failure', async ({ page }) => {
+    const localSnapshot = addDurableCloudSyncMetadata(
+      buildLocalSnapshot('Manual Sync Failure', { syncVersion: 6 }),
+      {
+        pending: false,
+        revision: 6,
+        lastCloudUploadedAt: TIMESTAMP
+      }
+    );
+    let saveAttempts = 0;
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Server Version 6', 6),
+      onSave: async () => {
+        saveAttempts += 1;
+        return {
+          status: 500,
+          body: { ok: false, error: { code: 'server_error', message: 'forced failure' } }
+        };
+      }
+    });
+    attachDialogHandler(page, [{ type: 'alert', action: 'accept', messageIncludes: 'forced failure' }], []);
+
+    await page.goto('/index.html');
+    await page.locator('#syncStatusButton').click();
+    await page.locator('#syncNowButton').click();
+    await expect.poll(() => saveAttempts).toBeGreaterThan(0);
+    await expect.poll(async () => {
+      const state = await page.evaluate(() => window.postbabyDebugSync());
+      return state.durableSyncMetadata.lastError || '';
+    }).toContain('forced failure');
+
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    expect(debugState.durablePendingCloudUpload).toBe(true);
+    expect(debugState.durableSyncMetadata.lastError).toContain('forced failure');
+  });
+
+  test('structural tab creation syncs immediately while note drag remains debounced', async ({ page }) => {
+    const localSnapshot = addDurableCloudSyncMetadata(
+      buildLocalSnapshot('Debounced Drag Note', { syncVersion: 6 }),
+      {
+        pending: false,
+        revision: 6,
+        lastCloudUploadedAt: TIMESTAMP
+      }
+    );
+    const saveTimes = [];
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Server Version 6', 6),
+      onSave: async () => {
+        saveTimes.push(Date.now());
+        return {
+          status: 200,
+          body: { ok: true, version: 7 + saveTimes.length, updatedAt: TIMESTAMP }
+        };
+      }
+    });
+
+    await page.goto('/index.html');
+    const createStartedAt = Date.now();
+    await page.locator('#addTab').click();
+    await expect.poll(() => saveTimes.length).toBeGreaterThan(0);
+    expect(saveTimes[0] - createStartedAt).toBeLessThan(1000);
+
+    await prepareBlankPage(page);
+    const dragSnapshot = addDurableCloudSyncMetadata(
+      buildLocalSnapshot('Debounced Drag Note', { syncVersion: 6 }),
+      {
+        pending: false,
+        revision: 6,
+        lastCloudUploadedAt: TIMESTAMP
+      }
+    );
+    saveTimes.length = 0;
+    await seedLocalStorage(page, dragSnapshot, 'owner-scope');
+    await seedIndexedDB(page, dragSnapshot, buildIndexedDBMeta(dragSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await page.goto('/index.html');
+    await dragNoteBy(page, page.locator('.grid-item[data-id="item-1"]'), 80, 40);
+    await page.waitForTimeout(700);
+    expect(saveTimes).toHaveLength(0);
+    await expect.poll(() => saveTimes.length).toBeGreaterThan(0);
+  });
+
+  test('durable pending local change conflicts when server revision advanced', async ({ page }) => {
+    const localSnapshot = addDurableCloudSyncMetadata(
+      buildLocalSnapshot('Local Pending Conflict', { syncVersion: 6 }),
+      {
+        pending: true,
+        uploadedHash: 'previous-uploaded-hash',
+        revision: 6,
+        localModifiedAt: new Date().toISOString()
+      }
+    );
+    let saveAttempted = false;
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 7, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Server Version 7', 7),
+      onSave: async () => {
+        saveAttempted = true;
+        return {
+          status: 200,
+          body: { ok: true, version: 8, updatedAt: TIMESTAMP }
+        };
+      }
+    });
+
+    await page.goto('/index.html');
+    await expect(page.locator('#syncStateStatus')).toContainText('Conflict needs review');
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    expect(debugState.syncState).toBe('conflict');
+    expect(debugState.durablePendingCloudUpload).toBe(true);
+    expect(saveAttempted).toBe(false);
+
+    await page.locator('#syncStatusButton').click();
+    await expect(page.locator('#syncUseBrowserButton')).toBeVisible();
+    await expect(page.locator('#syncUseCloudButton')).toBeVisible();
   });
 });
 

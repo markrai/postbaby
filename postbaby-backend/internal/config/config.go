@@ -15,6 +15,7 @@ const (
 	defaultStatic         = "../"
 	defaultSessionTTL     = 30 * 24 * time.Hour
 	defaultDeploymentMode = DeploymentModeStatic
+	cloudMultiUserAlias   = "cloud_multi_user"
 )
 
 type DeploymentMode string
@@ -190,8 +191,10 @@ func parseDeploymentModeEnv(name string, defaultValue DeploymentMode) (Deploymen
 		return DeploymentModeSelfHosted, nil
 	case DeploymentModeCloud:
 		return DeploymentModeCloud, nil
+	case DeploymentMode(cloudMultiUserAlias):
+		return DeploymentModeCloud, nil
 	default:
-		return "", fmt.Errorf("%s must be one of %q, %q, or %q", name, DeploymentModeStatic, DeploymentModeSelfHosted, DeploymentModeCloud)
+		return "", fmt.Errorf("%s must be one of %q, %q, %q, or %q", name, DeploymentModeStatic, DeploymentModeSelfHosted, DeploymentModeCloud, cloudMultiUserAlias)
 	}
 }
 

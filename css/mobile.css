@@ -51,7 +51,7 @@
         top: 8px;
         right: 8px;
         gap: 6px;
-        max-width: min(96px, calc(100vw - 180px));
+        max-width: min(132px, calc(100vw - 180px));
     }
 
     .top-app-control-button {
@@ -63,6 +63,12 @@
     .top-app-account-icon svg {
         width: 16px;
         height: 16px;
+    }
+
+    .sync-status-panel {
+        top: 38px;
+        right: 0;
+        width: min(292px, calc(100vw - 16px));
     }
 
     .logo-container {

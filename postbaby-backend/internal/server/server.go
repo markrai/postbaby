@@ -736,7 +736,7 @@ func (s *Server) handleBillingWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.billingService.HandleWebhook(r.Context(), rawBody, strings.TrimSpace(r.Header.Get("Stripe-Signature"))); err != nil {
+	if err := s.billingService.HandleWebhook(r.Context(), rawBody, r.Header); err != nil {
 		switch {
 		case errors.Is(err, billing.ErrInvalidWebhookSignature):
 			http.Error(w, "invalid webhook signature", http.StatusBadRequest)

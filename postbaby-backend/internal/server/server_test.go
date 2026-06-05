@@ -985,7 +985,7 @@ func TestBillingRoutesDisabledOutsideConfiguredCloudMode(t *testing.T) {
 			env := newServerTestEnvWithOptions(t, mode, serverTestOptions{
 				billingProvider: &serverFakeBillingProvider{
 					available: true,
-					name:      "stripe",
+					name:      "portablepay",
 				},
 				publicBaseURL: "http://127.0.0.1:8080",
 			})
@@ -1024,7 +1024,7 @@ func TestBillingCheckoutRequiresAuthenticationAndRedirectsToProvider(t *testing.
 
 	provider := &serverFakeBillingProvider{
 		available:        true,
-		name:             "stripe",
+		name:             "portablepay",
 		createCustomerID: "cus_checkout",
 		checkoutURL:      "https://checkout.stripe.test/session",
 	}
@@ -1066,7 +1066,7 @@ func TestBillingPortalRequiresAuthenticationAndRedirectsToProvider(t *testing.T)
 
 	provider := &serverFakeBillingProvider{
 		available: true,
-		name:      "stripe",
+		name:      "portablepay",
 		portalURL: "https://billing.stripe.test/session",
 	}
 	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloud, serverTestOptions{
@@ -1075,7 +1075,7 @@ func TestBillingPortalRequiresAuthenticationAndRedirectsToProvider(t *testing.T)
 	})
 
 	user := createHostedUser(t, env, "portal-user")
-	if _, err := env.store.PutBillingCustomer(context.Background(), user.ID, "stripe", "cus_portal"); err != nil {
+	if _, err := env.store.PutBillingCustomer(context.Background(), user.ID, "portablepay", "cus_portal"); err != nil {
 		t.Fatalf("seed billing customer: %v", err)
 	}
 
@@ -1111,7 +1111,7 @@ func TestBillingCheckoutRejectsCrossOriginPost(t *testing.T) {
 	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloud, serverTestOptions{
 		billingProvider: &serverFakeBillingProvider{
 			available: true,
-			name:      "stripe",
+			name:      "portablepay",
 		},
 		publicBaseURL: "http://127.0.0.1:8080",
 	})
@@ -1136,12 +1136,12 @@ func TestBillingPortalRejectsCrossOriginPost(t *testing.T) {
 	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloud, serverTestOptions{
 		billingProvider: &serverFakeBillingProvider{
 			available: true,
-			name:      "stripe",
+			name:      "portablepay",
 		},
 		publicBaseURL: "http://127.0.0.1:8080",
 	})
 	user := createHostedUser(t, env, "billing-user")
-	if _, err := env.store.PutBillingCustomer(context.Background(), user.ID, "stripe", "cus_portal"); err != nil {
+	if _, err := env.store.PutBillingCustomer(context.Background(), user.ID, "portablepay", "cus_portal"); err != nil {
 		t.Fatalf("seed billing customer: %v", err)
 	}
 
@@ -1163,15 +1163,17 @@ func TestBillingWebhookRejectsInvalidSignature(t *testing.T) {
 
 	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloud, serverTestOptions{
 		billingProvider: &serverFakeBillingProvider{
-			available:  true,
-			name:       "stripe",
-			webhookErr: billing.ErrInvalidWebhookSignature,
+			available:           true,
+			name:                "portablepay",
+			expectedHeaderName:  "X-Provider-Signature",
+			expectedHeaderValue: "bad",
+			webhookErr:          billing.ErrInvalidWebhookSignature,
 		},
 		publicBaseURL: "http://127.0.0.1:8080",
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/billing/webhook", strings.NewReader(`{"id":"evt_bad"}`))
-	req.Header.Set("Stripe-Signature", "bad")
+	req.Header.Set("X-Provider-Signature", "bad")
 	rec := httptest.NewRecorder()
 	env.handler.ServeHTTP(rec, req)
 
@@ -1186,18 +1188,21 @@ func TestBillingWebhookIgnoresUnknownValidEvent(t *testing.T) {
 
 	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloud, serverTestOptions{
 		billingProvider: &serverFakeBillingProvider{
-			available: true,
-			name:      "stripe",
+			available:           true,
+			name:                "portablepay",
+			expectedHeaderName:  "X-Provider-Signature",
+			expectedHeaderValue: "valid",
 			webhookEvent: billing.WebhookEvent{
-				ID:   "evt_unknown",
-				Type: "ping.unknown",
+				Kind:    billing.WebhookEventKindIgnore,
+				ID:      "evt_unknown",
+				RawType: "ping.unknown",
 			},
 		},
 		publicBaseURL: "http://127.0.0.1:8080",
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/billing/webhook", strings.NewReader(`{"id":"evt_unknown"}`))
-	req.Header.Set("Stripe-Signature", "valid")
+	req.Header.Set("X-Provider-Signature", "valid")
 	rec := httptest.NewRecorder()
 	env.handler.ServeHTTP(rec, req)
 
@@ -1211,8 +1216,10 @@ func TestBillingWebhookUpdatesEntitlementAndSyncSourceOfTruth(t *testing.T) {
 	t.Parallel()
 
 	provider := &serverFakeBillingProvider{
-		available: true,
-		name:      "stripe",
+		available:           true,
+		name:                "portablepay",
+		expectedHeaderName:  "X-Provider-Signature",
+		expectedHeaderValue: "valid",
 	}
 	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloud, serverTestOptions{
 		billingProvider: provider,
@@ -1238,14 +1245,15 @@ func TestBillingWebhookUpdatesEntitlementAndSyncSourceOfTruth(t *testing.T) {
 	}
 
 	provider.webhookEvent = billing.WebhookEvent{
+		Kind:                   billing.WebhookEventKindCustomerLinked,
 		ID:                     "evt_checkout",
-		Type:                   "checkout.session.completed",
+		RawType:                "portable.checkout.completed",
 		UserID:                 user.ID,
 		ProviderCustomerID:     "cus_billed",
 		ProviderSubscriptionID: "sub_billed",
 	}
 	checkoutReq := httptest.NewRequest(http.MethodPost, "/billing/webhook", strings.NewReader(`{"id":"evt_checkout"}`))
-	checkoutReq.Header.Set("Stripe-Signature", "valid")
+	checkoutReq.Header.Set("X-Provider-Signature", "valid")
 	checkoutRec := httptest.NewRecorder()
 	env.handler.ServeHTTP(checkoutRec, checkoutReq)
 	if checkoutRec.Code != http.StatusOK {
@@ -1253,15 +1261,16 @@ func TestBillingWebhookUpdatesEntitlementAndSyncSourceOfTruth(t *testing.T) {
 	}
 
 	provider.webhookEvent = billing.WebhookEvent{
+		Kind:                   billing.WebhookEventKindSubscriptionStateChanged,
 		ID:                     "evt_subscription",
-		Type:                   "customer.subscription.created",
+		RawType:                "portable.subscription.created",
 		ProviderCustomerID:     "cus_billed",
 		ProviderSubscriptionID: "sub_billed",
-		Status:                 "active",
+		EntitlementStatus:      store.EntitlementStatusActive,
 		ValidUntil:             timePointer(time.Date(2026, time.May, 25, 12, 0, 0, 0, time.UTC)),
 	}
 	subscriptionReq := httptest.NewRequest(http.MethodPost, "/billing/webhook", strings.NewReader(`{"id":"evt_subscription"}`))
-	subscriptionReq.Header.Set("Stripe-Signature", "valid")
+	subscriptionReq.Header.Set("X-Provider-Signature", "valid")
 	subscriptionRec := httptest.NewRecorder()
 	env.handler.ServeHTTP(subscriptionRec, subscriptionReq)
 	if subscriptionRec.Code != http.StatusOK {
@@ -1269,7 +1278,7 @@ func TestBillingWebhookUpdatesEntitlementAndSyncSourceOfTruth(t *testing.T) {
 	}
 
 	subscriptionRepeatReq := httptest.NewRequest(http.MethodPost, "/billing/webhook", strings.NewReader(`{"id":"evt_subscription"}`))
-	subscriptionRepeatReq.Header.Set("Stripe-Signature", "valid")
+	subscriptionRepeatReq.Header.Set("X-Provider-Signature", "valid")
 	subscriptionRepeatRec := httptest.NewRecorder()
 	env.handler.ServeHTTP(subscriptionRepeatRec, subscriptionRepeatReq)
 	if subscriptionRepeatRec.Code != http.StatusOK {
@@ -1298,8 +1307,10 @@ func TestBillingWebhookCheckoutCompletionAloneDoesNotGrantHostedSync(t *testing.
 	t.Parallel()
 
 	provider := &serverFakeBillingProvider{
-		available: true,
-		name:      "stripe",
+		available:           true,
+		name:                "portablepay",
+		expectedHeaderName:  "X-Provider-Signature",
+		expectedHeaderValue: "valid",
 	}
 	env := newServerTestEnvWithOptions(t, config.DeploymentModeCloud, serverTestOptions{
 		billingProvider: provider,
@@ -1309,14 +1320,15 @@ func TestBillingWebhookCheckoutCompletionAloneDoesNotGrantHostedSync(t *testing.
 	cookie := createSessionCookie(t, env, user.ID)
 
 	provider.webhookEvent = billing.WebhookEvent{
+		Kind:                   billing.WebhookEventKindCustomerLinked,
 		ID:                     "evt_checkout_only",
-		Type:                   "checkout.session.completed",
+		RawType:                "portable.checkout.completed",
 		UserID:                 user.ID,
 		ProviderCustomerID:     "cus_checkout_only",
 		ProviderSubscriptionID: "sub_checkout_only",
 	}
 	webhookReq := httptest.NewRequest(http.MethodPost, "/billing/webhook", strings.NewReader(`{"id":"evt_checkout_only"}`))
-	webhookReq.Header.Set("Stripe-Signature", "valid")
+	webhookReq.Header.Set("X-Provider-Signature", "valid")
 	webhookRec := httptest.NewRecorder()
 	env.handler.ServeHTTP(webhookRec, webhookReq)
 
@@ -1324,7 +1336,7 @@ func TestBillingWebhookCheckoutCompletionAloneDoesNotGrantHostedSync(t *testing.
 		t.Fatalf("expected checkout completion webhook status 200, got %d", webhookRec.Code)
 	}
 
-	customer, err := env.store.GetBillingCustomer(context.Background(), user.ID, "stripe")
+	customer, err := env.store.GetBillingCustomer(context.Background(), user.ID, "portablepay")
 	if err != nil {
 		t.Fatalf("expected checkout completion to persist customer mapping, got %v", err)
 	}
@@ -1716,15 +1728,17 @@ func newFormRequest(method, target string, form url.Values, origin, host string)
 }
 
 type serverFakeBillingProvider struct {
-	available        bool
-	name             string
-	createCustomerID string
-	checkoutURL      string
-	portalURL        string
-	webhookEvent     billing.WebhookEvent
-	webhookErr       error
-	checkoutInput    *billing.CheckoutSessionInput
-	portalInput      *billing.PortalSessionInput
+	available           bool
+	name                string
+	createCustomerID    string
+	checkoutURL         string
+	portalURL           string
+	webhookEvent        billing.WebhookEvent
+	webhookErr          error
+	checkoutInput       *billing.CheckoutSessionInput
+	portalInput         *billing.PortalSessionInput
+	expectedHeaderName  string
+	expectedHeaderValue string
 }
 
 func (p *serverFakeBillingProvider) Name() string {
@@ -1751,12 +1765,17 @@ func (p *serverFakeBillingProvider) CreatePortalSession(ctx context.Context, inp
 	return p.portalURL, nil
 }
 
-func (p *serverFakeBillingProvider) ParseWebhook(ctx context.Context, rawBody []byte, signatureHeader string) (billing.WebhookEvent, error) {
+func (p *serverFakeBillingProvider) ParseWebhook(ctx context.Context, rawBody []byte, headers http.Header) (billing.WebhookEvent, error) {
+	if p.expectedHeaderName != "" {
+		if headers == nil {
+			return billing.WebhookEvent{}, billing.ErrInvalidWebhookSignature
+		}
+		if strings.TrimSpace(headers.Get(p.expectedHeaderName)) != p.expectedHeaderValue {
+			return billing.WebhookEvent{}, billing.ErrInvalidWebhookSignature
+		}
+	}
 	if p.webhookErr != nil {
 		return billing.WebhookEvent{}, p.webhookErr
-	}
-	if signatureHeader != "valid" {
-		return billing.WebhookEvent{}, billing.ErrInvalidWebhookSignature
 	}
 	return p.webhookEvent, nil
 }

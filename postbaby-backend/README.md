@@ -37,7 +37,7 @@ Not included:
 | `POSTBABY_DB_PATH` | no | `./data/postbaby.db` | SQLite database path |
 | `POSTBABY_ADDR` | no | `:8080` | HTTP listen address |
 | `POSTBABY_STATIC_DIR` | no | `../` | Static frontend directory |
-| `POSTBABY_DEPLOYMENT_MODE` | no | `static` | `static`, `selfhosted`, or `cloud` |
+| `POSTBABY_DEPLOYMENT_MODE` | no | `static` | `static`, `selfhosted`, or `cloud` (`cloud_multi_user` is accepted as a compatibility alias) |
 | `POSTBABY_COOKIE_SECURE` | no | `false` | Set cookie `Secure` when serving over HTTPS |
 | `POSTBABY_SESSION_TTL` | no | `720h` | Session lifetime |
 | `POSTBABY_BILLING_PROVIDER` | no | blank | Set to `stripe` to enable hosted billing routes in `cloud` |
@@ -46,7 +46,9 @@ Not included:
 | `POSTBABY_STRIPE_PRICE_ID` | when billing is enabled | blank | Stripe price ID placeholder for the hosted sync subscription |
 | `POSTBABY_PUBLIC_BASE_URL` | when billing is enabled | blank | Public app base URL used to build checkout and portal return URLs |
 
-`cloud` now supports the public app shell, hosted signup/login/logout, entitlement-gated account sync, and optional Stripe-backed billing. Real production values still belong in private deployment config.
+`cloud` now supports the public app shell, hosted signup/login/logout, entitlement-gated account sync, and optional Stripe-backed billing. Real production values still belong in private deployment config. `cloud_multi_user` is accepted for compatibility and normalizes to the same internal/runtime mode.
+
+Billing is intentionally **one active provider per deployment**. The shared billing service stays provider-neutral; each provider implementation must verify its own webhook headers and normalize each provider webhook into one Postbaby billing event before the shared service applies customer, subscription, and entitlement changes. `RawType` is diagnostic only; shared service code must not branch on provider-native event names.
 
 ## Auth Flow
 
@@ -64,20 +66,27 @@ Setup is disabled once the first user exists.
 Public routes:
 
 - `GET /api/health`
-- `GET /login` (`selfhosted` only)
-- `POST /login` (`selfhosted` only)
+- `GET /login` (`selfhosted` and `cloud`)
+- `POST /login` (`selfhosted` and `cloud`)
 - `GET /setup` (`selfhosted` only)
 - `POST /setup` (`selfhosted` only)
+- `GET /signup` (`cloud` only, and only when billing is enabled)
+- `POST /signup` (`cloud` only, and only when billing is enabled)
+- `POST /billing/webhook` (`cloud` only, and only when billing is enabled)
 - static assets
 
 Authenticated routes:
 
-- `POST /logout` (`selfhosted` only)
-- `GET /api/document/meta` (`selfhosted` only)
-- `GET /api/document` (`selfhosted` only)
-- `PUT /api/document` (`selfhosted` only)
+- `POST /logout` (`selfhosted` and `cloud`)
+- `GET /api/document/meta` (`selfhosted` and `cloud`)
+- `GET /api/document` (`selfhosted` and `cloud`)
+- `PUT /api/document` (`selfhosted` and `cloud`)
+- `POST /billing/checkout` (`cloud` only, and only when billing is enabled)
+- `POST /billing/portal` (`cloud` only, and only when billing is enabled)
 
 Authenticated API routes use the session cookie. They do not use `Authorization` headers anymore.
+
+In `cloud` mode with auth enabled but billing disabled, login/logout and document sync remain available, while `/signup` and `/billing/*` return `404` by design.
 
 ## Storage Model
 

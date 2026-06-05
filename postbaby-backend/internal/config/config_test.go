@@ -41,6 +41,19 @@ func TestLoadAcceptsCloudMode(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsCloudMultiUserAlias(t *testing.T) {
+	t.Setenv("POSTBABY_DEPLOYMENT_MODE", cloudMultiUserAlias)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if cfg.DeploymentMode != DeploymentModeCloud {
+		t.Fatalf("expected cloud alias to normalize to %q, got %q", DeploymentModeCloud, cfg.DeploymentMode)
+	}
+}
+
 func TestLoadRejectsInvalidDeploymentMode(t *testing.T) {
 	t.Setenv("POSTBABY_DEPLOYMENT_MODE", "invalid-mode")
 

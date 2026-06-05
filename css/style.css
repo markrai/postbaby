@@ -71,12 +71,18 @@
     font-family: 'Kalam', sans-serif;
 }
 
+.top-app-sync-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+}
+
 @media (max-width: 768px) {
     .top-app-controls {
         position: fixed;
         top: 10px;
         right: 14px;
-        max-width: min(120px, calc(100vw - 220px));
+        max-width: min(150px, calc(100vw - 220px));
     }
 }
 
@@ -121,6 +127,111 @@
     width: 18px;
     height: 18px;
     display: block;
+}
+
+.top-app-sync-button[data-sync-state="synced"] {
+    border-color: color-mix(in srgb, #2f9d62 62%, var(--border-tab-bar));
+}
+
+.top-app-sync-button[data-sync-state="saving"] {
+    border-color: color-mix(in srgb, #2a7de1 62%, var(--border-tab-bar));
+}
+
+.top-app-sync-button[data-sync-state="dirty"] {
+    border-color: color-mix(in srgb, #c88a19 68%, var(--border-tab-bar));
+}
+
+.top-app-sync-button[data-sync-state="offline"],
+.top-app-sync-button[data-sync-state="error"],
+.top-app-sync-button[data-sync-state="conflict"] {
+    border-color: color-mix(in srgb, #c43d4b 68%, var(--border-tab-bar));
+}
+
+.sync-status-panel {
+    position: absolute;
+    top: 42px;
+    right: 0;
+    width: min(300px, calc(100vw - 24px));
+    padding: 12px;
+    border: 1px solid var(--border-tab-bar);
+    border-radius: 8px;
+    background-color: var(--bg-modal);
+    color: var(--text-primary);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+    font-family: 'Kalam', sans-serif;
+    z-index: 20;
+}
+
+.sync-status-panel[hidden] {
+    display: none;
+}
+
+.sync-status-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.sync-status-panel-state {
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.sync-status-details {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+}
+
+.sync-status-details div {
+    display: grid;
+    grid-template-columns: minmax(112px, 1fr) minmax(0, 1.2fr);
+    gap: 8px;
+    align-items: baseline;
+}
+
+.sync-status-details dt,
+.sync-status-details dd {
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.25;
+}
+
+.sync-status-details dt {
+    opacity: 0.72;
+}
+
+.sync-status-details dd {
+    overflow-wrap: anywhere;
+}
+
+.sync-status-actions {
+    display: grid;
+    gap: 6px;
+    margin-top: 12px;
+}
+
+.sync-panel-button {
+    width: 100%;
+    min-height: 32px;
+    padding: 6px 10px;
+    border: 1px solid var(--border-tab-bar);
+    border-radius: 8px;
+    background-color: var(--bg-tab);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.sync-panel-button:hover {
+    opacity: 0.86;
+}
+
+.sync-panel-button:disabled {
+    cursor: default;
+    opacity: 0.55;
 }
 
 .top-app-account-icon {
