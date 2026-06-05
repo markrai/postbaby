@@ -7,6 +7,7 @@ const META_STORE = 'meta';
 const PRIMARY_RECORD_ID = 'primary';
 const TIMESTAMP = '2026-05-13T12:00:00.000Z';
 const EDGE_ARM_DELAY_MS = 1000;
+const EDGE_ARROW_TARGET_INSET = 2;
 const ITEM_SHAPES = ['default', 'circle', 'square', 'triangle', 'diamond', 'upsideDownTriangle', 'hexagon', 'oval'];
 const FREEFORM_FOOTPRINT_SHAPES = ['default', 'oval'];
 const FIXED_RATIO_SHAPES = ITEM_SHAPES.filter((shape) => !FREEFORM_FOOTPRINT_SHAPES.includes(shape));
@@ -41,6 +42,14 @@ const SHAPE_TEXT_ALIGNMENT = {
   upsideDownTriangle: { horizontalAlign: 'left', verticalAlign: 'top' },
   hexagon: { horizontalAlign: 'center', verticalAlign: 'top' },
   oval: { horizontalAlign: 'left', verticalAlign: 'top' }
+};
+const SHAPE_AWARE_ARROW_TARGET_SIZES = {
+  circle: { width: 240, height: 190 },
+  oval: { width: 320, height: 200 },
+  diamond: { width: 240, height: 190 },
+  triangle: { width: 280, height: 190 },
+  upsideDownTriangle: { width: 280, height: 190 },
+  hexagon: { width: 280, height: 190 }
 };
 const SYNC_HASH_STORAGE_KEYS = [
   'tabs',
@@ -630,6 +639,17 @@ async function readNoteSize(locator) {
   }));
 }
 
+async function readNoteOffsetGeometry(locator) {
+  return locator.evaluate((element) => ({
+    left: element.offsetLeft,
+    top: element.offsetTop,
+    width: element.offsetWidth,
+    height: element.offsetHeight,
+    centerX: element.offsetLeft + (element.offsetWidth / 2),
+    centerY: element.offsetTop + (element.offsetHeight / 2)
+  }));
+}
+
 async function readNotePresentation(locator) {
   return locator.evaluate((element) => {
     const style = window.getComputedStyle(element);
@@ -754,8 +774,228 @@ async function readEdgePresentation(locator) {
   return locator.evaluate((element) => ({
     markerEnd: element.getAttribute('marker-end') || '',
     stroke: element.getAttribute('stroke') || '',
-    strokeOpacity: element.getAttribute('stroke-opacity') || ''
+    strokeOpacity: element.getAttribute('stroke-opacity') || '',
+    armed: element.classList.contains('edge-line-armed')
   }));
+}
+
+function getTestBoundsCenter(bounds) {
+  return {
+    x: bounds.left + (bounds.width / 2),
+    y: bounds.top + (bounds.height / 2)
+  };
+}
+
+function applyExpectedAnchorInset(boundaryPoint, bounds, externalPoint, inset) {
+  const center = getTestBoundsCenter(bounds);
+  const dx = externalPoint.x - center.x;
+  const dy = externalPoint.y - center.y;
+  const distance = Math.sqrt((dx * dx) + (dy * dy));
+  if (!distance || !Number.isFinite(inset) || inset === 0) {
+    return boundaryPoint;
+  }
+
+  return {
+    x: boundaryPoint.x + ((dx / distance) * inset),
+    y: boundaryPoint.y + ((dy / distance) * inset)
+  };
+}
+
+function getExpectedRectBoundaryPoint(bounds, externalPoint) {
+  const center = getTestBoundsCenter(bounds);
+  const dx = externalPoint.x - center.x;
+  const dy = externalPoint.y - center.y;
+  const distance = Math.sqrt((dx * dx) + (dy * dy));
+  if (!distance) {
+    return { x: center.x, y: center.y };
+  }
+
+  const halfWidth = bounds.width / 2;
+  const halfHeight = bounds.height / 2;
+  const scaleX = dx === 0 ? Infinity : halfWidth / Math.abs(dx);
+  const scaleY = dy === 0 ? Infinity : halfHeight / Math.abs(dy);
+  const scale = Math.min(scaleX, scaleY);
+  return {
+    x: center.x + (dx * scale),
+    y: center.y + (dy * scale)
+  };
+}
+
+function getExpectedEllipseBoundaryPoint(bounds, externalPoint) {
+  const center = getTestBoundsCenter(bounds);
+  const dx = externalPoint.x - center.x;
+  const dy = externalPoint.y - center.y;
+  if (Math.abs(dx) < 0.000001 && Math.abs(dy) < 0.000001) {
+    return { x: center.x, y: center.y };
+  }
+
+  const radiusX = bounds.width / 2;
+  const radiusY = bounds.height / 2;
+  const scale = 1 / Math.sqrt(
+    ((dx * dx) / (radiusX * radiusX))
+    + ((dy * dy) / (radiusY * radiusY))
+  );
+  return {
+    x: center.x + (dx * scale),
+    y: center.y + (dy * scale)
+  };
+}
+
+function getExpectedDiamondBoundaryPoint(bounds, externalPoint) {
+  const center = getTestBoundsCenter(bounds);
+  const dx = externalPoint.x - center.x;
+  const dy = externalPoint.y - center.y;
+  if (Math.abs(dx) < 0.000001 && Math.abs(dy) < 0.000001) {
+    return { x: center.x, y: center.y };
+  }
+
+  const halfWidth = bounds.width / 2;
+  const halfHeight = bounds.height / 2;
+  const scale = 1 / (
+    (Math.abs(dx) / halfWidth)
+    + (Math.abs(dy) / halfHeight)
+  );
+  return {
+    x: center.x + (dx * scale),
+    y: center.y + (dy * scale)
+  };
+}
+
+function crossProduct(ax, ay, bx, by) {
+  return (ax * by) - (ay * bx);
+}
+
+function getExpectedPolygonPoints(shape, bounds) {
+  let normalizedPoints = null;
+  if (shape === 'triangle') {
+    normalizedPoints = [
+      { x: 0.5, y: 0 },
+      { x: 0, y: 1 },
+      { x: 1, y: 1 }
+    ];
+  } else if (shape === 'upsideDownTriangle') {
+    normalizedPoints = [
+      { x: 0, y: 0 },
+      { x: 1, y: 0 },
+      { x: 0.5, y: 1 }
+    ];
+  } else if (shape === 'hexagon') {
+    normalizedPoints = [
+      { x: 0.25, y: 0 },
+      { x: 0.75, y: 0 },
+      { x: 1, y: 0.5 },
+      { x: 0.75, y: 1 },
+      { x: 0.25, y: 1 },
+      { x: 0, y: 0.5 }
+    ];
+  }
+
+  if (!normalizedPoints) {
+    return null;
+  }
+
+  return normalizedPoints.map((point) => ({
+    x: bounds.left + (point.x * bounds.width),
+    y: bounds.top + (point.y * bounds.height)
+  }));
+}
+
+function getExpectedPolygonBoundaryPoint(shape, bounds, externalPoint) {
+  const points = getExpectedPolygonPoints(shape, bounds);
+  if (!points) {
+    return null;
+  }
+
+  const center = getTestBoundsCenter(bounds);
+  const directionX = externalPoint.x - center.x;
+  const directionY = externalPoint.y - center.y;
+  if (Math.abs(directionX) < 0.000001 && Math.abs(directionY) < 0.000001) {
+    return { x: center.x, y: center.y };
+  }
+
+  let bestIntersection = null;
+  for (let index = 0; index < points.length; index += 1) {
+    const start = points[index];
+    const end = points[(index + 1) % points.length];
+    const edgeX = end.x - start.x;
+    const edgeY = end.y - start.y;
+    const originToStartX = start.x - center.x;
+    const originToStartY = start.y - center.y;
+    const denominator = crossProduct(directionX, directionY, edgeX, edgeY);
+    if (Math.abs(denominator) < 0.000001) {
+      continue;
+    }
+
+    const rayScale = crossProduct(originToStartX, originToStartY, edgeX, edgeY) / denominator;
+    const segmentScale = crossProduct(originToStartX, originToStartY, directionX, directionY) / denominator;
+    if (rayScale < -0.000001 || segmentScale < -0.000001 || segmentScale > 1.000001) {
+      continue;
+    }
+
+    if (!bestIntersection || rayScale < bestIntersection.rayScale) {
+      bestIntersection = {
+        rayScale,
+        x: center.x + (directionX * rayScale),
+        y: center.y + (directionY * rayScale)
+      };
+    }
+  }
+
+  return bestIntersection
+    ? { x: bestIntersection.x, y: bestIntersection.y }
+    : null;
+}
+
+function getExpectedShapeBoundaryPoint(shape, bounds, externalPoint) {
+  if (shape === 'circle' || shape === 'oval') {
+    return getExpectedEllipseBoundaryPoint(bounds, externalPoint);
+  }
+
+  if (shape === 'diamond') {
+    return getExpectedDiamondBoundaryPoint(bounds, externalPoint);
+  }
+
+  if (shape === 'triangle' || shape === 'upsideDownTriangle' || shape === 'hexagon') {
+    return getExpectedPolygonBoundaryPoint(shape, bounds, externalPoint) || getExpectedRectBoundaryPoint(bounds, externalPoint);
+  }
+
+  return getExpectedRectBoundaryPoint(bounds, externalPoint);
+}
+
+function getExpectedShapeAnchorPoint(shape, bounds, externalPoint, inset = EDGE_ARROW_TARGET_INSET) {
+  const boundaryPoint = getExpectedShapeBoundaryPoint(shape, bounds, externalPoint);
+  return applyExpectedAnchorInset(boundaryPoint, bounds, externalPoint, inset);
+}
+
+function expectPointNear(actualPoint, expectedPoint, tolerance = 2.5) {
+  expect(Math.abs(actualPoint.x - expectedPoint.x)).toBeLessThanOrEqual(tolerance);
+  expect(Math.abs(actualPoint.y - expectedPoint.y)).toBeLessThanOrEqual(tolerance);
+}
+
+function buildShapeAwareArrowSnapshot(shape) {
+  const targetSize = SHAPE_AWARE_ARROW_TARGET_SIZES[shape];
+  return buildLocalSnapshotWithItems([
+    buildNoteItem('Anchor Source', {
+      itemId: 'item-1',
+      position: { top: '80px', left: '80px' },
+      width: 260,
+      height: 170
+    }),
+    buildNoteItem(`${shape} Anchor Target`, {
+      itemId: 'item-2',
+      shape,
+      position: { top: '250px', left: '430px' },
+      width: targetSize.width,
+      height: targetSize.height
+    })
+  ], {
+    edges: [{
+      id: 'edge-1',
+      fromItemId: 'item-1',
+      toItemId: 'item-2',
+      kind: 'arrow'
+    }]
+  });
 }
 
 async function deleteEdgeViaContextMenu(page, edgeLine) {
@@ -3117,6 +3357,202 @@ test.describe('Static behavior', () => {
       || Math.abs(afterEdge.y1 - beforeEdge.y1) > 1
     ).toBe(true);
     expect(afterPresentation.markerEnd).toMatch(/^url\(#.+-arrow\)$/);
+  });
+
+  for (const shape of NON_RECTANGULAR_SHAPES) {
+    test(`arrow endpoint attaches to the visible ${shape} boundary`, async ({ page }) => {
+      await prepareBlankPage(page);
+      await seedLocalStorage(page, buildShapeAwareArrowSnapshot(shape));
+      await page.goto('/index.html');
+
+      const sourceNote = page.locator('.grid-item[data-id="item-1"]');
+      const targetNote = page.locator('.grid-item[data-id="item-2"]');
+      const edgeLine = page.locator('.edge-line').first();
+
+      const sourceGeometry = await readNoteOffsetGeometry(sourceNote);
+      const targetGeometry = await readNoteOffsetGeometry(targetNote);
+      const edgeCoordinates = await readEdgeCoordinates(edgeLine);
+      const edgePresentation = await readEdgePresentation(edgeLine);
+      const expectedTargetAnchor = getExpectedShapeAnchorPoint(shape, {
+        left: targetGeometry.left,
+        top: targetGeometry.top,
+        width: targetGeometry.width,
+        height: targetGeometry.height
+      }, {
+        x: sourceGeometry.centerX,
+        y: sourceGeometry.centerY
+      });
+
+      expectPointNear({ x: edgeCoordinates.x1, y: edgeCoordinates.y1 }, {
+        x: sourceGeometry.centerX,
+        y: sourceGeometry.centerY
+      });
+      expectPointNear({ x: edgeCoordinates.x2, y: edgeCoordinates.y2 }, expectedTargetAnchor);
+      expect(Math.hypot(
+        edgeCoordinates.x2 - targetGeometry.centerX,
+        edgeCoordinates.y2 - targetGeometry.centerY
+      )).toBeGreaterThan(10);
+      expect(edgePresentation.markerEnd).toMatch(/^url\(#.+-arrow\)$/);
+    });
+  }
+
+  for (const shape of NON_RECTANGULAR_SHAPES) {
+    test(`arrow endpoint rerenders when a ${shape} target is resized`, async ({ page }) => {
+      await prepareBlankPage(page);
+      await seedLocalStorage(page, buildShapeAwareArrowSnapshot(shape));
+      await page.goto('/index.html');
+
+      const sourceNote = page.locator('.grid-item[data-id="item-1"]');
+      const targetNote = page.locator('.grid-item[data-id="item-2"]');
+      const edgeLine = page.locator('.edge-line').first();
+      const beforeEdge = await readEdgeCoordinates(edgeLine);
+
+      await resizeNoteBy(page, targetNote, 90, 30);
+
+      const sourceGeometry = await readNoteOffsetGeometry(sourceNote);
+      const targetGeometry = await readNoteOffsetGeometry(targetNote);
+      const afterEdge = await readEdgeCoordinates(edgeLine);
+      const afterPresentation = await readEdgePresentation(edgeLine);
+      const expectedTargetAnchor = getExpectedShapeAnchorPoint(shape, {
+        left: targetGeometry.left,
+        top: targetGeometry.top,
+        width: targetGeometry.width,
+        height: targetGeometry.height
+      }, {
+        x: sourceGeometry.centerX,
+        y: sourceGeometry.centerY
+      });
+
+      expect(
+        Math.abs(afterEdge.x2 - beforeEdge.x2) > 1
+        || Math.abs(afterEdge.y2 - beforeEdge.y2) > 1
+      ).toBe(true);
+      expectPointNear({ x: afterEdge.x2, y: afterEdge.y2 }, expectedTargetAnchor);
+      expect(afterPresentation.markerEnd).toMatch(/^url\(#.+-arrow\)$/);
+    });
+  }
+
+  test('dragging either endpoint item rerenders a shape-aware arrow endpoint', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildShapeAwareArrowSnapshot('triangle'));
+    await page.goto('/index.html');
+
+    const sourceNote = page.locator('.grid-item[data-id="item-1"]');
+    const targetNote = page.locator('.grid-item[data-id="item-2"]');
+    const edgeLine = page.locator('.edge-line').first();
+    const beforeEdge = await readEdgeCoordinates(edgeLine);
+
+    await dragNoteBy(page, targetNote, 80, 30);
+    const afterTargetDragEdge = await readEdgeCoordinates(edgeLine);
+    expect(
+      Math.abs(afterTargetDragEdge.x2 - beforeEdge.x2) > 1
+      || Math.abs(afterTargetDragEdge.y2 - beforeEdge.y2) > 1
+    ).toBe(true);
+
+    await dragNoteBy(page, sourceNote, 60, 20);
+    const sourceGeometry = await readNoteOffsetGeometry(sourceNote);
+    const targetGeometry = await readNoteOffsetGeometry(targetNote);
+    const afterSourceDragEdge = await readEdgeCoordinates(edgeLine);
+    const expectedTargetAnchor = getExpectedShapeAnchorPoint('triangle', {
+      left: targetGeometry.left,
+      top: targetGeometry.top,
+      width: targetGeometry.width,
+      height: targetGeometry.height
+    }, {
+      x: sourceGeometry.centerX,
+      y: sourceGeometry.centerY
+    });
+
+    expect(
+      Math.abs(afterSourceDragEdge.x1 - afterTargetDragEdge.x1) > 1
+      || Math.abs(afterSourceDragEdge.y1 - afterTargetDragEdge.y1) > 1
+    ).toBe(true);
+    expectPointNear({ x: afterSourceDragEdge.x1, y: afterSourceDragEdge.y1 }, {
+      x: sourceGeometry.centerX,
+      y: sourceGeometry.centerY
+    });
+    expectPointNear({ x: afterSourceDragEdge.x2, y: afterSourceDragEdge.y2 }, expectedTargetAnchor);
+  });
+
+  test('line edges still end at the target center for non-rectangular shapes', async ({ page }) => {
+    const targetSize = SHAPE_AWARE_ARROW_TARGET_SIZES.circle;
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Line Source', {
+        itemId: 'item-1',
+        position: { top: '80px', left: '80px' },
+        width: 260,
+        height: 170
+      }),
+      buildNoteItem('Circle Line Target', {
+        itemId: 'item-2',
+        shape: 'circle',
+        position: { top: '250px', left: '430px' },
+        width: targetSize.width,
+        height: targetSize.height
+      })
+    ], {
+      edges: [{
+        id: 'edge-1',
+        fromItemId: 'item-1',
+        toItemId: 'item-2',
+        kind: 'line'
+      }]
+    });
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const targetGeometry = await readNoteOffsetGeometry(page.locator('.grid-item[data-id="item-2"]'));
+    const edgeCoordinates = await readEdgeCoordinates(page.locator('.edge-line').first());
+    const edgePresentation = await readEdgePresentation(page.locator('.edge-line').first());
+
+    expectPointNear({ x: edgeCoordinates.x2, y: edgeCoordinates.y2 }, {
+      x: targetGeometry.centerX,
+      y: targetGeometry.centerY
+    });
+    expect(edgePresentation.markerEnd).toBe('');
+  });
+
+  test('edge hover still arms the line before context delete', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildShapeAwareArrowSnapshot('hexagon'));
+    await page.goto('/index.html');
+
+    const edgeLine = page.locator('.edge-line').first();
+    await edgeLine.evaluate((element) => {
+      const group = element.parentElement;
+      const hit = group ? group.querySelector('.edge-hit-line') : null;
+      if (!hit) {
+        throw new Error('Edge hit line was not available.');
+      }
+
+      hit.dispatchEvent(new MouseEvent('mouseenter', {
+        bubbles: false,
+        cancelable: false
+      }));
+    });
+    await page.waitForTimeout(EDGE_ARM_DELAY_MS + 150);
+
+    const armedPresentation = await readEdgePresentation(edgeLine);
+    expect(armedPresentation.armed).toBe(true);
+    expect(armedPresentation.markerEnd).toMatch(/^url\(#.+-arrow-armed\)$/);
+
+    await edgeLine.evaluate((element) => {
+      const group = element.parentElement;
+      const hit = group ? group.querySelector('.edge-hit-line') : null;
+      if (!hit) {
+        throw new Error('Edge hit line was not available.');
+      }
+
+      hit.dispatchEvent(new MouseEvent('mouseleave', {
+        bubbles: false,
+        cancelable: false
+      }));
+    });
+
+    const relaxedPresentation = await readEdgePresentation(edgeLine);
+    expect(relaxedPresentation.armed).toBe(false);
   });
 
   test('duplicate prevention blocks additional connections once a line exists regardless of kind or direction', async ({ page }) => {
