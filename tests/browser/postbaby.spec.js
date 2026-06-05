@@ -8,6 +8,10 @@ const PRIMARY_RECORD_ID = 'primary';
 const TIMESTAMP = '2026-05-13T12:00:00.000Z';
 const EDGE_ARM_DELAY_MS = 1000;
 const EDGE_ARROW_TARGET_INSET = 2;
+const GRAPH_MAX_NODES = 100;
+const GRAPH_MAX_EDGES = 300;
+const GRAPH_MAX_LABEL_CHARS = 240;
+const GRAPH_DEFAULT_COLOR = '#ffee88';
 const ITEM_SHAPES = ['default', 'circle', 'square', 'triangle', 'diamond', 'upsideDownTriangle', 'hexagon', 'oval'];
 const FREEFORM_FOOTPRINT_SHAPES = ['default', 'oval'];
 const FIXED_RATIO_SHAPES = ITEM_SHAPES.filter((shape) => !FREEFORM_FOOTPRINT_SHAPES.includes(shape));
@@ -206,6 +210,67 @@ function buildLocalSnapshotWithItems(items, options = {}) {
   }
 
   return snapshot;
+}
+
+function buildEmptySnapshot(options = {}) {
+  return buildLocalSnapshotWithItems([], options);
+}
+
+function buildGraphNode(id, options = {}) {
+  const node = {
+    id
+  };
+
+  if (Object.prototype.hasOwnProperty.call(options, 'label')) {
+    node.label = options.label;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(options, 'shape')) {
+    node.shape = options.shape;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(options, 'width')) {
+    node.width = options.width;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(options, 'height')) {
+    node.height = options.height;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(options, 'x')) {
+    node.x = options.x;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(options, 'y')) {
+    node.y = options.y;
+  }
+
+  return node;
+}
+
+function buildGraphEdge(from, to, options = {}) {
+  const edge = {
+    from,
+    to
+  };
+
+  if (Object.prototype.hasOwnProperty.call(options, 'kind')) {
+    edge.kind = options.kind;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(options, 'label')) {
+    edge.label = options.label;
+  }
+
+  return edge;
+}
+
+function buildNormalizedGraph(nodes, edges = [], options = {}) {
+  return {
+    nodes,
+    edges,
+    options
+  };
 }
 
 function buildGeometryRegressionSnapshot() {
@@ -614,6 +679,16 @@ async function readItemSnapshot(page, itemId = 'item-1') {
     }
   }
   return null;
+}
+
+async function createGraphForTest(page, graph) {
+  return page.evaluate(async (input) => {
+    if (typeof window.postbabyCreateGraphForTest !== 'function') {
+      throw new Error('postbabyCreateGraphForTest is not available.');
+    }
+
+    return window.postbabyCreateGraphForTest(input);
+  }, graph);
 }
 
 async function readEdgeSnapshot(page, edgeId = 'edge-1') {
@@ -3723,6 +3798,384 @@ test.describe('Static behavior', () => {
     const importedEdge = await readEdgeSnapshot(page, 'edge-1');
     expect(importedEdge).not.toBeNull();
     expect(importedEdge.kind).toBe('arrow');
+    expect(await readEdgePresentation(page.locator('.edge-line').first())).toMatchObject({
+      markerEnd: expect.stringMatching(/^url\(#.+-arrow\)$/)
+    });
+  });
+
+  test('graph hook creates ordinary Postbaby items and edges from normalized graph data', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    const graph = buildNormalizedGraph([
+      buildGraphNode('A', { label: 'Start' }),
+      buildGraphNode('B', { label: 'Decision', shape: 'unsupported-shape' }),
+      buildGraphNode('C', { shape: 'circle' })
+    ], [
+      buildGraphEdge('A', 'B', { kind: 'arrow' }),
+      buildGraphEdge('B', 'C', { kind: 'line' })
+    ], {
+      direction: 'LR'
+    });
+
+    const result = await createGraphForTest(page, graph);
+    expect(result.ok).toBe(true);
+    expect(result.items).toHaveLength(3);
+    expect(result.edges).toHaveLength(2);
+    expect(result.createdNodeIds).toEqual(['A', 'B', 'C']);
+    expect(result.createdItemIds).toHaveLength(3);
+
+    await expect(page.locator('.grid-item')).toHaveCount(3);
+    await expect(page.locator('.edge-line')).toHaveCount(2);
+
+    const tabsSnapshot = await readTabsSnapshot(page);
+    expect(tabsSnapshot[0].items).toHaveLength(3);
+    expect(tabsSnapshot[0].edges).toHaveLength(2);
+
+    const startItem = tabsSnapshot[0].items.find((item) => item.name === 'Start');
+    const decisionItem = tabsSnapshot[0].items.find((item) => item.name === 'Decision');
+    const fallbackLabelItem = tabsSnapshot[0].items.find((item) => item.name === 'C');
+    expect(startItem).toBeTruthy();
+    expect(decisionItem).toBeTruthy();
+    expect(fallbackLabelItem).toBeTruthy();
+
+    [startItem, decisionItem, fallbackLabelItem].forEach((item) => {
+      expect(item.id).toBeTruthy();
+      expect(item.color).toBe(GRAPH_DEFAULT_COLOR);
+      expect(item.position.top).toMatch(/px$/);
+      expect(item.position.left).toMatch(/px$/);
+      expect(item.width).toEqual(expect.any(Number));
+      expect(item.height).toEqual(expect.any(Number));
+      expect(item).not.toHaveProperty('sourceNodeId');
+      expect(item).not.toHaveProperty('graphNodeId');
+    });
+
+    expect(parseInt(startItem.position.left, 10)).toBeGreaterThan(0);
+    expect(parseInt(startItem.position.top, 10)).toBeGreaterThan(0);
+    expect(decisionItem.shape).toBe('default');
+    expect(decisionItem.width).toBe(220);
+    expect(decisionItem.height).toBe(120);
+    expect(fallbackLabelItem.shape).toBe('circle');
+
+    tabsSnapshot[0].edges.forEach((edge) => {
+      expect(edge.id).toBeTruthy();
+      expect(edge.fromItemId).toBeTruthy();
+      expect(edge.toItemId).toBeTruthy();
+      expect(['line', 'arrow']).toContain(edge.kind);
+      expect(edge).not.toHaveProperty('label');
+      expect(edge).not.toHaveProperty('from');
+      expect(edge).not.toHaveProperty('to');
+    });
+  });
+
+  [
+    {
+      name: 'duplicate node IDs',
+      graph: buildNormalizedGraph([
+        buildGraphNode('A'),
+        buildGraphNode('A')
+      ]),
+      expectedCode: 'duplicate_node_id'
+    },
+    {
+      name: 'missing-node edge endpoints',
+      graph: buildNormalizedGraph([
+        buildGraphNode('A')
+      ], [
+        buildGraphEdge('A', 'B', { kind: 'arrow' })
+      ]),
+      expectedCode: 'missing_edge_to_node'
+    },
+    {
+      name: 'self-edges',
+      graph: buildNormalizedGraph([
+        buildGraphNode('A')
+      ], [
+        buildGraphEdge('A', 'A', { kind: 'arrow' })
+      ]),
+      expectedCode: 'self_edge_not_allowed'
+    },
+    {
+      name: 'duplicate logical edges',
+      graph: buildNormalizedGraph([
+        buildGraphNode('A'),
+        buildGraphNode('B')
+      ], [
+        buildGraphEdge('A', 'B', { kind: 'arrow' }),
+        buildGraphEdge('B', 'A', { kind: 'line' })
+      ]),
+      expectedCode: 'duplicate_edge_connection'
+    },
+    {
+      name: 'graphs over the node limit',
+      graph: buildNormalizedGraph(
+        Array.from({ length: GRAPH_MAX_NODES + 1 }, (_, index) => buildGraphNode(`N${index + 1}`))
+      ),
+      expectedCode: 'graph_node_limit_exceeded'
+    },
+    {
+      name: 'graphs over the edge limit',
+      graph: (() => {
+        const nodes = Array.from({ length: GRAPH_MAX_NODES }, (_, index) => buildGraphNode(`N${index + 1}`));
+        const edges = [];
+        for (let leftIndex = 0; leftIndex < nodes.length; leftIndex += 1) {
+          for (let rightIndex = leftIndex + 1; rightIndex < nodes.length; rightIndex += 1) {
+            edges.push(buildGraphEdge(nodes[leftIndex].id, nodes[rightIndex].id, { kind: 'arrow' }));
+            if (edges.length > GRAPH_MAX_EDGES) {
+              return {
+                graph: buildNormalizedGraph(nodes, edges),
+                expectedCode: 'graph_edge_limit_exceeded'
+              };
+            }
+          }
+        }
+        throw new Error('Unable to build an edge-limit graph fixture.');
+      })()
+    },
+    {
+      name: 'labels over the max length',
+      graph: buildNormalizedGraph([
+        buildGraphNode('A', { label: 'x'.repeat(GRAPH_MAX_LABEL_CHARS + 1) })
+      ]),
+      expectedCode: 'node_label_too_long'
+    }
+  ].forEach((scenario) => {
+    const graph = scenario.graph && scenario.graph.graph ? scenario.graph.graph : scenario.graph;
+    const expectedCode = scenario.graph && scenario.graph.expectedCode ? scenario.graph.expectedCode : scenario.expectedCode;
+
+    test(`graph hook rejects ${scenario.name} without creating anything`, async ({ page }) => {
+      await prepareBlankPage(page);
+      await seedLocalStorage(page, buildEmptySnapshot());
+      await page.goto('/index.html');
+
+      const result = await createGraphForTest(page, graph);
+      expect(result.ok).toBe(false);
+      expect(result.errors.map((error) => error.code)).toContain(expectedCode);
+      await expect(page.locator('.grid-item')).toHaveCount(0);
+      await expect(page.locator('.edge-line')).toHaveCount(0);
+
+      const tabsSnapshot = await readTabsSnapshot(page);
+      expect(tabsSnapshot[0].items).toHaveLength(0);
+      expect(tabsSnapshot[0].edges).toHaveLength(0);
+    });
+  });
+
+  test('graph hook uses deterministic left-to-right layered layout across repeated runs', async ({ page }) => {
+    const graph = buildNormalizedGraph([
+      buildGraphNode('A'),
+      buildGraphNode('B'),
+      buildGraphNode('C'),
+      buildGraphNode('D'),
+      buildGraphNode('E')
+    ], [
+      buildGraphEdge('A', 'B', { kind: 'arrow' }),
+      buildGraphEdge('A', 'C', { kind: 'arrow' }),
+      buildGraphEdge('B', 'D', { kind: 'arrow' }),
+      buildGraphEdge('C', 'E', { kind: 'arrow' })
+    ], {
+      originX: 100,
+      originY: 60,
+      direction: 'LR'
+    });
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    await createGraphForTest(page, graph);
+    const firstRunTabs = await readTabsSnapshot(page);
+    const firstRunPositions = Object.fromEntries(firstRunTabs[0].items.map((item) => [item.name, item.position]));
+
+    expect(parseInt(firstRunPositions.A.left, 10)).toBeLessThan(parseInt(firstRunPositions.B.left, 10));
+    expect(parseInt(firstRunPositions.B.left, 10)).toBe(parseInt(firstRunPositions.C.left, 10));
+    expect(parseInt(firstRunPositions.B.top, 10)).toBeLessThan(parseInt(firstRunPositions.C.top, 10));
+    expect(parseInt(firstRunPositions.D.left, 10)).toBeGreaterThan(parseInt(firstRunPositions.B.left, 10));
+    expect(parseInt(firstRunPositions.D.left, 10)).toBe(parseInt(firstRunPositions.E.left, 10));
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    await createGraphForTest(page, graph);
+    const secondRunTabs = await readTabsSnapshot(page);
+    const secondRunPositions = Object.fromEntries(secondRunTabs[0].items.map((item) => [item.name, item.position]));
+
+    expect(secondRunPositions).toEqual(firstRunPositions);
+  });
+
+  test('graph hook uses deterministic top-to-bottom layered layout for TD graphs', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    const graph = buildNormalizedGraph([
+      buildGraphNode('A'),
+      buildGraphNode('B'),
+      buildGraphNode('C')
+    ], [
+      buildGraphEdge('A', 'B', { kind: 'arrow' }),
+      buildGraphEdge('B', 'C', { kind: 'arrow' })
+    ], {
+      originX: 120,
+      originY: 90,
+      direction: 'TD'
+    });
+
+    await createGraphForTest(page, graph);
+    const tabsSnapshot = await readTabsSnapshot(page);
+    const positions = Object.fromEntries(tabsSnapshot[0].items.map((item) => [item.name, item.position]));
+
+    expect(parseInt(positions.A.top, 10)).toBeLessThan(parseInt(positions.B.top, 10));
+    expect(parseInt(positions.B.top, 10)).toBeLessThan(parseInt(positions.C.top, 10));
+    expect(parseInt(positions.A.left, 10)).toBe(parseInt(positions.B.left, 10));
+    expect(parseInt(positions.B.left, 10)).toBe(parseInt(positions.C.left, 10));
+  });
+
+  test('graph hook respects explicit x/y positions relative to origin', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    const graph = buildNormalizedGraph([
+      buildGraphNode('A', { label: 'Explicit A', x: 0, y: 0 }),
+      buildGraphNode('B', { label: 'Explicit B', x: 140, y: 60 })
+    ], [
+      buildGraphEdge('A', 'B', { kind: 'arrow' })
+    ], {
+      originX: 200,
+      originY: 300,
+      direction: 'LR'
+    });
+
+    await createGraphForTest(page, graph);
+    const tabsSnapshot = await readTabsSnapshot(page);
+    const positions = Object.fromEntries(tabsSnapshot[0].items.map((item) => [item.name, item.position]));
+
+    expect(positions['Explicit A']).toEqual({ top: '300px', left: '200px' });
+    expect(positions['Explicit B']).toEqual({ top: '360px', left: '340px' });
+  });
+
+  test('graph-created arrow edges use shape-aware anchors and line edges keep target-center behavior', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    const graph = buildNormalizedGraph([
+      buildGraphNode('S', { label: 'Source', x: 0, y: 0, width: 220, height: 120 }),
+      buildGraphNode('C', { label: 'Circle Target', shape: 'circle', x: 360, y: 180 }),
+      buildGraphNode('D', { label: 'Diamond Target', shape: 'diamond', x: 360, y: 0 })
+    ], [
+      buildGraphEdge('S', 'C', { kind: 'arrow' }),
+      buildGraphEdge('S', 'D', { kind: 'line' })
+    ], {
+      originX: 80,
+      originY: 80
+    });
+
+    const result = await createGraphForTest(page, graph);
+    expect(result.ok).toBe(true);
+
+    const sourceNote = page.locator(`.grid-item[data-id="${result.items[0].id}"]`);
+    const circleNote = page.locator(`.grid-item[data-id="${result.items[1].id}"]`);
+    const diamondNote = page.locator(`.grid-item[data-id="${result.items[2].id}"]`);
+    const arrowEdge = page.locator(`.edge-group[data-edge-id="${result.edges[0].id}"] .edge-line`);
+    const lineEdge = page.locator(`.edge-group[data-edge-id="${result.edges[1].id}"] .edge-line`);
+
+    const sourceGeometry = await readNoteOffsetGeometry(sourceNote);
+    const circleGeometry = await readNoteOffsetGeometry(circleNote);
+    const diamondGeometry = await readNoteOffsetGeometry(diamondNote);
+    const arrowCoordinates = await readEdgeCoordinates(arrowEdge);
+    const lineCoordinates = await readEdgeCoordinates(lineEdge);
+    const arrowPresentation = await readEdgePresentation(arrowEdge);
+    const linePresentation = await readEdgePresentation(lineEdge);
+
+    const expectedArrowEnd = getExpectedShapeAnchorPoint('circle', {
+      left: circleGeometry.left,
+      top: circleGeometry.top,
+      width: circleGeometry.width,
+      height: circleGeometry.height
+    }, {
+      x: sourceGeometry.centerX,
+      y: sourceGeometry.centerY
+    });
+
+    expectPointNear(
+      { x: arrowCoordinates.x2, y: arrowCoordinates.y2 },
+      expectedArrowEnd
+    );
+    expect(arrowPresentation.markerEnd).toMatch(/^url\(#.+-arrow\)$/);
+    expect(Math.abs(lineCoordinates.x2 - diamondGeometry.centerX)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(lineCoordinates.y2 - diamondGeometry.centerY)).toBeLessThanOrEqual(0.5);
+    expect(linePresentation.markerEnd).toBe('');
+  });
+
+  test('graph-created notes and edges survive reload and manual note creation still works', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    const graph = buildNormalizedGraph([
+      buildGraphNode('A', { label: 'Reload Source' }),
+      buildGraphNode('B', { label: 'Reload Target', shape: 'circle' })
+    ], [
+      buildGraphEdge('A', 'B', { kind: 'arrow' })
+    ], {
+      originX: 160,
+      originY: 120
+    });
+
+    await createGraphForTest(page, graph);
+    await page.reload();
+
+    await expectNoteVisible(page, 'Reload Source');
+    await expectNoteVisible(page, 'Reload Target');
+    await expect(page.locator('.edge-line')).toHaveCount(1);
+
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('n');
+    const textarea = page.locator('textarea.edit-textarea');
+    await expect(textarea).toBeVisible();
+    await textarea.fill('Manual Note After Graph');
+    await textarea.press('Escape');
+
+    await expectNoteVisible(page, 'Manual Note After Graph');
+    const tabsSnapshot = await readTabsSnapshot(page);
+    expect(tabsSnapshot[0].items.map((item) => item.name)).toEqual(
+      expect.arrayContaining(['Reload Source', 'Reload Target', 'Manual Note After Graph'])
+    );
+    expect(tabsSnapshot[0].edges).toHaveLength(1);
+  });
+
+  test('manual edge creation still works after graph creation', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    const graph = buildNormalizedGraph([
+      buildGraphNode('A', { label: 'Manual Edge Source', x: 0, y: 0 }),
+      buildGraphNode('B', { label: 'Manual Edge Target', x: 280, y: 60 })
+    ], [], {
+      originX: 160,
+      originY: 140
+    });
+
+    const result = await createGraphForTest(page, graph);
+    expect(result.ok).toBe(true);
+    await page.keyboard.press('Escape');
+
+    const sourceNote = page.locator(`.grid-item[data-id="${result.items[0].id}"]`);
+    const targetNote = page.locator(`.grid-item[data-id="${result.items[1].id}"]`);
+
+    await drawEdgeBetweenNotes(page, sourceNote, targetNote, { modifier: 'Control' });
+
+    const tabsSnapshot = await readTabsSnapshot(page);
+    expect(tabsSnapshot[0].edges).toHaveLength(1);
+    expect(tabsSnapshot[0].edges[0]).toMatchObject({
+      fromItemId: result.items[0].id,
+      toItemId: result.items[1].id,
+      kind: 'arrow'
+    });
     expect(await readEdgePresentation(page.locator('.edge-line').first())).toMatchObject({
       markerEnd: expect.stringMatching(/^url\(#.+-arrow\)$/)
     });
