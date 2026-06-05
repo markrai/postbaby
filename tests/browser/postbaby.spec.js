@@ -666,8 +666,21 @@ async function expectNoteVisible(page, noteText) {
 }
 
 async function readTabsSnapshot(page) {
-  const indexedDBState = await readIndexedDBState(page);
-  return JSON.parse(indexedDBState.snapshot.tabs);
+  let tabsPayload = null;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const indexedDBState = await readIndexedDBState(page);
+    if (indexedDBState && indexedDBState.snapshot && indexedDBState.snapshot.tabs) {
+      tabsPayload = indexedDBState.snapshot.tabs;
+      break;
+    }
+    await page.waitForTimeout(50);
+  }
+
+  if (tabsPayload === null) {
+    throw new Error('IndexedDB tabs snapshot was not available.');
+  }
+
+  return JSON.parse(tabsPayload);
 }
 
 async function readItemSnapshot(page, itemId = 'item-1') {
@@ -682,6 +695,7 @@ async function readItemSnapshot(page, itemId = 'item-1') {
 }
 
 async function createGraphForTest(page, graph) {
+  await page.waitForFunction(() => typeof window.postbabyCreateGraphForTest === 'function');
   return page.evaluate(async (input) => {
     if (typeof window.postbabyCreateGraphForTest !== 'function') {
       throw new Error('postbabyCreateGraphForTest is not available.');
@@ -689,6 +703,28 @@ async function createGraphForTest(page, graph) {
 
     return window.postbabyCreateGraphForTest(input);
   }, graph);
+}
+
+async function parseMermaidForTest(page, source, options = {}) {
+  await page.waitForFunction(() => typeof window.postbabyParseMermaidForTest === 'function');
+  return page.evaluate((input) => {
+    if (typeof window.postbabyParseMermaidForTest !== 'function') {
+      throw new Error('postbabyParseMermaidForTest is not available.');
+    }
+
+    return window.postbabyParseMermaidForTest(input.source, input.options);
+  }, { source, options });
+}
+
+async function createGraphFromMermaidForTest(page, source, options = {}) {
+  await page.waitForFunction(() => typeof window.postbabyCreateGraphFromMermaidForTest === 'function');
+  return page.evaluate(async (input) => {
+    if (typeof window.postbabyCreateGraphFromMermaidForTest !== 'function') {
+      throw new Error('postbabyCreateGraphFromMermaidForTest is not available.');
+    }
+
+    return window.postbabyCreateGraphFromMermaidForTest(input.source, input.options);
+  }, { source, options });
 }
 
 async function readEdgeSnapshot(page, edgeId = 'edge-1') {
@@ -4179,6 +4215,284 @@ test.describe('Static behavior', () => {
     expect(await readEdgePresentation(page.locator('.edge-line').first())).toMatchObject({
       markerEnd: expect.stringMatching(/^url\(#.+-arrow\)$/)
     });
+  });
+
+  [
+    {
+      name: 'flowchart LR parses to direction LR',
+      source: 'flowchart LR\nA --> B',
+      expectedDirection: 'LR',
+      expectedKind: 'arrow'
+    },
+    {
+      name: 'flowchart TD parses to direction TD',
+      source: 'flowchart TD\nA --> B',
+      expectedDirection: 'TD',
+      expectedKind: 'arrow'
+    },
+    {
+      name: 'graph TB parses to direction TD',
+      source: 'graph TB\nA --- B',
+      expectedDirection: 'TD',
+      expectedKind: 'line'
+    }
+  ].forEach((scenario) => {
+    test(`mermaid parser ${scenario.name}`, async ({ page }) => {
+      await prepareBlankPage(page);
+      await seedLocalStorage(page, buildEmptySnapshot());
+      await page.goto('/index.html');
+
+      const result = await parseMermaidForTest(page, scenario.source);
+      expect(result.ok).toBe(true);
+      expect(result.graph.options.direction).toBe(scenario.expectedDirection);
+      expect(result.graph.edges).toHaveLength(1);
+      expect(result.graph.edges[0].kind).toBe(scenario.expectedKind);
+      expect(result.warnings).toEqual([]);
+    });
+  });
+
+  test('mermaid parser maps supported node forms to normalized labels and shapes', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    const source = [
+      'flowchart LR',
+      'A',
+      'B[Start]',
+      'C["Start here"]',
+      'D[\'Single quoted\']',
+      'E(Fallback)',
+      'F((Round))',
+      'G{Decision}'
+    ].join('\n');
+
+    const result = await parseMermaidForTest(page, source);
+    expect(result.ok).toBe(true);
+
+    const nodesById = Object.fromEntries(result.graph.nodes.map((node) => [node.id, node]));
+    expect(nodesById.A).toMatchObject({ label: 'A', shape: 'default' });
+    expect(nodesById.B).toMatchObject({ label: 'Start', shape: 'default' });
+    expect(nodesById.C).toMatchObject({ label: 'Start here', shape: 'default' });
+    expect(nodesById.D).toMatchObject({ label: 'Single quoted', shape: 'default' });
+    expect(nodesById.E).toMatchObject({ label: 'Fallback', shape: 'default' });
+    expect(nodesById.F).toMatchObject({ label: 'Round', shape: 'circle' });
+    expect(nodesById.G).toMatchObject({ label: 'Decision', shape: 'diamond' });
+  });
+
+  test('mermaid parser preserves simple edge labels in normalized output', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    const source = [
+      'flowchart LR',
+      'A -->|Yes| B',
+      'B -- No --> C',
+      'C ==> D',
+      'D -.-> E'
+    ].join('\n');
+
+    const result = await parseMermaidForTest(page, source);
+    expect(result.ok).toBe(true);
+    expect(result.graph.edges).toEqual([
+      { from: 'A', to: 'B', kind: 'arrow', label: 'Yes' },
+      { from: 'B', to: 'C', kind: 'arrow', label: 'No' },
+      { from: 'C', to: 'D', kind: 'arrow' },
+      { from: 'D', to: 'E', kind: 'arrow' }
+    ]);
+  });
+
+  test('mermaid parser updates later labels for bare nodes and warns on conflicts', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    const source = [
+      'flowchart LR',
+      'A --> B',
+      'A[Start]',
+      'B["Keep Me"]',
+      'B[Conflict]'
+    ].join('\n');
+
+    const result = await parseMermaidForTest(page, source);
+    expect(result.ok).toBe(true);
+
+    const nodesById = Object.fromEntries(result.graph.nodes.map((node) => [node.id, node]));
+    expect(nodesById.A).toMatchObject({ label: 'Start', shape: 'default' });
+    expect(nodesById.B).toMatchObject({ label: 'Keep Me', shape: 'default' });
+    expect(result.warnings.map((warning) => warning.code)).toContain('conflicting_node_label');
+  });
+
+  test('mermaid parser ignores comments and warns for class/style noise', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    const source = [
+      'flowchart LR',
+      '%% comment',
+      '',
+      'subgraph Phase One',
+      'A[Start] --> B{Decision}',
+      'end',
+      'classDef important fill:#f9f,stroke:#333;',
+      'class A important',
+      'style B fill:#ccc',
+      'linkStyle 0 stroke:#333',
+      'click A "https://example.com"'
+    ].join('\n');
+
+    const result = await parseMermaidForTest(page, source);
+    expect(result.ok).toBe(true);
+    expect(result.graph.nodes).toEqual([
+      { id: 'A', label: 'Start', shape: 'default' },
+      { id: 'B', label: 'Decision', shape: 'diamond' }
+    ]);
+    expect(result.graph.edges).toEqual([
+      { from: 'A', to: 'B', kind: 'arrow' }
+    ]);
+    expect(result.warnings.filter((warning) => warning.code === 'ignored_mermaid_statement')).toHaveLength(7);
+  });
+
+  test('mermaid parser rejects unsupported diagram types cleanly', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    const result = await parseMermaidForTest(page, [
+      'sequenceDiagram',
+      'Alice->>Bob: Hello'
+    ].join('\n'));
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.map((error) => error.code)).toContain('unsupported_diagram_type');
+  });
+
+  test('mermaid parse output can be passed into graph creation and duplicate logical edges are rejected consistently', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    const parseResult = await parseMermaidForTest(page, [
+      'flowchart LR',
+      'A --> B',
+      'B --- A'
+    ].join('\n'));
+
+    expect(parseResult.ok).toBe(true);
+    expect(parseResult.graph.edges).toHaveLength(2);
+
+    const createResult = await createGraphForTest(page, parseResult.graph);
+    expect(createResult.ok).toBe(false);
+    expect(createResult.errors.map((error) => error.code)).toContain('duplicate_edge_connection');
+    await expect(page.locator('.grid-item')).toHaveCount(0);
+    await expect(page.locator('.edge-line')).toHaveCount(0);
+  });
+
+  test('mermaid-derived graphs create ordinary Postbaby items and edges through the existing pipeline', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    const parseResult = await parseMermaidForTest(page, [
+      'flowchart LR',
+      'A[Source] --> B((Circle Target))',
+      'A --- C{Decision}'
+    ].join('\n'), {
+      originX: 120,
+      originY: 140
+    });
+
+    expect(parseResult.ok).toBe(true);
+
+    const createResult = await createGraphForTest(page, parseResult.graph);
+    expect(createResult.ok).toBe(true);
+    expect(createResult.items).toHaveLength(3);
+    expect(createResult.edges).toHaveLength(2);
+
+    const tabsSnapshot = await readTabsSnapshot(page);
+    expect(tabsSnapshot[0].items).toHaveLength(3);
+    expect(tabsSnapshot[0].edges).toHaveLength(2);
+
+    const sourceItem = tabsSnapshot[0].items.find((item) => item.name === 'Source');
+    const circleItem = tabsSnapshot[0].items.find((item) => item.name === 'Circle Target');
+    const diamondItem = tabsSnapshot[0].items.find((item) => item.name === 'Decision');
+    expect(sourceItem).toBeTruthy();
+    expect(circleItem).toBeTruthy();
+    expect(diamondItem).toBeTruthy();
+    expect(sourceItem.shape).toBe('default');
+    expect(circleItem.shape).toBe('circle');
+    expect(diamondItem.shape).toBe('diamond');
+
+    const arrowEdge = tabsSnapshot[0].edges.find((edge) => edge.kind === 'arrow');
+    const lineEdge = tabsSnapshot[0].edges.find((edge) => edge.kind === 'line');
+    expect(arrowEdge).toBeTruthy();
+    expect(lineEdge).toBeTruthy();
+
+    await expect(page.locator('.grid-item')).toHaveCount(3);
+    await expect(page.locator('.edge-line')).toHaveCount(2);
+  });
+
+  test('mermaid-derived graph edges keep current arrow and line rendering behavior and survive reload', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    const createResult = await createGraphFromMermaidForTest(page, [
+      'flowchart LR',
+      'A[Source] --> B((Circle Target))',
+      'A --- C{Decision}'
+    ].join('\n'), {
+      originX: 180,
+      originY: 120
+    });
+
+    expect(createResult.ok).toBe(true);
+    expect(createResult.graph.options.direction).toBe('LR');
+
+    const sourceNote = page.locator(`.grid-item[data-id="${createResult.items[0].id}"]`);
+    const circleNote = page.locator(`.grid-item[data-id="${createResult.items[1].id}"]`);
+    const diamondNote = page.locator(`.grid-item[data-id="${createResult.items[2].id}"]`);
+    const arrowEdgeId = createResult.edges.find((edge) => edge.kind === 'arrow').id;
+    const lineEdgeId = createResult.edges.find((edge) => edge.kind === 'line').id;
+    const arrowEdge = page.locator(`.edge-group[data-edge-id="${arrowEdgeId}"] .edge-line`);
+    const lineEdge = page.locator(`.edge-group[data-edge-id="${lineEdgeId}"] .edge-line`);
+
+    const sourceGeometry = await readNoteOffsetGeometry(sourceNote);
+    const circleGeometry = await readNoteOffsetGeometry(circleNote);
+    const diamondGeometry = await readNoteOffsetGeometry(diamondNote);
+    const arrowCoordinates = await readEdgeCoordinates(arrowEdge);
+    const lineCoordinates = await readEdgeCoordinates(lineEdge);
+    const arrowPresentation = await readEdgePresentation(arrowEdge);
+    const linePresentation = await readEdgePresentation(lineEdge);
+
+    const expectedArrowEnd = getExpectedShapeAnchorPoint('circle', {
+      left: circleGeometry.left,
+      top: circleGeometry.top,
+      width: circleGeometry.width,
+      height: circleGeometry.height
+    }, {
+      x: sourceGeometry.centerX,
+      y: sourceGeometry.centerY
+    });
+
+    expectPointNear(
+      { x: arrowCoordinates.x2, y: arrowCoordinates.y2 },
+      expectedArrowEnd
+    );
+    expect(Math.abs(lineCoordinates.x2 - diamondGeometry.centerX)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(lineCoordinates.y2 - diamondGeometry.centerY)).toBeLessThanOrEqual(0.5);
+    expect(arrowPresentation.markerEnd).toMatch(/^url\(#.+-arrow\)$/);
+    expect(linePresentation.markerEnd).toBe('');
+
+    await page.reload();
+
+    await expectNoteVisible(page, 'Source');
+    await expectNoteVisible(page, 'Circle Target');
+    await expectNoteVisible(page, 'Decision');
+    await expect(page.locator('.edge-line')).toHaveCount(2);
   });
 
   test('dragging on empty canvas selects overlapping notes on mouseup and replaces prior selection', async ({ page }) => {
