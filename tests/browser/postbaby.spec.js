@@ -4621,6 +4621,12 @@ test.describe('Static behavior', () => {
     expect(controlsBeforeFit.hidden).toBe(false);
     expect(controlsBeforeFit.insideGrid).toBe(false);
     expect(controlsBeforeFit.text).not.toBe('100%');
+    const cameraControlsBox = await page.locator('#cameraControls').boundingBox();
+    const viewportSize = page.viewportSize();
+    if (!cameraControlsBox || !viewportSize) {
+      throw new Error('Camera controls bounding box or viewport size was not available.');
+    }
+    expect(Math.abs((cameraControlsBox.x + (cameraControlsBox.width / 2)) - (viewportSize.width / 2))).toBeLessThanOrEqual(4);
 
     await page.click('#cameraFitAllButton');
     const afterFitCamera = await readCamera(page);
@@ -9694,6 +9700,13 @@ test.describe('Settings and Account UI', () => {
 
     expect(controlsBox.width).toBeLessThanOrEqual(120);
     expect(controlsBox.x).toBeGreaterThan(addTabBox.x + addTabBox.width);
+
+    const cameraControlsBox = await page.locator('#cameraControls').boundingBox();
+    if (!cameraControlsBox) {
+      throw new Error('Camera controls bounding box was not available.');
+    }
+
+    expect(Math.abs((cameraControlsBox.x + (cameraControlsBox.width / 2)) - 180)).toBeLessThanOrEqual(4);
   });
 
   test('desktop tab bar ends before settings and account controls', async ({ page }) => {
