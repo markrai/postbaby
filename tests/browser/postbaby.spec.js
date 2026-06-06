@@ -1196,6 +1196,8 @@ async function readNotePresentation(locator) {
     const beforeStyle = window.getComputedStyle(element, '::before');
     const handle = element.querySelector('.grid-item-resize-handle');
     const handleStyle = handle ? window.getComputedStyle(handle) : null;
+    const noteRect = element.getBoundingClientRect();
+    const handleRect = handle ? handle.getBoundingClientRect() : null;
     return {
       sizeMode: element.dataset.sizeMode || '',
       usesExplicitSizeClass: element.classList.contains('grid-item--explicit-size'),
@@ -1203,7 +1205,14 @@ async function readNotePresentation(locator) {
       beforeBorderRadius: beforeStyle.borderRadius,
       beforeClipPath: beforeStyle.clipPath,
       handleRight: handleStyle ? handleStyle.right : null,
-      handleBottom: handleStyle ? handleStyle.bottom : null
+      handleBottom: handleStyle ? handleStyle.bottom : null,
+      handleNotchAngle: handleStyle ? handleStyle.getPropertyValue('--resize-handle-notch-angle').trim() : null,
+      handleCenterXRatio: handleRect && noteRect.width > 0
+        ? ((handleRect.left + (handleRect.width / 2)) - noteRect.left) / noteRect.width
+        : null,
+      handleCenterYRatio: handleRect && noteRect.height > 0
+        ? ((handleRect.top + (handleRect.height / 2)) - noteRect.top) / noteRect.height
+        : null
     };
   });
 }
@@ -2519,6 +2528,9 @@ test.describe('Static behavior', () => {
       } else {
         expect(presentation.beforeClipPath).not.toBe('none');
         expect(Number.parseFloat(presentation.handleRight || '0')).toBeGreaterThan(30);
+        expect(presentation.handleCenterXRatio).toBeGreaterThan(0.62);
+        expect(presentation.handleCenterXRatio).toBeLessThan(0.72);
+        expect(presentation.handleCenterYRatio).toBeGreaterThan(0.78);
       }
 
       const colorBeforeHandleClick = await readItemColor(page);
@@ -2586,6 +2598,14 @@ test.describe('Static behavior', () => {
       expect(presentation.beforeClipPath).not.toBe('none');
       expect(Number.parseFloat(presentation.handleRight || '0')).toBeGreaterThan(10);
       expect(Number.parseFloat(presentation.handleBottom || '0')).toBeGreaterThan(10);
+
+      if (shape === 'upsideDownTriangle') {
+        expect(presentation.handleNotchAngle).toBe('117deg');
+        expect(presentation.handleCenterXRatio).toBeGreaterThan(0.54);
+        expect(presentation.handleCenterXRatio).toBeLessThan(0.62);
+        expect(presentation.handleCenterYRatio).toBeGreaterThan(0.79);
+      }
+
       expect(noteSize.width).toBe(expectedWidth);
       expect(noteSize.height).toBe(expectedHeight);
 
