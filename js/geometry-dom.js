@@ -232,6 +232,11 @@
         };
     }
 
+    function getContainerRelativePositionStringsFromClient(clientX, clientY, containerElement) {
+        const containerPoint = getContainerRelativePointFromClient(clientX, clientY, containerElement);
+        return formatItemPosition(containerPoint.x, containerPoint.y);
+    }
+
     function getContainerRelativePositionStringsFromPage(pageX, pageY, containerElement) {
         const containerRect = containerElement.getBoundingClientRect();
         const containerLeft = containerRect.left + window.scrollX;
@@ -417,6 +422,7 @@
         getPointerClientPoint,
         getPointerPagePoint,
         getContainerRelativePointFromClient,
+        getContainerRelativePositionStringsFromClient,
         getContainerRelativePositionStringsFromPage,
         getElementClientRect,
         getItemsBoundsFromElements,

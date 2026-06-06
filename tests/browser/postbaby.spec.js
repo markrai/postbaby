@@ -792,6 +792,8 @@ async function readWindowScroll(page) {
   return page.evaluate(() => ({
     x: window.scrollX,
     y: window.scrollY,
+    documentX: document.scrollingElement ? document.scrollingElement.scrollLeft : window.scrollX,
+    documentY: document.scrollingElement ? document.scrollingElement.scrollTop : window.scrollY,
     width: window.innerWidth,
     height: window.innerHeight
   }));
@@ -832,6 +834,22 @@ async function resetWorkspaceScroll(page) {
 
     window.scrollTo(0, 0);
   });
+}
+
+async function scrollWorkspaceTo(page, left, top) {
+  await page.evaluate((position) => {
+    const workspace = document.getElementById('tabContent');
+    if (workspace && typeof workspace.scrollTo === 'function') {
+      workspace.scrollTo({
+        left: position.left,
+        top: position.top,
+        behavior: 'auto'
+      });
+      return;
+    }
+
+    window.scrollTo(position.left, position.top);
+  }, { left, top });
 }
 
 async function readViewportRecoveryFootprint(page) {
@@ -8100,6 +8118,8 @@ test.describe('Settings and Account UI', () => {
     const windowScroll = await readWindowScroll(page);
     expect(windowScroll.x).toBe(0);
     expect(windowScroll.y).toBe(0);
+    expect(windowScroll.documentX).toBe(0);
+    expect(windowScroll.documentY).toBe(0);
 
     await expect.poll(async () => {
       const rect = await readItemClientRect(page, 'far-item');
@@ -8520,6 +8540,293 @@ test.describe('Settings and Account UI', () => {
       return footprint.sizerLeft <= beforeFootprint.sizerLeft - 1000
         && footprint.sizerTop <= beforeFootprint.sizerTop - 1000;
     }).toBe(true);
+  });
+
+  test('workspace-scrolled note creation keeps right-click and Add Item placement inside the visible workspace', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Scroll Anchor', {
+        itemId: 'scroll-anchor',
+        position: { top: '2400px', left: '2600px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    await scrollWorkspaceTo(page, 1800, 1600);
+    await expect.poll(async () => {
+      const scroll = await readWorkspaceScroll(page);
+      return scroll.x > 0 && scroll.y > 0;
+    }).toBe(true);
+    const scrolledWorkspace = await readWorkspaceScroll(page);
+
+    const workspaceBox = await page.locator('#tabContent').boundingBox();
+    if (!workspaceBox) {
+      throw new Error('Workspace viewport bounding box was not available.');
+    }
+
+    const createClientPoint = {
+      clientX: Math.round(workspaceBox.x + 180),
+      clientY: Math.round(workspaceBox.y + 160)
+    };
+    const expectedGridPoint = await page.evaluate((point) => {
+      const grid = document.querySelector('.tab-pane.active .grid-container');
+      if (!grid) {
+        throw new Error('Active grid was not available.');
+      }
+
+      const rect = grid.getBoundingClientRect();
+      return {
+        x: Math.round(point.clientX - rect.left),
+        y: Math.round(point.clientY - rect.top)
+      };
+    }, createClientPoint);
+
+    await page.locator('.grid-container').first().evaluate((element, point) => {
+      element.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        button: 2,
+        clientX: point.clientX,
+        clientY: point.clientY
+      }));
+    }, createClientPoint);
+
+    let textarea = page.locator('textarea.edit-textarea');
+    await expect(textarea).toBeVisible();
+    await textarea.fill('Scrolled Context Note');
+    await textarea.press('Escape');
+    await expectNoteVisible(page, 'Scrolled Context Note');
+
+    const contextItem = (await readTabsSnapshot(page))[0].items.find((item) => item.name === 'Scrolled Context Note');
+    expect(contextItem).toBeTruthy();
+    const contextPosition = await page.evaluate((item) => {
+      return window.PostbabyGeometryDom.getItemPositionXY(item);
+    }, contextItem);
+    expect(Math.abs(contextPosition.x - expectedGridPoint.x)).toBeLessThanOrEqual(4);
+    expect(Math.abs(contextPosition.y - expectedGridPoint.y)).toBeLessThanOrEqual(4);
+
+    await page.evaluate(() => {
+      const addButton = document.querySelector('.tab-pane.active .addItemButton');
+      if (!(addButton instanceof HTMLButtonElement)) {
+        throw new Error('Active Add Item button was not available.');
+      }
+      addButton.click();
+    });
+
+    textarea = page.locator('textarea.edit-textarea');
+    await expect(textarea).toBeVisible();
+    await textarea.fill('Scrolled Add Button Note');
+    await textarea.press('Escape');
+    await expectNoteVisible(page, 'Scrolled Add Button Note');
+
+    const addButtonItem = (await readTabsSnapshot(page))[0].items.find((item) => item.name === 'Scrolled Add Button Note');
+    expect(addButtonItem).toBeTruthy();
+    const addButtonPosition = await page.evaluate((item) => {
+      return window.PostbabyGeometryDom.getItemPositionXY(item);
+    }, addButtonItem);
+    expect(addButtonPosition.x).toBeGreaterThanOrEqual(scrolledWorkspace.x);
+    expect(addButtonPosition.x).toBeLessThanOrEqual(scrolledWorkspace.x + scrolledWorkspace.width);
+    expect(addButtonPosition.y).toBeGreaterThanOrEqual(scrolledWorkspace.y);
+    expect(addButtonPosition.y).toBeLessThanOrEqual(scrolledWorkspace.y + scrolledWorkspace.height);
+  });
+
+  test('workspace-scrolled drag, resize, edge creation, marquee selection, and context deletion keep using workspace coordinates', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Scrolled Source', {
+        itemId: 'scroll-source',
+        position: { top: '2200px', left: '2200px' }
+      }),
+      buildNoteItem('Scrolled Target', {
+        itemId: 'scroll-target',
+        position: { top: '2240px', left: '2520px' }
+      }),
+      buildNoteItem('Scrolled Outside', {
+        itemId: 'scroll-outside',
+        position: { top: '2500px', left: '2860px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    await scrollWorkspaceTo(page, 1900, 1800);
+    await expect.poll(async () => {
+      const scroll = await readWorkspaceScroll(page);
+      return scroll.x > 0 && scroll.y > 0;
+    }).toBe(true);
+
+    const sourceNote = page.locator('.grid-item[data-id="scroll-source"]');
+    const targetNote = page.locator('.grid-item[data-id="scroll-target"]');
+    const outsideNote = page.locator('.grid-item[data-id="scroll-outside"]');
+    const sourceBefore = await readItemPositionViaGeometryDom(page, 'scroll-source');
+    const targetBeforeSize = await readNoteSize(targetNote);
+
+    await dragNoteBy(page, sourceNote, 120, 60);
+    await page.waitForTimeout(350);
+    const sourceAfter = await readItemPositionViaGeometryDom(page, 'scroll-source');
+    expect(sourceAfter.x).toBe(sourceBefore.x + 120);
+    expect(sourceAfter.y).toBe(sourceBefore.y + 60);
+
+    await resizeNoteBy(page, targetNote, 80, 50);
+    await page.waitForTimeout(350);
+    const targetAfterSize = await readNoteSize(targetNote);
+    expect(targetAfterSize.width).toBeGreaterThan(targetBeforeSize.width);
+    expect(targetAfterSize.height).toBeGreaterThan(targetBeforeSize.height);
+
+    await drawEdgeBetweenNotes(page, sourceNote, targetNote, { modifier: 'Control' });
+    await expect(page.locator('.edge-line')).toHaveCount(1);
+
+    await marqueeSelectNotes(page, [sourceNote, targetNote], { margin: 8 });
+    await expect(page.locator('.grid-item.selected')).toHaveCount(2);
+    await expect(sourceNote).toHaveClass(/selected/);
+    await expect(targetNote).toHaveClass(/selected/);
+    await expect(outsideNote).not.toHaveClass(/selected/);
+
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.grid-item.selected')).toHaveCount(0);
+
+    await targetNote.click({ button: 'right' });
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    await page.click('#confirmDelete');
+    await expect(targetNote).toHaveCount(0);
+    await expect(page.locator('.edge-line')).toHaveCount(0);
+    await expect(sourceNote).toBeVisible();
+  });
+
+  test('workspace scroll keeps top chrome hit targets usable for settings, tabs, and trash interactions', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Scrollable Trash Note', {
+        itemId: 'trash-note',
+        position: { top: '2300px', left: '2500px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    await scrollWorkspaceTo(page, 1850, 1700);
+    await expect.poll(async () => {
+      const scroll = await readWorkspaceScroll(page);
+      return scroll.x > 0 && scroll.y > 0;
+    }).toBe(true);
+
+    await page.click('#settingsButton');
+    await expect(page.locator('#settingsModal')).toBeVisible();
+    await page.locator('.close-settings').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+
+    const tabLocator = page.locator('#tabBar .tab[data-tab-id]');
+    const tabCountBefore = await tabLocator.count();
+    await page.click('#addTab');
+    await expect(tabLocator).toHaveCount(tabCountBefore + 1);
+    const newestTab = tabLocator.nth(tabCountBefore);
+    const newestTabId = await newestTab.getAttribute('data-tab-id');
+    if (!newestTabId) {
+      throw new Error('Newly created tab id was not available.');
+    }
+    await newestTab.click();
+    await expect(page.locator(`.tab-pane[data-tab-id="${newestTabId}"]`)).toHaveClass(/active/);
+    await page.locator('.tab[data-tab-id="tab-1"]').click();
+    await expect(page.locator('.tab-pane[data-tab-id="tab-1"]')).toHaveClass(/active/);
+
+    const trashNote = page.locator('.grid-item[data-id="trash-note"]');
+    await dragNoteToTrash(page, trashNote);
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    await page.click('#confirmDelete');
+    await expect(trashNote).toHaveCount(0);
+  });
+
+  test('graph hook default placement follows the visible workspace area before and after workspace scroll', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    const nearGraphResult = await createGraphForTest(page, buildNormalizedGraph([
+      buildGraphNode('A', { label: 'Graph Origin Visible' })
+    ]));
+    expect(nearGraphResult.ok).toBe(true);
+    await expect(page.locator(`.grid-item[data-id="${nearGraphResult.createdItemIds[0]}"]`)).toBeVisible();
+
+    const farAnchorGraphResult = await createGraphForTest(page, buildNormalizedGraph([
+      buildGraphNode('F', { label: 'Graph Far Anchor' })
+    ], [], {
+      originX: 2600,
+      originY: 2300
+    }));
+    expect(farAnchorGraphResult.ok).toBe(true);
+
+    await scrollWorkspaceTo(page, 2100, 1900);
+    await expect.poll(async () => {
+      const scroll = await readWorkspaceScroll(page);
+      return scroll.x > 0 && scroll.y > 0;
+    }).toBe(true);
+    const scrolledWorkspace = await readWorkspaceScroll(page);
+
+    const scrolledGraphResult = await createGraphForTest(page, buildNormalizedGraph([
+      buildGraphNode('B', { label: 'Graph Scrolled Visible' })
+    ]));
+    expect(scrolledGraphResult.ok).toBe(true);
+
+    const scrolledGraphItem = (await readTabsSnapshot(page))[0].items.find((item) => item.id === scrolledGraphResult.createdItemIds[0]);
+    expect(scrolledGraphItem).toBeTruthy();
+    const scrolledGraphPosition = await page.evaluate((item) => {
+      return window.PostbabyGeometryDom.getItemPositionXY(item);
+    }, scrolledGraphItem);
+    expect(scrolledGraphPosition.x).toBeGreaterThanOrEqual(scrolledWorkspace.x);
+    expect(scrolledGraphPosition.x).toBeLessThanOrEqual(scrolledWorkspace.x + scrolledWorkspace.width);
+    expect(scrolledGraphPosition.y).toBeGreaterThanOrEqual(scrolledWorkspace.y);
+    expect(scrolledGraphPosition.y).toBeLessThanOrEqual(scrolledWorkspace.y + scrolledWorkspace.height);
+    await expect(page.locator(`.grid-item[data-id="${scrolledGraphResult.createdItemIds[0]}"]`)).toBeVisible();
+  });
+
+  test('Mermaid graph creation default placement follows the visible workspace area before and after workspace scroll', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    const nearMermaidResult = await createGraphFromMermaidForTest(page, [
+      'flowchart LR',
+      'A[Mermaid Origin Visible]'
+    ].join('\n'));
+    expect(nearMermaidResult.ok).toBe(true);
+    await expect(page.locator(`.grid-item[data-id="${nearMermaidResult.createdItemIds[0]}"]`)).toBeVisible();
+
+    const farAnchorMermaidResult = await createGraphFromMermaidForTest(page, [
+      'flowchart LR',
+      'F[Mermaid Far Anchor]'
+    ].join('\n'), {
+      originX: 2700,
+      originY: 2400
+    });
+    expect(farAnchorMermaidResult.ok).toBe(true);
+
+    await scrollWorkspaceTo(page, 2200, 2000);
+    await expect.poll(async () => {
+      const scroll = await readWorkspaceScroll(page);
+      return scroll.x > 0 && scroll.y > 0;
+    }).toBe(true);
+    const scrolledWorkspace = await readWorkspaceScroll(page);
+
+    const scrolledMermaidResult = await createGraphFromMermaidForTest(page, [
+      'flowchart TD',
+      'B[Mermaid Scrolled Visible]'
+    ].join('\n'));
+    expect(scrolledMermaidResult.ok).toBe(true);
+
+    const scrolledMermaidItem = (await readTabsSnapshot(page))[0].items.find((item) => item.id === scrolledMermaidResult.createdItemIds[0]);
+    expect(scrolledMermaidItem).toBeTruthy();
+    const scrolledMermaidPosition = await page.evaluate((item) => {
+      return window.PostbabyGeometryDom.getItemPositionXY(item);
+    }, scrolledMermaidItem);
+    expect(scrolledMermaidPosition.x).toBeGreaterThanOrEqual(scrolledWorkspace.x);
+    expect(scrolledMermaidPosition.x).toBeLessThanOrEqual(scrolledWorkspace.x + scrolledWorkspace.width);
+    expect(scrolledMermaidPosition.y).toBeGreaterThanOrEqual(scrolledWorkspace.y);
+    expect(scrolledMermaidPosition.y).toBeLessThanOrEqual(scrolledWorkspace.y + scrolledWorkspace.height);
+    await expect(page.locator(`.grid-item[data-id="${scrolledMermaidResult.createdItemIds[0]}"]`)).toBeVisible();
   });
 
   test('import and export still work from Settings', async ({ page }) => {
