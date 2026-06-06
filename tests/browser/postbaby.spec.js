@@ -4121,6 +4121,58 @@ test.describe('Static behavior', () => {
     expect(await readItemPositionsById(page, trackedIds)).toEqual(beforePositions);
   });
 
+  test('legacy out-of-bounds positions stay unchanged across reload, rerender, edge rerender, and recovery until a new write occurs', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Legacy Far Source', {
+        itemId: 'far-item',
+        width: 220,
+        height: 120,
+        position: {
+          top: '220px',
+          left: `${MAX_CANVAS_COORD + 500}px`
+        }
+      }),
+      buildNoteItem('Legacy Near Target', {
+        itemId: 'near-item',
+        shape: 'circle',
+        width: 220,
+        position: { top: '180px', left: '380px' }
+      })
+    ], {
+      edges: [{
+        id: 'edge-1',
+        fromItemId: 'far-item',
+        toItemId: 'near-item',
+        kind: 'arrow'
+      }]
+    });
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const beforePositions = await readItemPositionsById(page, ['far-item', 'near-item']);
+    expect(beforePositions['far-item']).toEqual({
+      top: '220px',
+      left: `${MAX_CANVAS_COORD + 500}px`
+    });
+
+    await page.reload();
+    expect(await readItemPositionsById(page, ['far-item', 'near-item'])).toEqual(beforePositions);
+
+    const nearNote = page.locator('.grid-item[data-id="near-item"]');
+    await nearNote.click();
+    await page.waitForTimeout(350);
+    expect(await readItemPositionsById(page, ['far-item', 'near-item'])).toEqual(beforePositions);
+
+    await resizeNoteBy(page, nearNote, 40, 20);
+    await page.waitForTimeout(350);
+    expect((await readItemPositionsById(page, ['far-item']))['far-item']).toEqual(beforePositions['far-item']);
+
+    await showAllItemsForTest(page);
+    expect((await readItemPositionsById(page, ['far-item']))['far-item']).toEqual(beforePositions['far-item']);
+  });
+
   test('manual note creation clamps pointer-based positions within bounds without introducing numeric x/y fields', async ({ page }) => {
     await prepareBlankPage(page);
     await seedLocalStorage(page, buildEmptySnapshot());
@@ -4198,6 +4250,40 @@ test.describe('Static behavior', () => {
     expect(tabsSnapshot[0].edges).toHaveLength(MAX_EDGES_PER_TAB);
   });
 
+  test('duplicate and self-edge attempts do not show the connection-limit toast or create partial edges', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Edge Source', {
+        itemId: 'item-1',
+        position: { top: '80px', left: '80px' }
+      }),
+      buildNoteItem('Edge Target', {
+        itemId: 'item-2',
+        position: { top: '220px', left: '360px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const sourceNote = page.locator('.grid-item[data-id="item-1"]');
+    const targetNote = page.locator('.grid-item[data-id="item-2"]');
+
+    await drawEdgeBetweenNotes(page, sourceNote, targetNote, { modifier: 'Shift' });
+    await expect(page.locator('.edge-line')).toHaveCount(1);
+
+    await drawEdgeBetweenNotes(page, sourceNote, targetNote, { modifier: 'Control' });
+    await expect(page.locator('.edge-line')).toHaveCount(1);
+    await expect(page.locator('.toast').filter({ hasText: 'This tab has reached the connection limit.' })).toHaveCount(0);
+
+    await drawEdgeBetweenNotes(page, sourceNote, sourceNote, { modifier: 'Shift' });
+    await expect(page.locator('.edge-line')).toHaveCount(1);
+    await expect(page.locator('.toast').filter({ hasText: 'This tab has reached the connection limit.' })).toHaveCount(0);
+
+    const tabsSnapshot = await readTabsSnapshot(page);
+    expect(tabsSnapshot[0].edges).toHaveLength(1);
+  });
+
   test('existing saved out-of-bounds items render unchanged until drag commit clamps them back into bounds', async ({ page }) => {
     const localSnapshot = buildLocalSnapshot('Out Of Bounds Seed', {
       itemId: 'far-item',
@@ -4247,7 +4333,7 @@ test.describe('Static behavior', () => {
     const textarea = page.locator('textarea.edit-textarea');
     const longText = 'x'.repeat(MAX_ITEM_TEXT_CHARS + 1);
     await textarea.fill(longText);
-    await textarea.press('Escape');
+    await textarea.evaluate((element) => element.blur());
 
     await expect(page.locator('.toast').last()).toContainText(`Notes can be up to ${MAX_ITEM_TEXT_CHARS} characters.`);
     await expect(textarea).toBeVisible();
@@ -4268,6 +4354,46 @@ test.describe('Static behavior', () => {
     await page.goto('/index.html');
 
     expect((await readItemSnapshot(page, 'item-1')).name.length).toBe(MAX_ITEM_TEXT_CHARS + 1);
+  });
+
+  test('legacy over-limit note edits can be canceled safely after a blocked save attempt', async ({ page }) => {
+    const longSavedText = 'L'.repeat(MAX_ITEM_TEXT_CHARS + 1);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildLocalSnapshot(longSavedText));
+    await page.goto('/index.html');
+
+    const note = page.locator('.grid-item[data-id="item-1"]');
+    await note.evaluate((element) => {
+      element.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+    });
+    const textarea = page.locator('textarea.edit-textarea');
+    await expect(textarea).toHaveValue(longSavedText);
+    await textarea.press('Escape');
+    await expect(textarea).toHaveCount(0);
+    expect((await readItemSnapshot(page, 'item-1')).name).toBe(longSavedText);
+
+    await note.evaluate((element) => {
+      element.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+    });
+    await textarea.fill(`${longSavedText}x`);
+    await textarea.evaluate((element) => element.blur());
+    await expect(page.locator('.toast').last()).toContainText(`Notes can be up to ${MAX_ITEM_TEXT_CHARS} characters.`);
+    await expect(textarea).toBeVisible();
+    await expect(textarea).toHaveValue(`${longSavedText}x`);
+    expect((await readItemSnapshot(page, 'item-1')).name).toBe(longSavedText);
+
+    await textarea.press('Escape');
+    await expect(textarea).toHaveCount(0);
+    expect((await readItemSnapshot(page, 'item-1')).name).toBe(longSavedText);
+
+    await note.evaluate((element) => {
+      element.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+    });
+    await textarea.fill('T'.repeat(MAX_ITEM_TEXT_CHARS));
+    await textarea.evaluate((element) => element.blur());
+    await expect(textarea).toHaveCount(0);
+    expect((await readItemSnapshot(page, 'item-1')).name).toBe('T'.repeat(MAX_ITEM_TEXT_CHARS));
   });
 
   test('graph hook creates ordinary Postbaby items and edges from normalized graph data', async ({ page }) => {
@@ -8443,6 +8569,36 @@ test.describe('Settings and Account UI', () => {
     const tabsSnapshot = await readTabsSnapshot(page);
     expect(tabsSnapshot[0].items || []).toHaveLength(0);
     expect(tabsSnapshot[0].edges || []).toHaveLength(0);
+  });
+
+  test('Mermaid import from Settings surfaces tab-capacity failures without partial items or edges', async ({ page }) => {
+    const nearlyFullItems = buildBulkNoteItems(MAX_ITEMS_PER_TAB - 1);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildLocalSnapshotWithItems(nearlyFullItems));
+    await page.goto('/index.html');
+
+    await openSettingsImportExportTab(page);
+    await page.locator('#mermaidImportSource').fill([
+      'flowchart LR',
+      'A[Too Big Source] --> B[Too Big Target]'
+    ].join('\n'));
+    await page.locator('#mermaidImportButton').click();
+
+    await expect(page.locator('#settingsModal')).toBeVisible();
+    await expect(page.locator('#mermaidImportStatus')).toContainText('Mermaid import failed.');
+    await expect(page.locator('#mermaidImportStatus')).toContainText('Fix the Mermaid source below and try again.');
+    await expect(page.locator('#mermaidImportStatus')).toContainText('This import is too large for one tab.');
+    await expect(page.locator('#mermaidImportSource')).toHaveValue([
+      'flowchart LR',
+      'A[Too Big Source] --> B[Too Big Target]'
+    ].join('\n'));
+
+    const tabsSnapshot = await readTabsSnapshot(page);
+    expect(tabsSnapshot[0].items).toHaveLength(MAX_ITEMS_PER_TAB - 1);
+    expect(tabsSnapshot[0].edges || []).toHaveLength(0);
+    expect(tabsSnapshot[0].items.some((item) => item.name === 'Too Big Source')).toBe(false);
+    expect(tabsSnapshot[0].items.some((item) => item.name === 'Too Big Target')).toBe(false);
   });
 
   test('manual note and manual edge creation still work after Mermaid import from Settings', async ({ page }) => {
