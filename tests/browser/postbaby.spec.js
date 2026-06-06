@@ -6,6 +6,7 @@ const SNAPSHOTS_STORE = 'snapshots';
 const META_STORE = 'meta';
 const PRIMARY_RECORD_ID = 'primary';
 const TIMESTAMP = '2026-05-13T12:00:00.000Z';
+const TEST_BASE_URL = 'http://127.0.0.1:4173';
 const EDGE_ARM_DELAY_MS = 1000;
 const EDGE_ARROW_TARGET_INSET = 2;
 const MIN_CANVAS_COORD = -100000;
@@ -472,6 +473,14 @@ function buildServerPayload(noteText, version) {
   };
 }
 
+function buildServerSnapshotPayload(snapshot, version, updatedAt = TIMESTAMP) {
+  return {
+    version,
+    updatedAt,
+    data: snapshot
+  };
+}
+
 function normalizeScopeKey(scopeKey = PRIMARY_RECORD_ID) {
   return typeof scopeKey === 'string' && scopeKey.trim()
     ? scopeKey.trim()
@@ -742,6 +751,42 @@ async function dragNoteToTrash(page, note) {
 
 async function expectNoteVisible(page, noteText) {
   await expect(page.locator('.grid-item span').filter({ hasText: noteText }).first()).toBeVisible();
+}
+
+async function createNoteAt(page, noteText, point = { x: 900, y: 300 }) {
+  const grid = page.locator('.grid-container').first();
+  await expect(grid).toBeVisible();
+  await grid.evaluate((element, clickPoint) => {
+    element.dispatchEvent(new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+      clientX: clickPoint.x,
+      clientY: clickPoint.y
+    }));
+  }, point);
+
+  const textarea = page.locator('textarea.edit-textarea');
+  await expect(textarea).toBeVisible();
+  await textarea.fill(noteText);
+  await textarea.press('Escape');
+  await expect(textarea).toHaveCount(0);
+  await expectNoteVisible(page, noteText);
+}
+
+async function deleteNoteViaContextMenu(page, itemId) {
+  const note = page.locator(`.grid-item[data-id="${itemId}"]`);
+  await note.evaluate((element) => {
+    element.dispatchEvent(new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+      buttons: 2
+    }));
+  });
+  await expect(page.locator('#confirmModal')).toBeVisible();
+  await page.click('#confirmDelete');
+  await expect(page.locator(`.grid-item[data-id="${itemId}"]`)).toHaveCount(0);
 }
 
 async function readTabsSnapshot(page) {
@@ -1921,6 +1966,34 @@ function attachDialogHandler(page, steps, seenDialogs) {
   });
 }
 
+function buildMockedSyncRuntimeConfigBody(runtimeAccount, runtimeOverrides = {}) {
+  const bodyLines = [
+    'window.POSTBABY_RUNTIME = {',
+    `  deploymentMode: ${JSON.stringify(runtimeOverrides.deploymentMode || 'selfhosted')},`,
+    `  authorityModel: ${JSON.stringify(runtimeOverrides.authorityModel || 'server_authoritative')},`,
+    `  authAvailable: ${runtimeOverrides.authAvailable === undefined ? true : runtimeOverrides.authAvailable === true},`,
+    `  syncAvailable: ${runtimeOverrides.syncAvailable === undefined ? true : runtimeOverrides.syncAvailable === true},`,
+    `  authRequired: ${runtimeOverrides.authRequired === undefined ? true : runtimeOverrides.authRequired === true},`,
+    `  syncRequiresAuth: ${runtimeOverrides.syncRequiresAuth === undefined ? true : runtimeOverrides.syncRequiresAuth === true},`,
+    `  syncUsable: ${runtimeOverrides.syncUsable === undefined ? true : runtimeOverrides.syncUsable === true},`,
+    `  syncPausedReason: ${JSON.stringify(runtimeOverrides.syncPausedReason || '')},`,
+    `  entitlement: ${JSON.stringify(runtimeOverrides.entitlement || { hostedSync: false, status: 'none' })},`,
+    `  apiBase: ${JSON.stringify(runtimeOverrides.apiBase || '')},`,
+    `  account: ${JSON.stringify(runtimeAccount)}`,
+    '};'
+  ];
+
+  if (Object.prototype.hasOwnProperty.call(runtimeOverrides, 'billingAvailable')) {
+    bodyLines.splice(4, 0, `  billingAvailable: ${runtimeOverrides.billingAvailable === true},`);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(runtimeOverrides, 'isAuthenticated')) {
+    bodyLines.splice(4, 0, `  isAuthenticated: ${runtimeOverrides.isAuthenticated === true},`);
+  }
+
+  return bodyLines.join('\n');
+}
+
 async function enableMockedSync(page, options = {}) {
   const metaPayload = options.metaPayload || { ok: true, exists: false, version: 0, updatedAt: TIMESTAMP };
   const documentPayload = options.documentPayload || buildServerPayload('Server Snapshot', metaPayload.version || 1);
@@ -1942,21 +2015,7 @@ async function enableMockedSync(page, options = {}) {
       headers: {
         'Cache-Control': 'no-store'
       },
-      body: [
-        'window.POSTBABY_RUNTIME = {',
-        '  deploymentMode: "selfhosted",',
-        '  authorityModel: "server_authoritative",',
-        '  authAvailable: true,',
-        '  syncAvailable: true,',
-        '  authRequired: true,',
-        '  syncRequiresAuth: true,',
-        '  syncUsable: true,',
-        '  syncPausedReason: "",',
-        '  entitlement: { hostedSync: false, status: "none" },',
-        '  apiBase: "",',
-        `  account: ${JSON.stringify(runtimeAccount)}`,
-        '};'
-      ].join('\n')
+      body: buildMockedSyncRuntimeConfigBody(runtimeAccount)
     });
   });
 
@@ -1994,6 +2053,95 @@ async function enableMockedSync(page, options = {}) {
             body: {
               ok: true,
               version: metaPayload.exists ? metaPayload.version + 1 : 1,
+              updatedAt: TIMESTAMP
+            }
+          };
+
+      await route.fulfill({
+        status: response.status || 200,
+        contentType: 'application/json; charset=utf-8',
+        headers: {
+          'Cache-Control': 'no-store'
+        },
+        body: JSON.stringify(response.body)
+      });
+      return;
+    }
+
+    await route.fulfill({
+      status: 405,
+      contentType: 'application/json; charset=utf-8',
+      body: JSON.stringify({ ok: false })
+    });
+  });
+}
+
+async function enableDynamicMockedSync(target, options = {}) {
+  const runtimeAccount = Object.assign({
+    username: 'owner',
+    displayName: 'owner',
+    email: '',
+    avatarUrl: '',
+    isAdmin: true,
+    storageKey: 'owner-scope',
+    status: 'active'
+  }, options.runtimeAccount || {});
+  const runtimeOverrides = options.runtimeOverrides || {};
+  const getMetaPayload = typeof options.getMetaPayload === 'function'
+    ? options.getMetaPayload
+    : (() => ({ ok: true, exists: false, version: 0, updatedAt: TIMESTAMP }));
+  const getDocumentPayload = typeof options.getDocumentPayload === 'function'
+    ? options.getDocumentPayload
+    : (() => buildServerPayload('Server Snapshot', 1));
+  const onSave = typeof options.onSave === 'function'
+    ? options.onSave
+    : null;
+
+  await target.route('**/runtime-config.js', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/javascript; charset=utf-8',
+      headers: {
+        'Cache-Control': 'no-store'
+      },
+      body: buildMockedSyncRuntimeConfigBody(runtimeAccount, runtimeOverrides)
+    });
+  });
+
+  await target.route(/\/api\/document\/meta(?:\?.*)?$/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json; charset=utf-8',
+      headers: {
+        'Cache-Control': 'no-store'
+      },
+      body: JSON.stringify(getMetaPayload(route.request()))
+    });
+  });
+
+  await target.route(/\/api\/document(?:\?.*)?$/, async (route) => {
+    const request = route.request();
+    if (request.method() === 'GET') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json; charset=utf-8',
+        headers: {
+          'Cache-Control': 'no-store'
+        },
+        body: JSON.stringify(getDocumentPayload(request))
+      });
+      return;
+    }
+
+    if (request.method() === 'PUT') {
+      const requestBody = JSON.parse(request.postData() || '{}');
+      const response = onSave
+        ? await onSave(requestBody, request)
+        : {
+            status: 200,
+            body: {
+              ok: true,
+              version: 1,
               updatedAt: TIMESTAMP
             }
           };
@@ -8414,6 +8562,190 @@ test.describe('Mocked sync startup reconciliation', () => {
     await page.locator('#syncStatusButton').click();
     await expect(page.locator('#syncUseBrowserButton')).toBeVisible();
     await expect(page.locator('#syncUseCloudButton')).toBeVisible();
+  });
+
+  test('covers the Titan/Venom quick-close failure class without requiring another Titan edit', async ({ browser }) => {
+    const serverSnapshotData = buildEmptySnapshot({ hasRunBefore: true, theme: 'light' });
+    const serverState = {
+      snapshot: buildServerSnapshotPayload(serverSnapshotData, 6),
+      blockUploads: true
+    };
+    const localSnapshot = addDurableCloudSyncMetadata(
+      buildEmptySnapshot({ hasRunBefore: true, theme: 'light', syncVersion: 6 }),
+      {
+        pending: false,
+        revision: 6,
+        lastCloudUploadedAt: TIMESTAMP
+      }
+    );
+
+    async function openDevicePage() {
+      const context = await browser.newContext({
+        baseURL: TEST_BASE_URL,
+        serviceWorkers: 'block'
+      });
+      await enableDynamicMockedSync(context, {
+        runtimeOverrides: {
+          isAuthenticated: true
+        },
+        getMetaPayload: () => ({
+          ok: true,
+          exists: true,
+          version: serverState.snapshot.version,
+          updatedAt: serverState.snapshot.updatedAt
+        }),
+        getDocumentPayload: () => serverState.snapshot,
+        onSave: async (body) => {
+          if (serverState.blockUploads) {
+            return {
+              status: 503,
+              body: { ok: false, error: { code: 'blocked_for_test', message: 'blocked for test' } }
+            };
+          }
+
+          const nextVersion = serverState.snapshot.version + 1;
+          serverState.snapshot = buildServerSnapshotPayload(body.data, nextVersion);
+          return {
+            status: 200,
+            body: { ok: true, version: nextVersion, updatedAt: TIMESTAMP }
+          };
+        }
+      });
+
+      const page = await context.newPage();
+      await prepareBlankPage(page);
+      await seedLocalStorage(page, localSnapshot, 'owner-scope');
+      await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+      return { context, page };
+    }
+
+    const titan = await openDevicePage();
+    const venom = await openDevicePage();
+
+    try {
+      await titan.page.goto('/index.html');
+      await venom.page.goto('/index.html');
+      await createNoteAt(titan.page, 'Titan Quick Close Note', { x: 920, y: 320 });
+
+      const titanIndexedDBBeforeReload = await readIndexedDBState(titan.page, 'owner-scope');
+      const titanTabsBeforeReload = JSON.parse(titanIndexedDBBeforeReload.snapshot.tabs);
+      expect(titanTabsBeforeReload[0].items.some((item) => item.name === 'Titan Quick Close Note')).toBe(true);
+      expect(titanIndexedDBBeforeReload.snapshot.postbabyPendingCloudUpload).toBe('true');
+      expect(serverState.snapshot.version).toBe(6);
+
+      await titan.page.reload();
+      await expectNoteVisible(titan.page, 'Titan Quick Close Note');
+
+      const titanDebugAfterReload = await titan.page.evaluate(() => window.postbabyDebugSync());
+      expect(titanDebugAfterReload.syncStoredVersion).toBe(6);
+      expect(titanDebugAfterReload.durablePendingCloudUpload).toBe(true);
+      expect(titanDebugAfterReload.durableSyncMetadata.lastKnownServerRevision).toBe(6);
+      expect(titanDebugAfterReload.syncState).not.toBe('synced');
+      expect(titanDebugAfterReload.mutationOutbox.pendingCount).toBe(1);
+      expect(titanDebugAfterReload.mutationOutbox.records.map((record) => record.operationType)).toEqual(['CreateNode']);
+
+      serverState.blockUploads = false;
+      await titan.page.locator('#syncStatusButton').click();
+      await titan.page.locator('#syncNowButton').click();
+
+      await expect.poll(() => serverState.snapshot.version).toBe(7);
+      await expect.poll(async () => {
+        const state = await titan.page.evaluate(() => window.postbabyDebugSync());
+        return state.syncStoredVersion;
+      }).toBe(7);
+
+      const titanDebugAfterSync = await titan.page.evaluate(() => window.postbabyDebugSync());
+      expect(titanDebugAfterSync.durablePendingCloudUpload).toBe(false);
+      expect(titanDebugAfterSync.mutationOutbox.pendingCount).toBe(0);
+      expect(titanDebugAfterSync.mutationOutbox.ackedCount).toBe(1);
+
+      await venom.page.reload();
+      await expectNoteVisible(venom.page, 'Titan Quick Close Note');
+
+      const venomDebugAfterReload = await venom.page.evaluate(() => window.postbabyDebugSync());
+      expect(venomDebugAfterReload.syncStoredVersion).toBe(7);
+    } finally {
+      await titan.context.close();
+      await venom.context.close();
+    }
+  });
+
+  test('records low-risk client mutation envelopes locally for node and edge operations', async ({ page }) => {
+    const localSnapshot = addDurableCloudSyncMetadata(
+      buildLocalSnapshotWithItems([
+        buildNoteItem('Outbox Source', {
+          itemId: 'item-1',
+          position: { top: '100px', left: '140px' }
+        }),
+        buildNoteItem('Outbox Target', {
+          itemId: 'item-2',
+          position: { top: '140px', left: '420px' }
+        })
+      ], {
+        syncVersion: 6
+      }),
+      {
+        pending: false,
+        revision: 6,
+        lastCloudUploadedAt: TIMESTAMP
+      }
+    );
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerSnapshotPayload(buildLocalSnapshotWithItems([
+        buildNoteItem('Outbox Source', {
+          itemId: 'item-1',
+          position: { top: '100px', left: '140px' }
+        }),
+        buildNoteItem('Outbox Target', {
+          itemId: 'item-2',
+          position: { top: '140px', left: '420px' }
+        })
+      ]), 6),
+      onSave: async () => ({
+        status: 503,
+        body: { ok: false, error: { code: 'blocked_for_test', message: 'blocked for test' } }
+      })
+    });
+
+    await page.goto('/index.html');
+    await createNoteAt(page, 'Outbox Created Note', { x: 760, y: 260 });
+
+    let createdItem = null;
+    await expect.poll(async () => {
+      const indexedDBState = await readIndexedDBState(page, 'owner-scope');
+      if (!indexedDBState || !indexedDBState.snapshot || !indexedDBState.snapshot.tabs) {
+        return '';
+      }
+
+      const tabsSnapshot = JSON.parse(indexedDBState.snapshot.tabs);
+      createdItem = tabsSnapshot[0].items.find((item) => item.name === 'Outbox Created Note') || null;
+      return createdItem ? createdItem.id : '';
+    }).not.toBe('');
+    expect(createdItem).toBeTruthy();
+
+    const createdNote = page.locator(`.grid-item[data-id="${createdItem.id}"]`);
+    await dragNoteBy(page, createdNote, 80, 40);
+    await drawEdgeBetweenNotes(page, page.locator('.grid-item[data-id="item-1"]'), createdNote);
+    await deleteEdgeViaContextMenu(page, page.locator('.edge-line').first());
+    await deleteNoteViaContextMenu(page, createdItem.id);
+
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    expect(debugState.mutationOutbox.clientId).toMatch(/^client_/);
+    expect(debugState.mutationOutbox.deviceId).toMatch(/^device_/);
+    expect(debugState.mutationOutbox.pendingCount).toBe(5);
+    expect(debugState.mutationOutbox.ackedCount).toBe(0);
+    expect(debugState.mutationOutbox.records.map((record) => record.operationType)).toEqual([
+      'CreateNode',
+      'MoveNode',
+      'CreateEdge',
+      'DeleteEdge',
+      'DeleteNode'
+    ]);
   });
 });
 
