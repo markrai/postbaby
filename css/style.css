@@ -736,6 +736,7 @@ body {
     width: 100%;
     overflow: hidden;
     overscroll-behavior: none;
+    touch-action: none;
     z-index: 1;
 }
 
@@ -753,6 +754,70 @@ body {
 
 #tabContent.camera-viewport--panning {
     cursor: grabbing;
+}
+
+.camera-controls {
+    position: fixed;
+    left: 14px;
+    bottom: 16px;
+    z-index: 9;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px;
+    border: 1px solid var(--border-tab-bar);
+    border-radius: 999px;
+    background-color: color-mix(in srgb, var(--bg-modal) 92%, transparent);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.16);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    font-family: 'Kalam', sans-serif;
+}
+
+.camera-controls[hidden] {
+    display: none;
+}
+
+.camera-control-button {
+    min-width: 34px;
+    min-height: 34px;
+    padding: 0 10px;
+    border: 1px solid var(--border-tab-bar);
+    border-radius: 999px;
+    background-color: var(--bg-tab);
+    color: var(--text-primary);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font: inherit;
+    line-height: 1;
+    transition: opacity 0.2s ease, transform 0.2s ease, background-color 0.2s ease;
+}
+
+.camera-control-button:hover {
+    opacity: 0.88;
+}
+
+.camera-control-button:focus-visible {
+    outline: 2px solid var(--note-selected-outline);
+    outline-offset: 2px;
+}
+
+.camera-control-button:disabled {
+    cursor: default;
+    opacity: 0.45;
+}
+
+.camera-control-button--readout {
+    min-width: 62px;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.camera-control-button--fit {
+    min-width: 44px;
+    font-size: 13px;
 }
 
 .grid-item {

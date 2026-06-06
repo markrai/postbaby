@@ -2,9 +2,12 @@
 @media (max-width: 768px) {
 
     .tab-pane .grid-container {
-        width: 90%;
-        height: auto;
-        margin-top: 20px;
+        width: 100%;
+        height: 100%;
+        margin-top: 0;
+        position: absolute;
+        left: 0;
+        top: 0;
     }
 
 
@@ -22,13 +25,13 @@
 
     /* Adjust the default grid-container for mobile */
     #websiteGrid-default {
-        position: relative;
-        width: 90%;
-        height: auto;
-        /* Let the height adjust based on content */
-        align-self: flex-start;
-        margin-top: 20px;
-        /* Optional: Add a small margin if needed */
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        align-self: auto;
+        margin-top: 0;
+        left: 0;
+        top: 0;
     }
 
     .desktop-shortcuts {
@@ -117,11 +120,12 @@
     }
 
     .grid-container {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        grid-gap: 10px;
-        width: 80%;
-        position: relative;
+        display: block;
+        width: 100%;
+        height: 100%;
+        position: absolute;
+        left: 0;
+        top: 0;
     }
 
     .grid-item {
@@ -136,6 +140,29 @@
 
     .version {
         font-size: 10px;
+    }
+
+    .camera-controls {
+        left: 10px;
+        bottom: 12px;
+        gap: 4px;
+        padding: 5px;
+    }
+
+    .camera-control-button {
+        min-width: 30px;
+        min-height: 30px;
+        padding: 0 8px;
+    }
+
+    .camera-control-button--readout {
+        min-width: 54px;
+        font-size: 12px;
+    }
+
+    .camera-control-button--fit {
+        min-width: 40px;
+        font-size: 12px;
     }
 
 

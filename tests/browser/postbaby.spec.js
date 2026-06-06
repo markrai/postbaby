@@ -979,6 +979,112 @@ async function readItemClientRect(page, itemId) {
   });
 }
 
+async function dispatchWheelEvent(page, selector, options = {}) {
+  await page.locator(selector).evaluate((element, wheelOptions) => {
+    const rect = element.getBoundingClientRect();
+    const clientX = Number.isFinite(wheelOptions.clientX)
+      ? wheelOptions.clientX
+      : rect.left + (rect.width / 2);
+    const clientY = Number.isFinite(wheelOptions.clientY)
+      ? wheelOptions.clientY
+      : rect.top + (rect.height / 2);
+    element.dispatchEvent(new WheelEvent('wheel', {
+      bubbles: true,
+      cancelable: wheelOptions.cancelable !== false,
+      deltaX: wheelOptions.deltaX || 0,
+      deltaY: wheelOptions.deltaY || 0,
+      deltaMode: wheelOptions.deltaMode || 0,
+      ctrlKey: wheelOptions.ctrlKey === true,
+      metaKey: wheelOptions.metaKey === true,
+      shiftKey: wheelOptions.shiftKey === true,
+      clientX,
+      clientY
+    }));
+  }, options);
+}
+
+async function dispatchWorkspaceWheel(page, options = {}) {
+  await dispatchWheelEvent(page, '#tabContent', options);
+}
+
+async function readCameraControlsState(page) {
+  return page.evaluate(() => {
+    const controls = document.getElementById('cameraControls');
+    const zoomOut = document.getElementById('cameraZoomOutButton');
+    const zoomReset = document.getElementById('cameraZoomResetButton');
+    const zoomIn = document.getElementById('cameraZoomInButton');
+    const fitAll = document.getElementById('cameraFitAllButton');
+    const grid = document.querySelector('.tab-pane.active .grid-container');
+    return {
+      hidden: !controls || controls.hidden,
+      text: zoomReset ? zoomReset.textContent : '',
+      zoomOutDisabled: zoomOut ? zoomOut.disabled : null,
+      zoomResetDisabled: zoomReset ? zoomReset.disabled : null,
+      zoomInDisabled: zoomIn ? zoomIn.disabled : null,
+      fitDisabled: fitAll ? fitAll.disabled : null,
+      insideGrid: Boolean(controls && grid && grid.contains(controls))
+    };
+  });
+}
+
+async function dispatchWorkspaceTouchPinch(page, options = {}) {
+  await page.locator('#tabContent').evaluate(async (element, pinchOptions) => {
+    const rect = element.getBoundingClientRect();
+    const startPointers = [
+      {
+        pointerId: 1,
+        x: rect.left + (pinchOptions.startLeftX || 140),
+        y: rect.top + (pinchOptions.startY || 180)
+      },
+      {
+        pointerId: 2,
+        x: rect.left + (pinchOptions.startRightX || 320),
+        y: rect.top + (pinchOptions.startY || 180)
+      }
+    ];
+    const endPointers = [
+      {
+        pointerId: 1,
+        x: rect.left + (pinchOptions.endLeftX || 100),
+        y: rect.top + (pinchOptions.endY || 220)
+      },
+      {
+        pointerId: 2,
+        x: rect.left + (pinchOptions.endRightX || 400),
+        y: rect.top + (pinchOptions.endY || 220)
+      }
+    ];
+
+    const dispatchPointer = (target, type, pointer) => {
+      target.dispatchEvent(new PointerEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        pointerId: pointer.pointerId,
+        pointerType: 'touch',
+        isPrimary: pointer.pointerId === 1,
+        clientX: pointer.x,
+        clientY: pointer.y
+      }));
+    };
+
+    dispatchPointer(element, 'pointerdown', startPointers[0]);
+    dispatchPointer(element, 'pointerdown', startPointers[1]);
+    await new Promise((resolve) => window.requestAnimationFrame(resolve));
+    dispatchPointer(document, 'pointermove', endPointers[0]);
+    dispatchPointer(document, 'pointermove', endPointers[1]);
+    await new Promise((resolve) => window.requestAnimationFrame(resolve));
+
+    if (pinchOptions.cancel === true) {
+      dispatchPointer(document, 'pointercancel', endPointers[1]);
+      dispatchPointer(document, 'pointercancel', endPointers[0]);
+      return;
+    }
+
+    dispatchPointer(document, 'pointerup', endPointers[1]);
+    dispatchPointer(document, 'pointerup', endPointers[0]);
+  }, options);
+}
+
 async function createGraphForTest(page, graph) {
   await page.waitForFunction(() => typeof window.postbabyCreateGraphForTest === 'function');
   return page.evaluate(async (input) => {
@@ -4332,6 +4438,185 @@ test.describe('Static behavior', () => {
     const afterZoomCamera = await readCamera(page);
     expect(afterZoomCamera.zoom).toBeGreaterThan(afterPanCamera.zoom);
     expect(await readItemPositionsById(page, ['camera-pan-note'])).toEqual(beforePositions);
+  });
+
+  test('ordinary wheel and trackpad-style wheel deltas pan the active camera without mutating note positions', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Wheel Pan Note', {
+        itemId: 'wheel-pan-note',
+        position: { top: '860px', left: '940px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const beforePositions = await readItemPositionsById(page, ['wheel-pan-note']);
+    await dispatchWorkspaceWheel(page, { deltaY: 180 });
+    const afterVerticalPan = await readCamera(page);
+    expect(afterVerticalPan.y).toBeGreaterThan(0);
+    expect(afterVerticalPan.zoom).toBe(1);
+
+    await dispatchWorkspaceWheel(page, { deltaX: 120, deltaY: 80 });
+    const afterTrackpadPan = await readCamera(page);
+    expect(afterTrackpadPan.x).toBeGreaterThan(afterVerticalPan.x);
+    expect(afterTrackpadPan.y).toBeGreaterThan(afterVerticalPan.y);
+    expect(await readItemPositionsById(page, ['wheel-pan-note'])).toEqual(beforePositions);
+  });
+
+  test('wheel over edit textareas and settings modals does not pan the camera', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Protected Wheel Note', {
+        itemId: 'protected-wheel-note',
+        position: { top: '240px', left: '260px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    await page.locator('.grid-item[data-id="protected-wheel-note"]').dblclick();
+    await expect(page.locator('textarea.edit-textarea')).toBeVisible();
+    const beforeTextareaWheelCamera = await readCamera(page);
+    await dispatchWheelEvent(page, 'textarea.edit-textarea', { deltaY: 240 });
+    expect(await readCamera(page)).toEqual(beforeTextareaWheelCamera);
+    await page.locator('textarea.edit-textarea').press('Escape');
+
+    await openSettingsModal(page);
+    const beforeModalWheelCamera = await readCamera(page);
+    await dispatchWheelEvent(page, '#settingsModal', { deltaY: 240 });
+    expect(await readCamera(page)).toEqual(beforeModalWheelCamera);
+  });
+
+  test('Ctrl-wheel zoom, Shift-wheel zoom, and visible camera controls update only camera state', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Control Fit Note', {
+        itemId: 'control-fit-note',
+        position: { top: '2280px', left: '2440px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const beforePositions = await readItemPositionsById(page, ['control-fit-note']);
+    const workspaceBox = await page.locator('#tabContent').boundingBox();
+    if (!workspaceBox) {
+      throw new Error('Workspace viewport bounding box was not available.');
+    }
+
+    const anchorPoint = {
+      clientX: Math.round(workspaceBox.x + (workspaceBox.width * 0.65)),
+      clientY: Math.round(workspaceBox.y + (workspaceBox.height * 0.35))
+    };
+
+    const worldBeforeZoom = await page.evaluate((point) => {
+      const viewport = document.getElementById('tabContent');
+      return window.PostbabyCanvasCamera.clientPointToWorldPoint(
+        point.clientX,
+        point.clientY,
+        viewport,
+        window.postbabyGetCameraForTest()
+      );
+    }, anchorPoint);
+
+    await dispatchWorkspaceWheel(page, {
+      deltaY: -180,
+      ctrlKey: true,
+      clientX: anchorPoint.clientX,
+      clientY: anchorPoint.clientY
+    });
+    const afterCtrlZoomCamera = await readCamera(page);
+    expect(afterCtrlZoomCamera.zoom).toBeGreaterThan(1);
+
+    const worldAfterCtrlZoom = await page.evaluate((point) => {
+      const viewport = document.getElementById('tabContent');
+      return window.PostbabyCanvasCamera.clientPointToWorldPoint(
+        point.clientX,
+        point.clientY,
+        viewport,
+        window.postbabyGetCameraForTest()
+      );
+    }, anchorPoint);
+    expect(worldAfterCtrlZoom.x).toBeCloseTo(worldBeforeZoom.x, 1);
+    expect(worldAfterCtrlZoom.y).toBeCloseTo(worldBeforeZoom.y, 1);
+
+    await dispatchWorkspaceWheel(page, {
+      deltaY: -120,
+      shiftKey: true,
+      clientX: anchorPoint.clientX,
+      clientY: anchorPoint.clientY
+    });
+    const afterShiftZoomCamera = await readCamera(page);
+    expect(afterShiftZoomCamera.zoom).toBeGreaterThan(afterCtrlZoomCamera.zoom);
+
+    const controlsBeforeFit = await readCameraControlsState(page);
+    expect(controlsBeforeFit.hidden).toBe(false);
+    expect(controlsBeforeFit.insideGrid).toBe(false);
+    expect(controlsBeforeFit.text).not.toBe('100%');
+
+    await page.click('#cameraFitAllButton');
+    const afterFitCamera = await readCamera(page);
+    const fittedNoteRect = await readItemClientRect(page, 'control-fit-note');
+    expect(fittedNoteRect.left).toBeLessThan(workspaceBox.x + workspaceBox.width);
+    expect(fittedNoteRect.top).toBeLessThan(workspaceBox.y + workspaceBox.height);
+    expect(fittedNoteRect.right).toBeGreaterThan(workspaceBox.x);
+    expect(fittedNoteRect.bottom).toBeGreaterThan(workspaceBox.y);
+
+    await page.click('#cameraZoomOutButton');
+    const afterControlZoomOut = await readCamera(page);
+    expect(afterControlZoomOut.zoom).toBeLessThan(afterFitCamera.zoom);
+
+    await page.click('#cameraZoomResetButton');
+    expect(await readCamera(page)).toEqual(DEFAULT_CAMERA);
+    const controlsAfterReset = await readCameraControlsState(page);
+    expect(controlsAfterReset.text).toBe('100%');
+    expect(await readItemPositionsById(page, ['control-fit-note'])).toEqual(beforePositions);
+  });
+
+  test('two-pointer touch pinch pans and zooms the camera without mutating item positions and cleans up on cancel', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Pinch Note', {
+        itemId: 'pinch-note',
+        position: { top: '680px', left: '760px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const beforePositions = await readItemPositionsById(page, ['pinch-note']);
+    const beforeCamera = await readCamera(page);
+    await dispatchWorkspaceTouchPinch(page, {
+      startLeftX: 160,
+      startRightX: 320,
+      startY: 180,
+      endLeftX: 120,
+      endRightX: 420,
+      endY: 240
+    });
+    const afterPinchCamera = await readCamera(page);
+    expect(afterPinchCamera.zoom).toBeGreaterThan(beforeCamera.zoom);
+    expect(afterPinchCamera.x).not.toBe(beforeCamera.x);
+    expect(afterPinchCamera.y).not.toBe(beforeCamera.y);
+    expect(await readItemPositionsById(page, ['pinch-note'])).toEqual(beforePositions);
+    expect(await page.locator('#tabContent').evaluate((element) => element.classList.contains('camera-viewport--panning'))).toBe(false);
+
+    await dispatchWorkspaceTouchPinch(page, {
+      startLeftX: 180,
+      startRightX: 300,
+      startY: 220,
+      endLeftX: 140,
+      endRightX: 340,
+      endY: 250,
+      cancel: true
+    });
+    expect(await page.locator('#tabContent').evaluate((element) => element.classList.contains('camera-viewport--panning'))).toBe(false);
+    expect(await readItemPositionsById(page, ['pinch-note'])).toEqual(beforePositions);
   });
 
   test('render, shape refresh, and edge rerender do not mutate persisted item positions', async ({ page }) => {

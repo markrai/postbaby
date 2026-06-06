@@ -162,6 +162,13 @@
         <!-- Tab panes will be dynamically inserted here -->
     </div>
 
+    <div id="cameraControls" class="camera-controls" aria-label="Canvas navigation controls" hidden>
+        <button type="button" id="cameraZoomOutButton" class="camera-control-button" aria-label="Zoom out" title="Zoom out (-)">−</button>
+        <button type="button" id="cameraZoomResetButton" class="camera-control-button camera-control-button--readout" aria-label="Reset view to 100%" title="Reset view to 100% (0)">100%</button>
+        <button type="button" id="cameraZoomInButton" class="camera-control-button" aria-label="Zoom in" title="Zoom in (+)">+</button>
+        <button type="button" id="cameraFitAllButton" class="camera-control-button camera-control-button--fit" aria-label="Fit all notes" title="Fit all notes (F)">Fit</button>
+    </div>
+
     <!-- Version Information (text set by js/version.js) -->
     <div class="version"></div>
 
@@ -194,6 +201,12 @@
         <br>
         draw arrow: <i>ctrl + mouse-drag</i>
         <br>
+        pan canvas: <i>mouse wheel, trackpad scroll, middle-drag, or space + drag</i>
+        <br>
+        zoom canvas: <i>ctrl/cmd + wheel, shift + wheel, or camera controls</i>
+        <br>
+        reset / fit view: <i>0 / f or camera controls</i>
+        <br>
         settings: <i>click the gear button (top-right)</i>
     </div>
 
@@ -207,6 +220,8 @@
         delete:<i> long-press on item or tab</i>
         <br>
         change color:<i> single tap on item or tab</i>
+        <br>
+        navigate canvas: <i>two-finger pinch / pan or camera controls</i>
         <br>
         settings: <i>tap the gear button (top-right)</i>
     </div>

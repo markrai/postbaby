@@ -112,6 +112,18 @@
         };
     }
 
+    function cameraForWorldPointAtClientPoint(worldX, worldY, clientX, clientY, viewportElement, zoom, worldBounds) {
+        const viewportRect = getViewportRect(viewportElement);
+        const clampedZoom = clampZoom(zoom);
+        const viewportX = viewportRect ? toFiniteNumber(clientX, viewportRect.left) - viewportRect.left : toFiniteNumber(clientX, 0);
+        const viewportY = viewportRect ? toFiniteNumber(clientY, viewportRect.top) - viewportRect.top : toFiniteNumber(clientY, 0);
+        return clampCameraState({
+            x: toFiniteNumber(worldX, 0) - (viewportX / clampedZoom),
+            y: toFiniteNumber(worldY, 0) - (viewportY / clampedZoom),
+            zoom: clampedZoom
+        }, worldBounds);
+    }
+
     function screenDeltaToWorldDelta(deltaX, deltaY, camera) {
         const normalizedCamera = normalizeCameraState(camera);
         return {
@@ -209,6 +221,7 @@
         worldPointToViewportPoint,
         clientPointToWorldPoint,
         worldPointToClientPoint,
+        cameraForWorldPointAtClientPoint,
         screenDeltaToWorldDelta,
         getViewportWorldRect,
         zoomCameraAtClientPoint,
