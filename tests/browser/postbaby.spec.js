@@ -752,6 +752,29 @@ async function readViewportRecoveryFootprint(page) {
   });
 }
 
+async function runViewportRecoveryHook(page, hookName) {
+  await page.waitForFunction((name) => typeof window[name] === 'function', hookName);
+  return page.evaluate((name) => {
+    const hook = window[name];
+    if (typeof hook !== 'function') {
+      throw new Error(`${name} is not available.`);
+    }
+    return hook();
+  }, hookName);
+}
+
+async function showAllItemsForTest(page) {
+  return runViewportRecoveryHook(page, 'postbabyShowAllItemsForTest');
+}
+
+async function jumpNewestItemForTest(page) {
+  return runViewportRecoveryHook(page, 'postbabyJumpNewestItemForTest');
+}
+
+async function jumpLastEditedItemForTest(page) {
+  return runViewportRecoveryHook(page, 'postbabyJumpLastEditedItemForTest');
+}
+
 async function readItemClientRect(page, itemId) {
   return page.locator(`.grid-item[data-id="${itemId}"]`).evaluate((element) => {
     const rect = element.getBoundingClientRect();
@@ -7476,7 +7499,7 @@ test.describe('Settings and Account UI', () => {
     expect(dialogs[0].message).not.toContain('Your local notes stay saved in this browser on this device.');
   });
 
-  test('Settings modal splits Preferences and Import & Export into separate tabs', async ({ page }) => {
+  test('Settings modal splits Preferences and Import & Export while keeping recovery controls hidden by default', async ({ page }) => {
     await prepareBlankPage(page);
     await mockRuntimeConfig(page, {
       deploymentMode: 'selfhosted',
@@ -7500,9 +7523,10 @@ test.describe('Settings and Account UI', () => {
     await expect(page.locator('#settingsPreferencesPanel')).toBeVisible();
     await expect(page.locator('#settingsImportExportPanel')).toBeHidden();
     await expect(page.locator('#settingsPreferencesPanel .settings-option').filter({ hasText: 'Dark Mode' })).toBeVisible();
-    await expect(page.locator('#showAllItemsButton')).toBeVisible();
-    await expect(page.locator('#jumpNewestItemButton')).toBeVisible();
-    await expect(page.locator('#jumpLastEditedItemButton')).toBeVisible();
+    await expect(page.locator('#settingsRecoverySection')).toBeHidden();
+    await expect(page.locator('#showAllItemsButton')).toBeHidden();
+    await expect(page.locator('#jumpNewestItemButton')).toBeHidden();
+    await expect(page.locator('#jumpLastEditedItemButton')).toBeHidden();
     await expect(page.locator('#saveDataButton')).toBeHidden();
     await expect(page.locator('#loadDataButton')).toBeHidden();
     await expect(page.locator('#mermaidImportSource')).toBeHidden();
@@ -7519,6 +7543,7 @@ test.describe('Settings and Account UI', () => {
     await expect(page.locator('#mermaidImportSource')).toBeVisible();
     await expect(page.locator('#mermaidImportButton')).toBeVisible();
     await expect(page.locator('#mermaidImportStatus')).toBeHidden();
+    await expect(page.locator('#settingsRecoverySection')).toBeHidden();
     await expect(page.locator('#showAllItemsButton')).toBeHidden();
     await expect(page.locator('#jumpNewestItemButton')).toBeHidden();
     await expect(page.locator('#jumpLastEditedItemButton')).toBeHidden();
@@ -7527,7 +7552,24 @@ test.describe('Settings and Account UI', () => {
     await expect(page.locator('#staticSettingsNote')).toBeHidden();
   });
 
-  test('Show All Notes from Settings recovers far-away notes after reload without mutating coordinates', async ({ page }) => {
+  test('Recovery debug flag reveals the development-only recovery section in Settings', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    await page.evaluate(() => {
+      window.localStorage.setItem('postbabyDebugRecovery', 'true');
+    });
+
+    await openSettingsModal(page);
+    await expect(page.locator('#settingsRecoverySection')).toBeVisible();
+    await expect(page.locator('#settingsRecoveryTitle')).toHaveText('Recovery (Development Only)');
+    await expect(page.locator('#showAllItemsButton')).toBeVisible();
+    await expect(page.locator('#jumpNewestItemButton')).toBeVisible();
+    await expect(page.locator('#jumpLastEditedItemButton')).toBeVisible();
+  });
+
+  test('Show All Notes recovery hook recovers far-away notes after reload without mutating coordinates', async ({ page }) => {
     const localSnapshot = buildLocalSnapshotWithItems([
       buildNoteItem('Far Away Recovery', {
         itemId: 'far-item',
@@ -7547,7 +7589,7 @@ test.describe('Settings and Account UI', () => {
     expect(beforeRect.top).toBeGreaterThan(beforeScroll.height);
 
     await openSettingsModal(page);
-    await page.locator('#showAllItemsButton').click();
+    await showAllItemsForTest(page);
     await expect(page.locator('#settingsModal')).toBeHidden();
 
     await expect.poll(async () => {
@@ -7564,7 +7606,7 @@ test.describe('Settings and Account UI', () => {
     expect(await readTabsSnapshot(page)).toEqual(beforeSnapshot);
   });
 
-  test('Jump To Newest uses stable item order fallback and does not mutate coordinates', async ({ page }) => {
+  test('Jump To Newest recovery hook uses stable item order fallback and does not mutate coordinates', async ({ page }) => {
     const localSnapshot = buildLocalSnapshotWithItems([
       buildNoteItem('Older Note', {
         itemId: 'older-item',
@@ -7581,9 +7623,7 @@ test.describe('Settings and Account UI', () => {
     await page.goto('/index.html');
 
     const beforeSnapshot = await readTabsSnapshot(page);
-    await openSettingsModal(page);
-    await page.locator('#jumpNewestItemButton').click();
-    await expect(page.locator('#settingsModal')).toBeHidden();
+    await jumpNewestItemForTest(page);
 
     await expect.poll(async () => {
       const rect = await readItemClientRect(page, 'newest-item');
@@ -7594,7 +7634,7 @@ test.describe('Settings and Account UI', () => {
     expect(await readTabsSnapshot(page)).toEqual(beforeSnapshot);
   });
 
-  test('Jump To Last Edited uses local session edits and does not mutate stored coordinates during recovery', async ({ page }) => {
+  test('Jump To Last Edited recovery hook uses local session edits and does not mutate stored coordinates during recovery', async ({ page }) => {
     const localSnapshot = buildLocalSnapshotWithItems([
       buildNoteItem('Near Note', {
         itemId: 'near-item',
@@ -7611,16 +7651,14 @@ test.describe('Settings and Account UI', () => {
     await page.goto('/index.html');
 
     await openSettingsModal(page);
-    await page.locator('#showAllItemsButton').click();
+    await showAllItemsForTest(page);
     await expect(page.locator('#settingsModal')).toBeHidden();
     await page.locator('.grid-item[data-id="far-edited-item"]').click();
     await page.waitForTimeout(350);
     const afterEditSnapshot = await readTabsSnapshot(page);
 
     await page.evaluate(() => window.scrollTo(0, 0));
-    await openSettingsModal(page);
-    await page.locator('#jumpLastEditedItemButton').click();
-    await expect(page.locator('#settingsModal')).toBeHidden();
+    await jumpLastEditedItemForTest(page);
 
     await expect.poll(async () => {
       const rect = await readItemClientRect(page, 'far-edited-item');
@@ -7631,7 +7669,7 @@ test.describe('Settings and Account UI', () => {
     expect(await readTabsSnapshot(page)).toEqual(afterEditSnapshot);
   });
 
-  test('Jump To Newest does not overwrite the session last edited note', async ({ page }) => {
+  test('Jump To Newest recovery hook does not overwrite the session last edited note', async ({ page }) => {
     const localSnapshot = buildLocalSnapshotWithItems([
       buildNoteItem('Last Edited Anchor', {
         itemId: 'edited-item',
@@ -7651,9 +7689,7 @@ test.describe('Settings and Account UI', () => {
     await page.waitForTimeout(350);
     const afterEditSnapshot = await readTabsSnapshot(page);
 
-    await openSettingsModal(page);
-    await page.locator('#jumpNewestItemButton').click();
-    await expect(page.locator('#settingsModal')).toBeHidden();
+    await jumpNewestItemForTest(page);
 
     await expect.poll(async () => {
       const rect = await readItemClientRect(page, 'newest-item');
@@ -7661,9 +7697,7 @@ test.describe('Settings and Account UI', () => {
       return rect.left < viewport.width && rect.right > 0 && rect.top < viewport.height && rect.bottom > 0;
     }).toBe(true);
 
-    await openSettingsModal(page);
-    await page.locator('#jumpLastEditedItemButton').click();
-    await expect(page.locator('#settingsModal')).toBeHidden();
+    await jumpLastEditedItemForTest(page);
 
     await expect.poll(async () => {
       const rect = await readItemClientRect(page, 'edited-item');
@@ -7674,21 +7708,18 @@ test.describe('Settings and Account UI', () => {
     expect(await readTabsSnapshot(page)).toEqual(afterEditSnapshot);
   });
 
-  test('Recovery controls show safe toasts when the active tab has no notes', async ({ page }) => {
+  test('Recovery hooks show safe toasts when the active tab has no notes', async ({ page }) => {
     await prepareBlankPage(page);
     await seedLocalStorage(page, buildEmptySnapshot());
     await page.goto('/index.html');
 
-    await openSettingsModal(page);
-    await page.locator('#showAllItemsButton').click();
+    await showAllItemsForTest(page);
     await expect(page.locator('.toast').last()).toContainText('No notes to recover in this tab.');
 
-    await openSettingsModal(page);
-    await page.locator('#jumpNewestItemButton').click();
+    await jumpNewestItemForTest(page);
     await expect(page.locator('.toast').last()).toContainText('No notes to recover in this tab.');
 
-    await openSettingsModal(page);
-    await page.locator('#jumpLastEditedItemButton').click();
+    await jumpLastEditedItemForTest(page);
     await expect(page.locator('.toast').last()).toContainText('No edited note found yet in this tab.');
 
     const tabsSnapshot = await readTabsSnapshot(page);
@@ -7714,9 +7745,7 @@ test.describe('Settings and Account UI', () => {
     const beforeNearPosition = await readItemPositionsById(page, ['near-item']);
     const beforeFootprint = await readViewportRecoveryFootprint(page);
 
-    await openSettingsModal(page);
-    await page.locator('#showAllItemsButton').click();
-    await expect(page.locator('#settingsModal')).toBeHidden();
+    await showAllItemsForTest(page);
 
     const farNote = page.locator('.grid-item[data-id="far-item"]');
     await expect(farNote).toBeVisible();
@@ -7735,8 +7764,7 @@ test.describe('Settings and Account UI', () => {
 
     expect(await readItemPositionsById(page, ['near-item'])).toEqual(beforeNearPosition);
 
-    await openSettingsModal(page);
-    await page.locator('#jumpLastEditedItemButton').click();
+    await jumpLastEditedItemForTest(page);
     await expect(page.locator('.toast').last()).toContainText('No edited note found yet in this tab.');
   });
 
@@ -7779,9 +7807,7 @@ test.describe('Settings and Account UI', () => {
     await seedLocalStorage(page, localSnapshot);
     await page.goto('/index.html');
 
-    await openSettingsModal(page);
-    await page.locator('#showAllItemsButton').click();
-    await expect(page.locator('#settingsModal')).toBeHidden();
+    await showAllItemsForTest(page);
 
     await expect.poll(async () => {
       const rect = await readItemClientRect(page, 'tab-one-far');
@@ -7806,9 +7832,7 @@ test.describe('Settings and Account UI', () => {
       return footprint.sizerLeft > footprint.viewportWidth + 1000
         && footprint.sizerTop > footprint.viewportHeight + 1000;
     }).toBe(true);
-    await openSettingsModal(page);
-    await page.locator('#showAllItemsButton').click();
-    await expect(page.locator('#settingsModal')).toBeHidden();
+    await showAllItemsForTest(page);
 
     await expect.poll(async () => {
       const rect = await readItemClientRect(page, 'tab-one-far');
@@ -7817,7 +7841,7 @@ test.describe('Settings and Account UI', () => {
     }).toBe(true);
   });
 
-  test('Show All Notes recovers graph-created notes without rewriting stored positions', async ({ page }) => {
+  test('Show All Notes recovery hook recovers graph-created notes without rewriting stored positions', async ({ page }) => {
     await prepareBlankPage(page);
     await seedLocalStorage(page, buildEmptySnapshot());
     await page.goto('/index.html');
@@ -7837,9 +7861,7 @@ test.describe('Settings and Account UI', () => {
     const beforePositions = await readItemPositionsById(page, graphResult.createdItemIds);
     await page.evaluate(() => window.scrollTo(0, 0));
 
-    await openSettingsModal(page);
-    await page.locator('#showAllItemsButton').click();
-    await expect(page.locator('#settingsModal')).toBeHidden();
+    await showAllItemsForTest(page);
 
     await expect.poll(async () => {
       const rect = await readItemClientRect(page, graphResult.createdItemIds[0]);
@@ -7858,7 +7880,7 @@ test.describe('Settings and Account UI', () => {
     });
   });
 
-  test('Jump To Newest recovers Mermaid-created notes without rewriting stored positions', async ({ page }) => {
+  test('Jump To Newest recovery hook recovers Mermaid-created notes without rewriting stored positions', async ({ page }) => {
     await prepareBlankPage(page);
     await seedLocalStorage(page, buildEmptySnapshot());
     await page.goto('/index.html');
@@ -7876,9 +7898,7 @@ test.describe('Settings and Account UI', () => {
     const beforePositions = await readItemPositionsById(page, mermaidResult.createdItemIds);
     await page.evaluate(() => window.scrollTo(0, 0));
 
-    await openSettingsModal(page);
-    await page.locator('#jumpNewestItemButton').click();
-    await expect(page.locator('#settingsModal')).toBeHidden();
+    await jumpNewestItemForTest(page);
 
     await expect.poll(async () => {
       const rect = await readItemClientRect(page, newestCreatedItemId);
@@ -7897,7 +7917,7 @@ test.describe('Settings and Account UI', () => {
     });
   });
 
-  test('Show All Notes recovery leaves manual note creation, drag, resize, and edge creation usable', async ({ page }) => {
+  test('Show All Notes recovery hook leaves manual note creation, drag, resize, and edge creation usable', async ({ page }) => {
     const localSnapshot = buildLocalSnapshotWithItems([
       buildNoteItem('Recovered Source', {
         itemId: 'source-item',
@@ -7913,9 +7933,7 @@ test.describe('Settings and Account UI', () => {
     await seedLocalStorage(page, localSnapshot);
     await page.goto('/index.html');
 
-    await openSettingsModal(page);
-    await page.locator('#showAllItemsButton').click();
-    await expect(page.locator('#settingsModal')).toBeHidden();
+    await showAllItemsForTest(page);
 
     const sourceNote = page.locator('.grid-item[data-id="source-item"]');
     const targetNote = page.locator('.grid-item[data-id="target-item"]');
@@ -7973,9 +7991,7 @@ test.describe('Settings and Account UI', () => {
     expect(graphResult.ok).toBe(true);
     const beforeFootprint = await readViewportRecoveryFootprint(page);
 
-    await openSettingsModal(page);
-    await page.locator('#showAllItemsButton').click();
-    await expect(page.locator('#settingsModal')).toBeHidden();
+    await showAllItemsForTest(page);
 
     await expect.poll(async () => {
       const rect = await readItemClientRect(page, graphResult.createdItemIds[0]);
