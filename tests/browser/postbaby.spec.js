@@ -706,6 +706,48 @@ async function readItemSnapshot(page, itemId = 'item-1') {
   return null;
 }
 
+async function readItemPositionViaGeometryDom(page, itemId = 'item-1') {
+  const item = await readItemSnapshot(page, itemId);
+  if (!item) {
+    return null;
+  }
+
+  return page.evaluate((snapshotItem) => {
+    return window.PostbabyGeometryDom.getItemPositionXY(snapshotItem);
+  }, item);
+}
+
+async function readItemPositionsById(page, itemIds) {
+  const entries = await Promise.all(itemIds.map(async (itemId) => {
+    const item = await readItemSnapshot(page, itemId);
+    return [itemId, item ? item.position : null];
+  }));
+  return Object.fromEntries(entries);
+}
+
+async function readWindowScroll(page) {
+  return page.evaluate(() => ({
+    x: window.scrollX,
+    y: window.scrollY,
+    width: window.innerWidth,
+    height: window.innerHeight
+  }));
+}
+
+async function readItemClientRect(page, itemId) {
+  return page.locator(`.grid-item[data-id="${itemId}"]`).evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      width: rect.width,
+      height: rect.height
+    };
+  });
+}
+
 async function createGraphForTest(page, graph) {
   await page.waitForFunction(() => typeof window.postbabyCreateGraphForTest === 'function');
   return page.evaluate(async (input) => {
@@ -3851,6 +3893,107 @@ test.describe('Static behavior', () => {
     });
   });
 
+  test('geometry-dom position helpers preserve the top/left compatibility format', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildLocalSnapshot('Helper Seed', {
+      width: 220,
+      height: 120,
+      position: { top: '20px', left: '10px' }
+    }));
+    await page.goto('/index.html');
+
+    const helperResult = await page.evaluate(() => {
+      const geometryDom = window.PostbabyGeometryDom;
+      const mutableItem = {
+        shape: 'default',
+        width: 220,
+        height: 120,
+        position: { top: '20px', left: '10px' }
+      };
+
+      return {
+        parsePositive: geometryDom.parseCssPixelValue('123px', 0),
+        parseNegative: geometryDom.parseCssPixelValue('-50px', 0),
+        parseFallback: geometryDom.parseCssPixelValue('bad', 7),
+        formattedPixel: geometryDom.formatCssPixelValue(123),
+        formattedPosition: geometryDom.formatItemPosition(10, 20),
+        parsedPosition: geometryDom.getItemPositionXY(mutableItem),
+        updatedPosition: geometryDom.setItemPositionXY(mutableItem, 30, 40),
+        mutablePosition: mutableItem.position,
+        rect: geometryDom.getItemRectFromData(mutableItem),
+        center: geometryDom.getItemCenterFromData(mutableItem)
+      };
+    });
+
+    expect(helperResult.parsePositive).toBe(123);
+    expect(helperResult.parseNegative).toBe(-50);
+    expect(helperResult.parseFallback).toBe(7);
+    expect(helperResult.formattedPixel).toBe('123px');
+    expect(helperResult.formattedPosition).toEqual({ top: '20px', left: '10px' });
+    expect(helperResult.parsedPosition).toEqual({ x: 10, y: 20 });
+    expect(helperResult.updatedPosition).toEqual({ top: '40px', left: '30px' });
+    expect(helperResult.mutablePosition).toEqual({ top: '40px', left: '30px' });
+    expect(helperResult.rect).toMatchObject({
+      x: 30,
+      y: 40,
+      left: 30,
+      top: 40,
+      width: 220,
+      height: 120,
+      right: 250,
+      bottom: 160
+    });
+    expect(helperResult.center).toEqual({ x: 140, y: 100, cx: 140, cy: 100 });
+
+    const storedPosition = await readItemPositionViaGeometryDom(page);
+    expect(storedPosition).toEqual({ x: 10, y: 20 });
+  });
+
+  test('render, shape refresh, and edge rerender do not mutate persisted item positions', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Invariant Source', {
+        itemId: 'item-1',
+        width: 220,
+        height: 120,
+        position: { top: '100px', left: '140px' }
+      }),
+      buildNoteItem('Invariant Target', {
+        itemId: 'item-2',
+        shape: 'circle',
+        width: 220,
+        position: { top: '150px', left: '430px' }
+      })
+    ], {
+      edges: [{
+        id: 'edge-1',
+        fromItemId: 'item-1',
+        toItemId: 'item-2',
+        kind: 'arrow'
+      }]
+    });
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const trackedIds = ['item-1', 'item-2'];
+    const beforePositions = await readItemPositionsById(page, trackedIds);
+
+    await page.reload();
+    expect(await readItemPositionsById(page, trackedIds)).toEqual(beforePositions);
+
+    const sourceNote = page.locator('.grid-item[data-id="item-1"]');
+    await sourceNote.click();
+    await page.keyboard.press('c');
+    await page.waitForTimeout(350);
+    expect(await readItemPositionsById(page, trackedIds)).toEqual(beforePositions);
+
+    const targetNote = page.locator('.grid-item[data-id="item-2"]');
+    await resizeNoteBy(page, targetNote, 40, 20);
+    await page.waitForTimeout(350);
+    expect(await readItemPositionsById(page, trackedIds)).toEqual(beforePositions);
+  });
+
   test('graph hook creates ordinary Postbaby items and edges from normalized graph data', async ({ page }) => {
     await prepareBlankPage(page);
     await seedLocalStorage(page, buildEmptySnapshot());
@@ -3893,14 +4036,19 @@ test.describe('Static behavior', () => {
       expect(item.color).toBe(GRAPH_DEFAULT_COLOR);
       expect(item.position.top).toMatch(/px$/);
       expect(item.position.left).toMatch(/px$/);
+      expect(item).not.toHaveProperty('x');
+      expect(item).not.toHaveProperty('y');
       expect(item.width).toEqual(expect.any(Number));
       expect(item.height).toEqual(expect.any(Number));
       expect(item).not.toHaveProperty('sourceNodeId');
       expect(item).not.toHaveProperty('graphNodeId');
     });
 
-    expect(parseInt(startItem.position.left, 10)).toBeGreaterThan(0);
-    expect(parseInt(startItem.position.top, 10)).toBeGreaterThan(0);
+    const startPosition = await page.evaluate((item) => {
+      return window.PostbabyGeometryDom.getItemPositionXY(item);
+    }, startItem);
+    expect(startPosition.x).toBeGreaterThan(0);
+    expect(startPosition.y).toBeGreaterThan(0);
     expect(decisionItem.shape).toBe('default');
     expect(decisionItem.width).toBe(220);
     expect(decisionItem.height).toBe(120);
@@ -3915,6 +4063,56 @@ test.describe('Static behavior', () => {
       expect(edge).not.toHaveProperty('from');
       expect(edge).not.toHaveProperty('to');
     });
+  });
+
+  test('graph and mermaid-created items keep top/left CSS-string storage and shared numeric helper access', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    const graphResult = await createGraphForTest(page, buildNormalizedGraph([
+      buildGraphNode('A', { label: 'Graph Source', x: 0, y: 0 }),
+      buildGraphNode('B', { label: 'Graph Target', shape: 'circle', x: 240, y: 80 })
+    ], [
+      buildGraphEdge('A', 'B', { kind: 'arrow' })
+    ], {
+      originX: 120,
+      originY: 140
+    }));
+
+    expect(graphResult.ok).toBe(true);
+    const graphItem = await readItemSnapshot(page, graphResult.createdItemIds[0]);
+    expect(graphItem).toBeTruthy();
+    expect(graphItem.position.top).toMatch(/px$/);
+    expect(graphItem.position.left).toMatch(/px$/);
+    expect(graphItem).not.toHaveProperty('x');
+    expect(graphItem).not.toHaveProperty('y');
+    const graphPosition = await page.evaluate((item) => {
+      return window.PostbabyGeometryDom.getItemPositionXY(item);
+    }, graphItem);
+    expect(graphPosition.x).toBeGreaterThanOrEqual(120);
+    expect(graphPosition.y).toBeGreaterThanOrEqual(140);
+
+    const mermaidResult = await createGraphFromMermaidForTest(page, [
+      'flowchart LR',
+      'M[Mermaid Source] --> N((Mermaid Target))'
+    ].join('\n'), {
+      originX: 420,
+      originY: 220
+    });
+
+    expect(mermaidResult.ok).toBe(true);
+    const mermaidItem = await readItemSnapshot(page, mermaidResult.createdItemIds[0]);
+    expect(mermaidItem).toBeTruthy();
+    expect(mermaidItem.position.top).toMatch(/px$/);
+    expect(mermaidItem.position.left).toMatch(/px$/);
+    expect(mermaidItem).not.toHaveProperty('x');
+    expect(mermaidItem).not.toHaveProperty('y');
+    const mermaidPosition = await page.evaluate((item) => {
+      return window.PostbabyGeometryDom.getItemPositionXY(item);
+    }, mermaidItem);
+    expect(mermaidPosition.x).toBeGreaterThanOrEqual(420);
+    expect(mermaidPosition.y).toBeGreaterThanOrEqual(220);
   });
 
   [
@@ -4195,6 +4393,35 @@ test.describe('Static behavior', () => {
     expect(tabsSnapshot[0].edges).toHaveLength(1);
   });
 
+  test('graph-created items keep stored positions across rerender and reload', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    const graph = buildNormalizedGraph([
+      buildGraphNode('A', { label: 'Graph Position A', x: 0, y: 0 }),
+      buildGraphNode('B', { label: 'Graph Position B', shape: 'circle', x: 260, y: 80 })
+    ], [
+      buildGraphEdge('A', 'B', { kind: 'arrow' })
+    ], {
+      originX: 180,
+      originY: 120
+    });
+
+    const result = await createGraphForTest(page, graph);
+    expect(result.ok).toBe(true);
+
+    const beforePositions = await readItemPositionsById(page, result.createdItemIds);
+    const firstNote = page.locator(`.grid-item[data-id="${result.createdItemIds[0]}"]`);
+    await firstNote.click();
+    await page.keyboard.press('c');
+    await page.waitForTimeout(350);
+    expect(await readItemPositionsById(page, result.createdItemIds)).toEqual(beforePositions);
+
+    await page.reload();
+    expect(await readItemPositionsById(page, result.createdItemIds)).toEqual(beforePositions);
+  });
+
   test('manual edge creation still works after graph creation', async ({ page }) => {
     await prepareBlankPage(page);
     await seedLocalStorage(page, buildEmptySnapshot());
@@ -4437,6 +4664,12 @@ test.describe('Static behavior', () => {
     expect(sourceItem.shape).toBe('default');
     expect(circleItem.shape).toBe('circle');
     expect(diamondItem.shape).toBe('diamond');
+    [sourceItem, circleItem, diamondItem].forEach((item) => {
+      expect(item.position.top).toMatch(/px$/);
+      expect(item.position.left).toMatch(/px$/);
+      expect(item).not.toHaveProperty('x');
+      expect(item).not.toHaveProperty('y');
+    });
 
     const arrowEdge = tabsSnapshot[0].edges.find((edge) => edge.kind === 'arrow');
     const lineEdge = tabsSnapshot[0].edges.find((edge) => edge.kind === 'line');
@@ -4505,6 +4738,32 @@ test.describe('Static behavior', () => {
     await expectNoteVisible(page, 'Circle Target');
     await expectNoteVisible(page, 'Decision');
     await expect(page.locator('.edge-line')).toHaveCount(2);
+  });
+
+  test('mermaid-created items keep stored positions across rerender and reload', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    const result = await createGraphFromMermaidForTest(page, [
+      'flowchart LR',
+      'A[Mermaid Position A] --> B((Mermaid Position B))'
+    ].join('\n'), {
+      originX: 220,
+      originY: 160
+    });
+
+    expect(result.ok).toBe(true);
+
+    const beforePositions = await readItemPositionsById(page, result.createdItemIds);
+    const firstNote = page.locator(`.grid-item[data-id="${result.createdItemIds[0]}"]`);
+    await firstNote.click();
+    await page.keyboard.press('c');
+    await page.waitForTimeout(350);
+    expect(await readItemPositionsById(page, result.createdItemIds)).toEqual(beforePositions);
+
+    await page.reload();
+    expect(await readItemPositionsById(page, result.createdItemIds)).toEqual(beforePositions);
   });
 
   test('dragging on empty canvas selects overlapping notes on mouseup and replaces prior selection', async ({ page }) => {
@@ -7223,6 +7482,9 @@ test.describe('Settings and Account UI', () => {
     await expect(page.locator('#settingsPreferencesPanel')).toBeVisible();
     await expect(page.locator('#settingsImportExportPanel')).toBeHidden();
     await expect(page.locator('#settingsPreferencesPanel .settings-option').filter({ hasText: 'Dark Mode' })).toBeVisible();
+    await expect(page.locator('#showAllItemsButton')).toBeVisible();
+    await expect(page.locator('#jumpNewestItemButton')).toBeVisible();
+    await expect(page.locator('#jumpLastEditedItemButton')).toBeVisible();
     await expect(page.locator('#saveDataButton')).toBeHidden();
     await expect(page.locator('#loadDataButton')).toBeHidden();
     await expect(page.locator('#mermaidImportSource')).toBeHidden();
@@ -7235,13 +7497,205 @@ test.describe('Settings and Account UI', () => {
     await expect(page.locator('#settingsImportExportPanel')).toBeVisible();
     await expect(page.locator('#saveDataButton')).toBeVisible();
     await expect(page.locator('#loadDataButton')).toBeVisible();
-    await expect(page.locator('.settings-modal-divider')).toBeVisible();
+    await expect(page.locator('#settingsImportExportPanel .settings-modal-divider')).toBeVisible();
     await expect(page.locator('#mermaidImportSource')).toBeVisible();
     await expect(page.locator('#mermaidImportButton')).toBeVisible();
     await expect(page.locator('#mermaidImportStatus')).toBeHidden();
+    await expect(page.locator('#showAllItemsButton')).toBeHidden();
+    await expect(page.locator('#jumpNewestItemButton')).toBeHidden();
+    await expect(page.locator('#jumpLastEditedItemButton')).toBeHidden();
 
     await switchSettingsTab(page, 'Preferences');
     await expect(page.locator('#staticSettingsNote')).toBeHidden();
+  });
+
+  test('Show All Notes from Settings recovers far-away notes after reload without mutating coordinates', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Far Away Recovery', {
+        itemId: 'far-item',
+        position: { top: '2200px', left: '2400px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+    await page.reload();
+
+    const beforeSnapshot = await readTabsSnapshot(page);
+    const beforeRect = await readItemClientRect(page, 'far-item');
+    const beforeScroll = await readWindowScroll(page);
+    expect(beforeRect.left).toBeGreaterThan(beforeScroll.width);
+    expect(beforeRect.top).toBeGreaterThan(beforeScroll.height);
+
+    await openSettingsModal(page);
+    await page.locator('#showAllItemsButton').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+
+    await expect.poll(async () => {
+      const scroll = await readWindowScroll(page);
+      return scroll.x > 0 && scroll.y > 0;
+    }).toBe(true);
+
+    await expect.poll(async () => {
+      const rect = await readItemClientRect(page, 'far-item');
+      const viewport = await readWindowScroll(page);
+      return rect.left < viewport.width && rect.right > 0 && rect.top < viewport.height && rect.bottom > 0;
+    }).toBe(true);
+
+    expect(await readTabsSnapshot(page)).toEqual(beforeSnapshot);
+  });
+
+  test('Jump To Newest uses stable item order fallback and does not mutate coordinates', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Older Note', {
+        itemId: 'older-item',
+        position: { top: '24px', left: '24px' }
+      }),
+      buildNoteItem('Newest Fallback', {
+        itemId: 'newest-item',
+        position: { top: '2000px', left: '2300px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const beforeSnapshot = await readTabsSnapshot(page);
+    await openSettingsModal(page);
+    await page.locator('#jumpNewestItemButton').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+
+    await expect.poll(async () => {
+      const rect = await readItemClientRect(page, 'newest-item');
+      const viewport = await readWindowScroll(page);
+      return rect.left < viewport.width && rect.right > 0 && rect.top < viewport.height && rect.bottom > 0;
+    }).toBe(true);
+
+    expect(await readTabsSnapshot(page)).toEqual(beforeSnapshot);
+  });
+
+  test('Jump To Last Edited uses local session edits and does not mutate stored coordinates during recovery', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Near Note', {
+        itemId: 'near-item',
+        position: { top: '24px', left: '24px' }
+      }),
+      buildNoteItem('Far Edited Note', {
+        itemId: 'far-edited-item',
+        position: { top: '2200px', left: '2400px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    await openSettingsModal(page);
+    await page.locator('#showAllItemsButton').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+    await page.locator('.grid-item[data-id="far-edited-item"]').click();
+    await page.waitForTimeout(350);
+    const afterEditSnapshot = await readTabsSnapshot(page);
+
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await openSettingsModal(page);
+    await page.locator('#jumpLastEditedItemButton').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+
+    await expect.poll(async () => {
+      const rect = await readItemClientRect(page, 'far-edited-item');
+      const viewport = await readWindowScroll(page);
+      return rect.left < viewport.width && rect.right > 0 && rect.top < viewport.height && rect.bottom > 0;
+    }).toBe(true);
+
+    expect(await readTabsSnapshot(page)).toEqual(afterEditSnapshot);
+  });
+
+  test('Recovery controls show safe toasts when the active tab has no notes', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    await openSettingsModal(page);
+    await page.locator('#showAllItemsButton').click();
+    await expect(page.locator('.toast').last()).toContainText('No notes to recover in this tab.');
+
+    await openSettingsModal(page);
+    await page.locator('#jumpNewestItemButton').click();
+    await expect(page.locator('.toast').last()).toContainText('No notes to recover in this tab.');
+
+    await openSettingsModal(page);
+    await page.locator('#jumpLastEditedItemButton').click();
+    await expect(page.locator('.toast').last()).toContainText('No edited note found yet in this tab.');
+
+    const tabsSnapshot = await readTabsSnapshot(page);
+    expect(tabsSnapshot[0].items || []).toHaveLength(0);
+  });
+
+  test('Show All Notes recovers graph-created notes without rewriting stored positions', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    const graphResult = await createGraphForTest(page, buildNormalizedGraph([
+      buildGraphNode('A', { label: 'Graph Source' }),
+      buildGraphNode('B', { label: 'Graph Target', shape: 'circle' })
+    ], [
+      buildGraphEdge('A', 'B', { kind: 'arrow' })
+    ], {
+      originX: 2300,
+      originY: 1800,
+      direction: 'LR'
+    }));
+
+    expect(graphResult.ok).toBe(true);
+    const beforePositions = await readItemPositionsById(page, graphResult.createdItemIds);
+    await page.evaluate(() => window.scrollTo(0, 0));
+
+    await openSettingsModal(page);
+    await page.locator('#showAllItemsButton').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+
+    await expect.poll(async () => {
+      const rect = await readItemClientRect(page, graphResult.createdItemIds[0]);
+      const viewport = await readWindowScroll(page);
+      return rect.left < viewport.width && rect.right > 0 && rect.top < viewport.height && rect.bottom > 0;
+    }).toBe(true);
+
+    expect(await readItemPositionsById(page, graphResult.createdItemIds)).toEqual(beforePositions);
+  });
+
+  test('Jump To Newest recovers Mermaid-created notes without rewriting stored positions', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    const mermaidResult = await createGraphFromMermaidForTest(page, [
+      'flowchart LR',
+      'A[Mermaid Source] --> B((Mermaid Target))'
+    ].join('\n'), {
+      originX: 2200,
+      originY: 1900
+    });
+
+    expect(mermaidResult.ok).toBe(true);
+    const newestCreatedItemId = mermaidResult.createdItemIds[mermaidResult.createdItemIds.length - 1];
+    const beforePositions = await readItemPositionsById(page, mermaidResult.createdItemIds);
+    await page.evaluate(() => window.scrollTo(0, 0));
+
+    await openSettingsModal(page);
+    await page.locator('#jumpNewestItemButton').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+
+    await expect.poll(async () => {
+      const rect = await readItemClientRect(page, newestCreatedItemId);
+      const viewport = await readWindowScroll(page);
+      return rect.left < viewport.width && rect.right > 0 && rect.top < viewport.height && rect.bottom > 0;
+    }).toBe(true);
+
+    expect(await readItemPositionsById(page, mermaidResult.createdItemIds)).toEqual(beforePositions);
   });
 
   test('import and export still work from Settings', async ({ page }) => {

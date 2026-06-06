@@ -617,6 +617,16 @@ input:checked + .slider:before {
     text-align: left;
 }
 
+.settings-recovery-actions {
+    display: grid;
+    gap: 8px;
+}
+
+.settings-recovery-button {
+    width: 100%;
+    margin: 0;
+}
+
 .settings-mermaid-textarea {
     width: 100%;
     min-height: 160px;
@@ -1377,6 +1387,24 @@ h1 {
 
 .grid-item.selected {
     outline: 2px dashed var(--note-selected-outline);
+}
+
+.grid-item.viewport-recovery-flash {
+    outline: 3px solid color-mix(in srgb, var(--note-selected-outline) 78%, #ffffff 22%);
+    outline-offset: 4px;
+    animation: viewportRecoveryPulse 1s ease-out 1;
+}
+
+@keyframes viewportRecoveryPulse {
+    0% {
+        outline-color: color-mix(in srgb, var(--note-selected-outline) 88%, #ffffff 12%);
+        outline-offset: 8px;
+    }
+
+    100% {
+        outline-color: color-mix(in srgb, var(--note-selected-outline) 68%, #ffffff 32%);
+        outline-offset: 4px;
+    }
 }
 
 .grid-selection-marquee {

@@ -3,6 +3,10 @@
     if (!shapeGeometry) {
         throw new Error('PostbabyShapeGeometry is missing.');
     }
+    const geometryDom = window.PostbabyGeometryDom;
+    if (!geometryDom) {
+        throw new Error('PostbabyGeometryDom is missing.');
+    }
 
     const edgeGeometry = window.PostbabyEdgeGeometry;
     if (!edgeGeometry) {
@@ -21,6 +25,9 @@
         MAX_RESIZABLE_ITEM_WIDTH,
         MAX_RESIZABLE_ITEM_HEIGHT
     } = shapeGeometry;
+    const {
+        formatItemPosition
+    } = geometryDom;
     const {
         normalizeEdgeKind
     } = edgeGeometry;
@@ -662,10 +669,10 @@
                 id: itemId,
                 name: node.label,
                 color: defaultColor,
-                position: {
-                    top: `${options.originY + relativePosition.y}px`,
-                    left: `${options.originX + relativePosition.x}px`
-                },
+                position: formatItemPosition(
+                    options.originX + relativePosition.x,
+                    options.originY + relativePosition.y
+                ),
                 shape: node.shape,
                 width: node.width,
                 height: node.height
