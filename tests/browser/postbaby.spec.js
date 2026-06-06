@@ -70,6 +70,7 @@ const SYNC_HASH_STORAGE_KEYS = [
   'disableColorChange',
   'disableNoteResize',
   'hideInstructions',
+  'hideCameraControls',
   'corporateMode',
   'defaultColorEnabled',
   'defaultColor',
@@ -1733,24 +1734,7 @@ async function clickEmptyGrid(page, options = {}) {
     fallbackY: yPadding
   });
 
-  await page.evaluate(({ x, y }) => {
-    document.body.dispatchEvent(new MouseEvent('mousedown', {
-      bubbles: true,
-      cancelable: true,
-      button: 0,
-      buttons: 1,
-      clientX: x,
-      clientY: y
-    }));
-    document.dispatchEvent(new MouseEvent('mouseup', {
-      bubbles: true,
-      cancelable: true,
-      button: 0,
-      buttons: 0,
-      clientX: x,
-      clientY: y
-    }));
-  }, point);
+  await page.mouse.click(point.x, point.y);
 }
 
 async function readSelectedNoteIds(page) {
@@ -4667,6 +4651,64 @@ test.describe('Static behavior', () => {
     expect(await readItemPositionsById(page, ['control-fit-note'])).toEqual(beforePositions);
   });
 
+  test('0 and f camera keyboard shortcuts work even when top-right chrome has focus', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Keyboard Fit Note', {
+        itemId: 'keyboard-fit-note',
+        position: { top: '2280px', left: '2440px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    await setCamera(page, { x: 900, y: 800, zoom: 1.5 });
+    await page.locator('#settingsButton').focus();
+    await page.keyboard.press('0');
+    expect(await readCamera(page)).toEqual(DEFAULT_CAMERA);
+
+    await setCamera(page, { x: 1200, y: 1000, zoom: 2 });
+    await page.locator('#canvasModeToggleButton').focus();
+    await page.keyboard.press('f');
+    const afterFitCamera = await readCamera(page);
+    expect(afterFitCamera).not.toEqual({ x: 1200, y: 1000, zoom: 2 });
+  });
+
+  test('grid underlay and labels render below notes in the stacking order', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Grid Stack Note', {
+      position: { top: '180px', left: '220px' }
+    });
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    await openSettingsModal(page);
+    await page.locator('#useGrids').selectOption('kanban');
+    await page.locator('.close-settings').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+
+    const stacking = await page.evaluate(() => {
+      const tabContent = document.getElementById('tabContent');
+      const gridUnderlay = document.getElementById('gridUnderlay');
+      const note = document.querySelector('.grid-item[data-id="item-1"]');
+      if (!tabContent || !gridUnderlay || !note) {
+        throw new Error('Expected tab content, grid underlay, and note to exist.');
+      }
+
+      return {
+        tabContentZ: window.getComputedStyle(tabContent).zIndex,
+        gridUnderlayZ: window.getComputedStyle(gridUnderlay).zIndex,
+        noteZ: window.getComputedStyle(note).zIndex
+      };
+    });
+
+    expect(stacking.tabContentZ).toBe('1');
+    expect(stacking.gridUnderlayZ).toBe('0');
+    expect(stacking.noteZ).toBe('2');
+  });
+
   test('top-right hand toggle persists browser-locally and empty-canvas drag pans only in hand mode', async ({ page }) => {
     const localSnapshot = buildLocalSnapshotWithItems([
       buildNoteItem('Mode Toggle Note', {
@@ -6092,6 +6134,134 @@ test.describe('Static behavior', () => {
     await expect.poll(() => readSelectedNoteIds(page)).toEqual([]);
   });
 
+  test('hand mode empty canvas click clears marquee selection', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Hand Mode Selected', {
+        itemId: 'item-1',
+        position: { top: '80px', left: '120px' }
+      }),
+      buildNoteItem('Hand Mode Other', {
+        itemId: 'item-2',
+        position: { top: '120px', left: '360px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const note = page.locator('.grid-item[data-id="item-1"]');
+    await marqueeSelectNotes(page, [note]);
+    await expect.poll(() => readSelectedNoteIds(page)).toEqual(['item-1']);
+
+    await setCanvasMode(page, 'pan');
+    expect(await readCanvasMode(page)).toBe('pan');
+
+    await clickEmptyGrid(page);
+    await expect.poll(() => readSelectedNoteIds(page)).toEqual([]);
+    expect(await readCanvasMode(page)).toBe('pan');
+  });
+
+  test('hand mode blank canvas drag keeps selection and pans camera', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Hand Mode Drag Selected', {
+        itemId: 'item-1',
+        position: { top: '360px', left: '520px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const note = page.locator('.grid-item[data-id="item-1"]');
+    await marqueeSelectNotes(page, [note]);
+    await expect.poll(() => readSelectedNoteIds(page)).toEqual(['item-1']);
+
+    await setCanvasMode(page, 'pan');
+    expect(await readCanvasMode(page)).toBe('pan');
+
+    const workspaceBox = await page.locator('#tabContent').boundingBox();
+    if (!workspaceBox) {
+      throw new Error('Workspace viewport bounding box was not available.');
+    }
+
+    const blankStartX = Math.round(workspaceBox.x + workspaceBox.width - 220);
+    const blankStartY = Math.round(workspaceBox.y + workspaceBox.height - 180);
+    const beforePanCamera = await readCamera(page);
+
+    await page.mouse.move(blankStartX, blankStartY);
+    await page.mouse.down();
+    await page.mouse.move(blankStartX + 120, blankStartY + 70, { steps: 8 });
+    await page.mouse.up();
+
+    const afterPanCamera = await readCamera(page);
+    expect(afterPanCamera.x).toBeLessThan(beforePanCamera.x);
+    expect(afterPanCamera.y).toBeLessThan(beforePanCamera.y);
+    await expect.poll(() => readSelectedNoteIds(page)).toEqual(['item-1']);
+  });
+
+  test('middle mouse blank canvas click does not clear selection', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Middle Mouse Selected', {
+        itemId: 'item-1',
+        position: { top: '80px', left: '120px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const note = page.locator('.grid-item[data-id="item-1"]');
+    await marqueeSelectNotes(page, [note]);
+    await expect.poll(() => readSelectedNoteIds(page)).toEqual(['item-1']);
+
+    const workspaceBox = await page.locator('#tabContent').boundingBox();
+    if (!workspaceBox) {
+      throw new Error('Workspace viewport bounding box was not available.');
+    }
+
+    const blankX = Math.round(workspaceBox.x + workspaceBox.width - 220);
+    const blankY = Math.round(workspaceBox.y + workspaceBox.height - 180);
+    await page.mouse.click(blankX, blankY, { button: 'middle' });
+
+    await expect.poll(() => readSelectedNoteIds(page)).toEqual(['item-1']);
+  });
+
+  test('Space pan blank canvas click does not clear selection', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Space Pan Selected', {
+        itemId: 'item-1',
+        position: { top: '80px', left: '120px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const note = page.locator('.grid-item[data-id="item-1"]');
+    await marqueeSelectNotes(page, [note]);
+    await expect.poll(() => readSelectedNoteIds(page)).toEqual(['item-1']);
+
+    const workspaceBox = await page.locator('#tabContent').boundingBox();
+    if (!workspaceBox) {
+      throw new Error('Workspace viewport bounding box was not available.');
+    }
+
+    const blankX = Math.round(workspaceBox.x + workspaceBox.width - 220);
+    const blankY = Math.round(workspaceBox.y + workspaceBox.height - 180);
+
+    await page.keyboard.down('Space');
+    await page.mouse.move(blankX, blankY);
+    await page.mouse.down();
+    await page.mouse.up();
+    await page.keyboard.up('Space');
+
+    await expect.poll(() => readSelectedNoteIds(page)).toEqual(['item-1']);
+  });
+
   test('empty canvas click over the logo area clears marquee selection', async ({ page }) => {
     const localSnapshot = buildLocalSnapshotWithItems([
       buildNoteItem('Selected Then Cleared', {
@@ -6961,6 +7131,48 @@ test.describe('Static behavior', () => {
     const resizedNote = await readNoteSize(note);
     expect(resizedNote.width).toBeGreaterThan(sizeBeforeDisable.width);
     expect(resizedNote.height).toBeGreaterThan(sizeBeforeDisable.height);
+  });
+
+  test('Hide Camera Remote hides camera controls, persists across reload, and restores them when re-enabled', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Camera Remote Toggle');
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    await expect.poll(async () => (await readCameraControlsState(page)).hidden).toBe(false);
+
+    await openSettingsModal(page);
+    const hideCameraControlsToggle = page.locator('#toggleHideCameraControls');
+    await expect(hideCameraControlsToggle).not.toBeChecked();
+    await hideCameraControlsToggle.evaluate((element) => element.click());
+    await expect(hideCameraControlsToggle).toBeChecked();
+    await expect.poll(async () => (await readCameraControlsState(page)).hidden).toBe(true);
+    await expect.poll(async () => {
+      const indexedDBState = await readIndexedDBState(page);
+      return indexedDBState.snapshot ? indexedDBState.snapshot.hideCameraControls : null;
+    }).toBe('true');
+    await page.locator('.close-settings').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+    await expect.poll(async () => (await readCameraControlsState(page)).hidden).toBe(true);
+
+    await page.reload();
+    await expectNoteVisible(page, 'Camera Remote Toggle');
+    await expect.poll(async () => (await readCameraControlsState(page)).hidden).toBe(true);
+
+    await openSettingsModal(page);
+    const reloadedHideCameraControlsToggle = page.locator('#toggleHideCameraControls');
+    await expect(reloadedHideCameraControlsToggle).toBeChecked();
+    await reloadedHideCameraControlsToggle.evaluate((element) => element.click());
+    await expect(reloadedHideCameraControlsToggle).not.toBeChecked();
+    await expect.poll(async () => (await readCameraControlsState(page)).hidden).toBe(false);
+    await expect.poll(async () => {
+      const indexedDBState = await readIndexedDBState(page);
+      return indexedDBState.snapshot ? indexedDBState.snapshot.hideCameraControls : null;
+    }).toBe('false');
+    await page.locator('.close-settings').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+    await expect.poll(async () => (await readCameraControlsState(page)).hidden).toBe(false);
   });
 
   test('enters textarea edit mode on desktop double-click', async ({ page }) => {
@@ -9594,6 +9806,35 @@ test.describe('Settings and Account UI', () => {
     expect(createdItems.find((item) => item.name === 'Circle Target')?.shape).toBe('circle');
     expect(createdItems.find((item) => item.name === 'Decision')?.shape).toBe('diamond');
     expect(createdEdges.map((edge) => edge.kind).sort()).toEqual(['arrow', 'line']);
+  });
+
+  test('Mermaid import in hand mode can be deselected by blank canvas click', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    await setCanvasMode(page, 'pan');
+    expect(await readCanvasMode(page)).toBe('pan');
+
+    await openSettingsImportExportTab(page);
+    await page.locator('#mermaidImportSource').fill([
+      'flowchart LR',
+      'A[Source] --> B((Circle Target))',
+      'A --- C{Decision}'
+    ].join('\n'));
+    await page.locator('#mermaidImportButton').click();
+
+    await expect(page.locator('#settingsModal')).toBeVisible();
+    await expect(page.locator('#mermaidImportStatus')).toContainText('Mermaid import completed.');
+    await expect(page.locator('.grid-item.selected')).toHaveCount(3);
+
+    await page.locator('.close-settings').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+    await expect(page.locator('.grid-item.selected')).toHaveCount(3);
+
+    await clickEmptyGrid(page);
+    await expect(page.locator('.grid-item.selected')).toHaveCount(0);
+    expect(await readCanvasMode(page)).toBe('pan');
   });
 
   test('Mermaid import from Settings surfaces warnings inline when supported syntax is normalized', async ({ page }) => {
