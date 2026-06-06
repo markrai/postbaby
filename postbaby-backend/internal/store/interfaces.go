@@ -6,11 +6,47 @@ import (
 	"time"
 )
 
+type SyncMutationReceiptInput struct {
+	MutationID    string
+	ClientID      string
+	DeviceID      string
+	Protocol      string
+	EntityType    string
+	EntityID      string
+	OperationType string
+	Payload       json.RawMessage
+	BaseRevision  *int64
+}
+
+type SyncMutationReceipt struct {
+	ID            int64
+	OwnerKey      string
+	AppID         string
+	MutationID    string
+	ClientID      string
+	DeviceID      string
+	Protocol      string
+	EntityType    string
+	EntityID      string
+	OperationType string
+	Payload       json.RawMessage
+	BaseRevision  *int64
+	Status        string
+	CreatedAt     time.Time
+	AcceptedAt    time.Time
+}
+
+type SyncMutationReceiptResult struct {
+	Receipt   SyncMutationReceipt
+	Duplicate bool
+}
+
 type DocumentStore interface {
 	Health(ctx context.Context) error
 	GetDocument(ctx context.Context, ownerKey, appID string) (Document, error)
 	GetDocumentMeta(ctx context.Context, ownerKey, appID string) (DocumentMeta, error)
 	PutDocument(ctx context.Context, ownerKey, appID string, body json.RawMessage, expectedVersion *int64) (Document, error)
+	AcceptSyncMutationReceipts(ctx context.Context, ownerKey, appID string, receipts []SyncMutationReceiptInput) ([]SyncMutationReceiptResult, error)
 }
 
 type IdentityStore interface {

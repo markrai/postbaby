@@ -384,6 +384,285 @@ func TestPutDocumentReturnsConflictForMismatchedVersion(t *testing.T) {
 	assertVersionConflictResponse(t, rec, secondResp.Version)
 }
 
+func TestSyncMutationsRequiresAuthentication(t *testing.T) {
+	t.Parallel()
+
+	env := newTestEnv(t, config.DeploymentModeSelfHosted)
+	rec := performJSONRequest(t, env.handler, nil, http.MethodPost, "/api/sync/mutations", map[string]any{
+		"appId":     "postbaby-web",
+		"mutations": []map[string]any{buildSyncMutationEnvelope("mut-1", "CreateNode", map[string]any{"tabId": "tab-1"})},
+	})
+
+	assertErrorResponse(t, rec, http.StatusUnauthorized, "unauthorized")
+	assertNoStore(t, rec)
+}
+
+func TestSyncMutationsStoresReceiptsAndReturnsAcceptedResults(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHosted)
+	user := authenticatedUserFromCookie(t, env, env.cookie)
+
+	rec := performJSONRequest(t, env.handler, env.cookie, http.MethodPost, "/api/sync/mutations", map[string]any{
+		"appId": "postbaby-web",
+		"mutations": []map[string]any{
+			buildSyncMutationEnvelope("mut-1", "CreateNode", map[string]any{"tabId": "tab-1", "name": "Inbox"}),
+			buildSyncMutationEnvelope("mut-2", "MoveNode", map[string]any{"tabId": "tab-1", "position": map[string]any{"top": "10px", "left": "20px"}}),
+		},
+	})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%q", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		OK      bool   `json:"ok"`
+		AppID   string `json:"appId"`
+		Results []struct {
+			MutationID string `json:"mutationId"`
+			Status     string `json:"status"`
+			Duplicate  bool   `json:"duplicate"`
+			AcceptedAt string `json:"acceptedAt"`
+		} `json:"results"`
+	}
+	decodeResponse(t, rec, &resp)
+
+	if !resp.OK || resp.AppID != "postbaby-web" || len(resp.Results) != 2 {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	for _, result := range resp.Results {
+		if result.Status != store.SyncMutationReceiptStatusAccepted || result.Duplicate || result.AcceptedAt == "" {
+			t.Fatalf("unexpected mutation ack result: %+v", result)
+		}
+	}
+
+	count, err := env.store.CountSyncMutationReceipts(context.Background(), user.OwnerKey, "postbaby-web")
+	if err != nil {
+		t.Fatalf("count sync mutation receipts: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected two stored mutation receipts, got %d", count)
+	}
+}
+
+func TestSyncMutationsReturnsDuplicateAckWithoutDuplicateRows(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHosted)
+	user := authenticatedUserFromCookie(t, env, env.cookie)
+	requestBody := map[string]any{
+		"appId":     "postbaby-web",
+		"mutations": []map[string]any{buildSyncMutationEnvelope("mut-1", "CreateNode", map[string]any{"tabId": "tab-1"})},
+	}
+
+	first := performJSONRequest(t, env.handler, env.cookie, http.MethodPost, "/api/sync/mutations", requestBody)
+	second := performJSONRequest(t, env.handler, env.cookie, http.MethodPost, "/api/sync/mutations", requestBody)
+
+	var firstResp struct {
+		Results []struct {
+			MutationID string `json:"mutationId"`
+			Status     string `json:"status"`
+			Duplicate  bool   `json:"duplicate"`
+			AcceptedAt string `json:"acceptedAt"`
+		} `json:"results"`
+	}
+	var secondResp struct {
+		Results []struct {
+			MutationID string `json:"mutationId"`
+			Status     string `json:"status"`
+			Duplicate  bool   `json:"duplicate"`
+			AcceptedAt string `json:"acceptedAt"`
+		} `json:"results"`
+	}
+	decodeResponse(t, first, &firstResp)
+	decodeResponse(t, second, &secondResp)
+
+	if len(firstResp.Results) != 1 || len(secondResp.Results) != 1 {
+		t.Fatalf("unexpected duplicate ack responses: first=%+v second=%+v", firstResp, secondResp)
+	}
+	if firstResp.Results[0].Status != store.SyncMutationReceiptStatusAccepted || firstResp.Results[0].Duplicate {
+		t.Fatalf("unexpected first ack result: %+v", firstResp.Results[0])
+	}
+	if secondResp.Results[0].Status != store.SyncMutationReceiptStatusAccepted || !secondResp.Results[0].Duplicate {
+		t.Fatalf("unexpected duplicate ack result: %+v", secondResp.Results[0])
+	}
+	if firstResp.Results[0].AcceptedAt != secondResp.Results[0].AcceptedAt {
+		t.Fatalf("expected duplicate ack to preserve acceptedAt %q, got %q", firstResp.Results[0].AcceptedAt, secondResp.Results[0].AcceptedAt)
+	}
+
+	count, err := env.store.CountSyncMutationReceipts(context.Background(), user.OwnerKey, "postbaby-web")
+	if err != nil {
+		t.Fatalf("count sync mutation receipts after duplicate request: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one stored receipt after duplicate request, got %d", count)
+	}
+}
+
+func TestSyncMutationsRejectsInvalidOperationType(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHosted)
+	user := authenticatedUserFromCookie(t, env, env.cookie)
+
+	rec := performJSONRequest(t, env.handler, env.cookie, http.MethodPost, "/api/sync/mutations", map[string]any{
+		"appId":     "postbaby-web",
+		"mutations": []map[string]any{buildSyncMutationEnvelope("mut-1", "ImportGraph", map[string]any{"tabId": "tab-1"})},
+	})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%q", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Results []struct {
+			MutationID string `json:"mutationId"`
+			Status     string `json:"status"`
+			Error      struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		} `json:"results"`
+	}
+	decodeResponse(t, rec, &resp)
+
+	if len(resp.Results) != 1 || resp.Results[0].MutationID != "mut-1" || resp.Results[0].Status != "rejected" || resp.Results[0].Error.Code != "invalid_operation_type" {
+		t.Fatalf("unexpected rejection response: %+v", resp)
+	}
+
+	count, err := env.store.CountSyncMutationReceipts(context.Background(), user.OwnerKey, "postbaby-web")
+	if err != nil {
+		t.Fatalf("count sync mutation receipts after rejection: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no stored receipts for rejected mutation, got %d", count)
+	}
+}
+
+func TestSyncMutationsScopePerOwnerAndApp(t *testing.T) {
+	t.Parallel()
+
+	env := newTestEnv(t, config.DeploymentModeSelfHosted)
+	firstCookie := createAuthenticatedUserSession(t, env, "owner-one")
+	secondCookie := createAuthenticatedUserSession(t, env, "owner-two")
+	firstUser := authenticatedUserFromCookie(t, env, firstCookie)
+	secondUser := authenticatedUserFromCookie(t, env, secondCookie)
+
+	body := map[string]any{
+		"appId":     "postbaby-web",
+		"mutations": []map[string]any{buildSyncMutationEnvelope("shared-mut", "CreateNode", map[string]any{"tabId": "tab-1"})},
+	}
+	otherAppBody := map[string]any{
+		"appId":     "postbaby-mobile",
+		"mutations": []map[string]any{buildSyncMutationEnvelope("shared-mut", "CreateNode", map[string]any{"tabId": "tab-1"})},
+	}
+
+	firstRec := performJSONRequest(t, env.handler, firstCookie, http.MethodPost, "/api/sync/mutations", body)
+	secondRec := performJSONRequest(t, env.handler, secondCookie, http.MethodPost, "/api/sync/mutations", body)
+	thirdRec := performJSONRequest(t, env.handler, firstCookie, http.MethodPost, "/api/sync/mutations", otherAppBody)
+
+	if firstRec.Code != http.StatusOK || secondRec.Code != http.StatusOK || thirdRec.Code != http.StatusOK {
+		t.Fatalf("expected scoped mutation receipts to succeed, got statuses %d %d %d", firstRec.Code, secondRec.Code, thirdRec.Code)
+	}
+
+	firstCount, err := env.store.CountSyncMutationReceipts(context.Background(), firstUser.OwnerKey, "postbaby-web")
+	if err != nil {
+		t.Fatalf("count first owner receipts: %v", err)
+	}
+	secondCount, err := env.store.CountSyncMutationReceipts(context.Background(), secondUser.OwnerKey, "postbaby-web")
+	if err != nil {
+		t.Fatalf("count second owner receipts: %v", err)
+	}
+	otherAppCount, err := env.store.CountSyncMutationReceipts(context.Background(), firstUser.OwnerKey, "postbaby-mobile")
+	if err != nil {
+		t.Fatalf("count first owner other-app receipts: %v", err)
+	}
+
+	if firstCount != 1 || secondCount != 1 || otherAppCount != 1 {
+		t.Fatalf("expected scoped counts 1/1/1, got %d/%d/%d", firstCount, secondCount, otherAppCount)
+	}
+}
+
+func TestSyncMutationsRejectMalformedPayloadSafely(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHosted)
+	user := authenticatedUserFromCookie(t, env, env.cookie)
+
+	rec := performJSONRequest(t, env.handler, env.cookie, http.MethodPost, "/api/sync/mutations", map[string]any{
+		"appId": "postbaby-web",
+		"mutations": []map[string]any{
+			buildSyncMutationEnvelope("mut-1", "CreateNode", []any{"bad-payload"}),
+		},
+	})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%q", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Results []struct {
+			Status string `json:"status"`
+			Error  struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		} `json:"results"`
+	}
+	decodeResponse(t, rec, &resp)
+	if len(resp.Results) != 1 || resp.Results[0].Status != "rejected" || resp.Results[0].Error.Code != "invalid_payload" {
+		t.Fatalf("unexpected malformed payload response: %+v", resp)
+	}
+
+	count, err := env.store.CountSyncMutationReceipts(context.Background(), user.OwnerKey, "postbaby-web")
+	if err != nil {
+		t.Fatalf("count sync mutation receipts after malformed payload: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no stored receipts for malformed payload, got %d", count)
+	}
+}
+
+func TestSyncMutationsRejectLargePayload(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHosted)
+	user := authenticatedUserFromCookie(t, env, env.cookie)
+
+	rec := performJSONRequest(t, env.handler, env.cookie, http.MethodPost, "/api/sync/mutations", map[string]any{
+		"appId": "postbaby-web",
+		"mutations": []map[string]any{
+			buildSyncMutationEnvelope("mut-1", "CreateNode", map[string]any{
+				"tabId": "tab-1",
+				"blob":  strings.Repeat("a", maxSyncMutationPayloadBytes+1),
+			}),
+		},
+	})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%q", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Results []struct {
+			Status string `json:"status"`
+			Error  struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		} `json:"results"`
+	}
+	decodeResponse(t, rec, &resp)
+	if len(resp.Results) != 1 || resp.Results[0].Status != "rejected" || resp.Results[0].Error.Code != "payload_too_large" {
+		t.Fatalf("unexpected large payload response: %+v", resp)
+	}
+
+	count, err := env.store.CountSyncMutationReceipts(context.Background(), user.OwnerKey, "postbaby-web")
+	if err != nil {
+		t.Fatalf("count sync mutation receipts after large payload: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no stored receipts for large payload, got %d", count)
+	}
+}
+
 func TestDocumentLoadAfterSavePreservesJSON(t *testing.T) {
 	t.Parallel()
 
@@ -703,6 +982,20 @@ func createAuthenticatedUserSession(t *testing.T, env *testEnv, username string)
 	return cookies[0]
 }
 
+func authenticatedUserFromCookie(t *testing.T, env *testEnv, cookie *http.Cookie) *store.User {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	user, err := env.authManager.AuthenticateRequest(context.Background(), rec, req)
+	if err != nil {
+		t.Fatalf("authenticate user from cookie: %v", err)
+	}
+
+	return user
+}
+
 func grantHostedSyncEntitlement(t *testing.T, env *testEnv, cookie *http.Cookie) {
 	t.Helper()
 	setHostedSyncEntitlementStatus(t, env, cookie, store.EntitlementStatusActive)
@@ -862,5 +1155,19 @@ func snapshot(activeTabID, tabs string) map[string]string {
 	return map[string]string{
 		"tabs":        tabs,
 		"activeTabId": activeTabID,
+	}
+}
+
+func buildSyncMutationEnvelope(mutationID, operationType string, payload any) map[string]any {
+	return map[string]any{
+		"protocol":      "PB-SYNC/1",
+		"clientId":      "client-1",
+		"deviceId":      "device-1",
+		"mutationId":    mutationID,
+		"baseRevision":  6,
+		"entityType":    "Node",
+		"entityId":      "item-1",
+		"operationType": operationType,
+		"payload":       payload,
 	}
 }

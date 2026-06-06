@@ -19,9 +19,10 @@ var (
 )
 
 const (
-	dbOperationTimeout       = 8 * time.Second
-	dbStartupTimeout         = 10 * time.Second
-	slowDBOperationThreshold = 750 * time.Millisecond
+	dbOperationTimeout                = 8 * time.Second
+	dbStartupTimeout                  = 10 * time.Second
+	slowDBOperationThreshold          = 750 * time.Millisecond
+	SyncMutationReceiptStatusAccepted = "accepted"
 )
 
 type VersionConflictError struct {
@@ -294,6 +295,135 @@ func (s *Store) PutDocument(ctx context.Context, ownerKey, appID string, body js
 	}, nil
 }
 
+func (s *Store) AcceptSyncMutationReceipts(ctx context.Context, ownerKey, appID string, receipts []SyncMutationReceiptInput) ([]SyncMutationReceiptResult, error) {
+	started := time.Now()
+	ctx, cancel := withDBTimeout(ctx)
+	defer cancel()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, s.wrapDBError("write_begin_sync_mutation_receipts", started, fmt.Errorf("begin transaction: %w", err))
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	results := make([]SyncMutationReceiptResult, 0, len(receipts))
+	for _, receiptInput := range receipts {
+		acceptedAt := time.Now().UTC().Format(time.RFC3339)
+		payloadJSON := string(cloneJSON(receiptInput.Payload))
+		var baseRevisionValue any
+		if receiptInput.BaseRevision != nil {
+			baseRevisionValue = *receiptInput.BaseRevision
+		}
+
+		insertResult, execErr := tx.ExecContext(
+			ctx,
+			`INSERT OR IGNORE INTO sync_mutation_receipts (
+				owner_key,
+				app_id,
+				mutation_id,
+				client_id,
+				device_id,
+				protocol,
+				entity_type,
+				entity_id,
+				operation_type,
+				payload_json,
+				base_revision,
+				status,
+				created_at,
+				accepted_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			ownerKey,
+			appID,
+			receiptInput.MutationID,
+			receiptInput.ClientID,
+			receiptInput.DeviceID,
+			receiptInput.Protocol,
+			receiptInput.EntityType,
+			receiptInput.EntityID,
+			receiptInput.OperationType,
+			payloadJSON,
+			baseRevisionValue,
+			SyncMutationReceiptStatusAccepted,
+			acceptedAt,
+			acceptedAt,
+		)
+		if execErr != nil {
+			return nil, s.wrapDBError("write_insert_sync_mutation_receipt", started, fmt.Errorf("insert sync mutation receipt: %w", execErr))
+		}
+
+		rowsAffected, rowsErr := insertResult.RowsAffected()
+		if rowsErr != nil {
+			return nil, s.wrapDBError("write_sync_mutation_receipt_rows_affected", started, fmt.Errorf("read rows affected: %w", rowsErr))
+		}
+
+		storedReceipt, loadErr := scanSyncMutationReceipt(tx.QueryRowContext(
+			ctx,
+			`SELECT
+				id,
+				owner_key,
+				app_id,
+				mutation_id,
+				client_id,
+				device_id,
+				protocol,
+				entity_type,
+				entity_id,
+				operation_type,
+				payload_json,
+				base_revision,
+				status,
+				created_at,
+				accepted_at
+			FROM sync_mutation_receipts
+			WHERE owner_key = ? AND app_id = ? AND mutation_id = ?`,
+			ownerKey,
+			appID,
+			receiptInput.MutationID,
+		))
+		if loadErr != nil {
+			return nil, s.wrapDBError("read_sync_mutation_receipt", started, loadErr)
+		}
+
+		results = append(results, SyncMutationReceiptResult{
+			Receipt:   storedReceipt,
+			Duplicate: rowsAffected == 0,
+		})
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, s.wrapDBError("write_commit_sync_mutation_receipts", started, fmt.Errorf("commit sync mutation receipts: %w", err))
+	}
+	committed = true
+	s.logDBOperation("write_accept_sync_mutation_receipts", started, nil)
+
+	return results, nil
+}
+
+func (s *Store) CountSyncMutationReceipts(ctx context.Context, ownerKey, appID string) (int64, error) {
+	started := time.Now()
+	ctx, cancel := withDBTimeout(ctx)
+	defer cancel()
+
+	var count int64
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM sync_mutation_receipts WHERE owner_key = ? AND app_id = ?`,
+		ownerKey,
+		appID,
+	).Scan(&count); err != nil {
+		return 0, s.wrapDBError("count_sync_mutation_receipts", started, fmt.Errorf("count sync mutation receipts: %w", err))
+	}
+
+	s.logDBOperation("count_sync_mutation_receipts", started, nil)
+	return count, nil
+}
+
 func (s *Store) init(ctx context.Context) error {
 	started := time.Now()
 
@@ -416,6 +546,31 @@ func (s *Store) init(ctx context.Context) error {
 
 	_, err = s.db.ExecContext(
 		ctx,
+		`CREATE TABLE IF NOT EXISTS sync_mutation_receipts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			owner_key TEXT NOT NULL,
+			app_id TEXT NOT NULL,
+			mutation_id TEXT NOT NULL,
+			client_id TEXT NOT NULL,
+			device_id TEXT NOT NULL,
+			protocol TEXT NOT NULL,
+			entity_type TEXT NOT NULL,
+			entity_id TEXT NOT NULL,
+			operation_type TEXT NOT NULL,
+			payload_json TEXT NOT NULL,
+			base_revision INTEGER,
+			status TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			accepted_at TEXT NOT NULL,
+			UNIQUE(owner_key, app_id, mutation_id)
+		)`,
+	)
+	if err != nil {
+		return s.wrapDBError("db_init_create_sync_mutation_receipts", started, fmt.Errorf("create sync_mutation_receipts table: %w", err))
+	}
+
+	_, err = s.db.ExecContext(
+		ctx,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
 	)
 	if err != nil {
@@ -444,6 +599,14 @@ func (s *Store) init(ctx context.Context) error {
 	)
 	if err != nil {
 		return s.wrapDBError("db_init_create_billing_subscriptions_user_idx", started, fmt.Errorf("create billing_subscriptions user_id index: %w", err))
+	}
+
+	_, err = s.db.ExecContext(
+		ctx,
+		`CREATE INDEX IF NOT EXISTS idx_sync_mutation_receipts_owner_app_created_at ON sync_mutation_receipts(owner_key, app_id, created_at)`,
+	)
+	if err != nil {
+		return s.wrapDBError("db_init_create_sync_mutation_receipts_owner_app_created_idx", started, fmt.Errorf("create sync_mutation_receipts owner/app/created_at index: %w", err))
 	}
 
 	s.logDBOperation("db_init_create_schema", started, nil)
@@ -502,6 +665,47 @@ func scanDocument(row interface {
 	doc.Body = json.RawMessage(body)
 	doc.UpdatedAt = parsedUpdatedAt
 	return doc, nil
+}
+
+func scanSyncMutationReceipt(row interface {
+	Scan(dest ...any) error
+}) (SyncMutationReceipt, error) {
+	var receipt SyncMutationReceipt
+	var payloadJSON string
+	var baseRevision sql.NullInt64
+	var createdAt string
+	var acceptedAt string
+	if err := row.Scan(
+		&receipt.ID,
+		&receipt.OwnerKey,
+		&receipt.AppID,
+		&receipt.MutationID,
+		&receipt.ClientID,
+		&receipt.DeviceID,
+		&receipt.Protocol,
+		&receipt.EntityType,
+		&receipt.EntityID,
+		&receipt.OperationType,
+		&payloadJSON,
+		&baseRevision,
+		&receipt.Status,
+		&createdAt,
+		&acceptedAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return SyncMutationReceipt{}, fmt.Errorf("sync mutation receipt not found")
+		}
+		return SyncMutationReceipt{}, fmt.Errorf("scan sync mutation receipt: %w", err)
+	}
+
+	receipt.Payload = json.RawMessage(payloadJSON)
+	if baseRevision.Valid {
+		value := baseRevision.Int64
+		receipt.BaseRevision = &value
+	}
+	receipt.CreatedAt = mustParseTimestamp(createdAt)
+	receipt.AcceptedAt = mustParseTimestamp(acceptedAt)
+	return receipt, nil
 }
 
 func cloneJSON(value json.RawMessage) json.RawMessage {

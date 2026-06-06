@@ -2035,6 +2035,7 @@ async function enableMockedSync(page, options = {}) {
   const metaPayload = options.metaPayload || { ok: true, exists: false, version: 0, updatedAt: TIMESTAMP };
   const documentPayload = options.documentPayload || buildServerPayload('Server Snapshot', metaPayload.version || 1);
   const onSave = options.onSave || null;
+  const onMutations = options.onMutations || null;
   const runtimeAccount = Object.assign({
     username: 'owner',
     displayName: 'owner',
@@ -2064,6 +2065,41 @@ async function enableMockedSync(page, options = {}) {
         'Cache-Control': 'no-store'
       },
       body: JSON.stringify(metaPayload)
+    });
+  });
+
+  await page.route(/\/api\/sync\/mutations(?:\?.*)?$/, async (route) => {
+    const request = route.request();
+    if (request.method() !== 'POST') {
+      await route.fulfill({
+        status: 405,
+        contentType: 'application/json; charset=utf-8',
+        body: JSON.stringify({ ok: false })
+      });
+      return;
+    }
+
+    const requestBody = JSON.parse(request.postData() || '{}');
+    const response = onMutations
+      ? await onMutations(requestBody, request)
+      : {
+          status: 404,
+          body: {
+            ok: false,
+            error: {
+              code: 'not_found',
+              message: 'not found'
+            }
+          }
+        };
+
+    await route.fulfill({
+      status: response.status || 200,
+      contentType: 'application/json; charset=utf-8',
+      headers: {
+        'Cache-Control': 'no-store'
+      },
+      body: JSON.stringify(response.body)
     });
   });
 
@@ -2133,6 +2169,9 @@ async function enableDynamicMockedSync(target, options = {}) {
   const onSave = typeof options.onSave === 'function'
     ? options.onSave
     : null;
+  const onMutations = typeof options.onMutations === 'function'
+    ? options.onMutations
+    : null;
 
   await target.route('**/runtime-config.js', async (route) => {
     await route.fulfill({
@@ -2153,6 +2192,41 @@ async function enableDynamicMockedSync(target, options = {}) {
         'Cache-Control': 'no-store'
       },
       body: JSON.stringify(getMetaPayload(route.request()))
+    });
+  });
+
+  await target.route(/\/api\/sync\/mutations(?:\?.*)?$/, async (route) => {
+    const request = route.request();
+    if (request.method() !== 'POST') {
+      await route.fulfill({
+        status: 405,
+        contentType: 'application/json; charset=utf-8',
+        body: JSON.stringify({ ok: false })
+      });
+      return;
+    }
+
+    const requestBody = JSON.parse(request.postData() || '{}');
+    const response = onMutations
+      ? await onMutations(requestBody, request)
+      : {
+          status: 404,
+          body: {
+            ok: false,
+            error: {
+              code: 'not_found',
+              message: 'not found'
+            }
+          }
+        };
+
+    await route.fulfill({
+      status: response.status || 200,
+      contentType: 'application/json; charset=utf-8',
+      headers: {
+        'Cache-Control': 'no-store'
+      },
+      body: JSON.stringify(response.body)
     });
   });
 
@@ -9097,6 +9171,269 @@ test.describe('Mocked sync startup reconciliation', () => {
     } finally {
       await context.close();
     }
+  });
+
+  test('sends pending local mutations to the receipt endpoint and marks accepted results serverAcked', async ({ page }) => {
+    const localSnapshot = addDurableCloudSyncMetadata(
+      buildLocalSnapshot('Ack Pending Note', { syncVersion: 6 }),
+      {
+        pending: false,
+        revision: 6,
+        lastCloudUploadedAt: TIMESTAMP
+      }
+    );
+    const capturedMutationBodies = [];
+    const capturedSaveBodies = [];
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Ack Pending Note', 6),
+      onMutations: async (body) => {
+        capturedMutationBodies.push(body);
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            appId: body.appId,
+            results: body.mutations.map((mutation) => ({
+              mutationId: mutation.mutationId,
+              status: 'accepted',
+              duplicate: false,
+              acceptedAt: TIMESTAMP
+            }))
+          }
+        };
+      },
+      onSave: async (body) => {
+        capturedSaveBodies.push(body);
+        return {
+          status: 200,
+          body: { ok: true, version: 7, updatedAt: TIMESTAMP }
+        };
+      }
+    });
+
+    await page.goto('/index.html');
+    await dragNoteBy(page, page.locator('.grid-item[data-id="item-1"]'), 80, 40);
+    await page.locator('#syncStatusButton').click();
+    await page.locator('#syncNowButton').click();
+
+    await expect.poll(() => capturedMutationBodies.length).toBe(1);
+    await expect.poll(() => capturedSaveBodies.length).toBe(1);
+    await expect.poll(async () => {
+      const outbox = await readMutationOutbox(page);
+      return outbox.serverAckedCount;
+    }).toBe(1);
+
+    const outbox = await readMutationOutbox(page);
+    expect(outbox.totalCount).toBe(1);
+    expect(outbox.serverPendingCount).toBe(0);
+    expect(outbox.serverAckedCount).toBe(1);
+    expect(outbox.records[0].status).toBe('serverAcked');
+    expect(capturedMutationBodies[0].appId).toBe('postbaby-web');
+    expect(capturedMutationBodies[0].mutations).toHaveLength(1);
+    expect(capturedMutationBodies[0].mutations[0].operationType).toBe('MoveNode');
+    expect(capturedMutationBodies[0].mutations[0].mutationId).toBe(outbox.records[0].mutationId);
+    expect(capturedMutationBodies[0].mutations[0].payload).toHaveProperty('position');
+    LOCAL_ONLY_OUTBOX_KEYS.forEach((key) => {
+      expect(Object.prototype.hasOwnProperty.call(capturedSaveBodies[0].data, key)).toBe(false);
+    });
+    expect(Object.prototype.hasOwnProperty.call(capturedSaveBodies[0], 'mutations')).toBe(false);
+  });
+
+  test('duplicate receipt ACK responses do not create duplicate client-side state', async ({ page }) => {
+    const localSnapshot = addDurableCloudSyncMetadata(
+      buildLocalSnapshot('Duplicate Ack Note', { syncVersion: 6 }),
+      {
+        pending: false,
+        revision: 6,
+        lastCloudUploadedAt: TIMESTAMP
+      }
+    );
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Duplicate Ack Note', 6),
+      onMutations: async (body) => ({
+        status: 200,
+        body: {
+          ok: true,
+          appId: body.appId,
+          results: body.mutations.map((mutation) => ({
+            mutationId: mutation.mutationId,
+            status: 'accepted',
+            duplicate: true,
+            acceptedAt: TIMESTAMP
+          }))
+        }
+      }),
+      onSave: async () => ({
+        status: 200,
+        body: { ok: true, version: 7, updatedAt: TIMESTAMP }
+      })
+    });
+
+    await page.goto('/index.html');
+    await dragNoteBy(page, page.locator('.grid-item[data-id="item-1"]'), 75, 35);
+    await page.locator('#syncStatusButton').click();
+    await page.locator('#syncNowButton').click();
+
+    await expect.poll(async () => {
+      const outbox = await readMutationOutbox(page);
+      return outbox.serverAckedCount;
+    }).toBe(1);
+
+    const outbox = await readMutationOutbox(page);
+    expect(outbox.totalCount).toBe(1);
+    expect(outbox.records[0].status).toBe('serverAcked');
+  });
+
+  test('receipt validation rejections mark local mutations serverNacked', async ({ page }) => {
+    const localSnapshot = addDurableCloudSyncMetadata(
+      buildLocalSnapshot('Rejected Ack Note', { syncVersion: 6 }),
+      {
+        pending: false,
+        revision: 6,
+        lastCloudUploadedAt: TIMESTAMP
+      }
+    );
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Rejected Ack Note', 6),
+      onMutations: async (body) => ({
+        status: 200,
+        body: {
+          ok: true,
+          appId: body.appId,
+          results: body.mutations.map((mutation) => ({
+            mutationId: mutation.mutationId,
+            status: 'rejected',
+            error: {
+              code: 'invalid_payload',
+              message: 'payload must be a JSON object within the allowed size limit'
+            }
+          }))
+        }
+      }),
+      onSave: async () => ({
+        status: 200,
+        body: { ok: true, version: 7, updatedAt: TIMESTAMP }
+      })
+    });
+
+    await page.goto('/index.html');
+    await dragNoteBy(page, page.locator('.grid-item[data-id="item-1"]'), 55, 25);
+    await page.locator('#syncStatusButton').click();
+    await page.locator('#syncNowButton').click();
+
+    await expect.poll(async () => {
+      const outbox = await readMutationOutbox(page);
+      return outbox.serverNackedCount;
+    }).toBe(1);
+
+    const outbox = await readMutationOutbox(page);
+    expect(outbox.totalCount).toBe(1);
+    expect(outbox.serverAckedCount).toBe(0);
+    expect(outbox.serverPendingCount).toBe(0);
+    expect(outbox.records[0].status).toBe('serverNacked');
+    expect(outbox.records[0].statusReason).toContain('invalid_payload');
+  });
+
+  test('failed receipt ACK requests keep receipts retryable while snapshot upload still succeeds', async ({ page }) => {
+    const localSnapshot = addDurableCloudSyncMetadata(
+      buildLocalSnapshot('Ack Retry Note', { syncVersion: 6 }),
+      {
+        pending: false,
+        revision: 6,
+        lastCloudUploadedAt: TIMESTAMP
+      }
+    );
+    const capturedMutationBodies = [];
+    const capturedSaveBodies = [];
+    let mutationAttempt = 0;
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Ack Retry Note', 6),
+      onMutations: async (body) => {
+        mutationAttempt += 1;
+        capturedMutationBodies.push(body);
+        if (mutationAttempt < 2) {
+          return {
+            status: 503,
+            body: {
+              ok: false,
+              error: {
+                code: 'server_unavailable',
+                message: 'server unavailable'
+              }
+            }
+          };
+        }
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            appId: body.appId,
+            results: body.mutations.map((mutation) => ({
+              mutationId: mutation.mutationId,
+              status: 'accepted',
+              duplicate: mutationAttempt > 3,
+              acceptedAt: TIMESTAMP
+            }))
+          }
+        };
+      },
+      onSave: async (body) => {
+        capturedSaveBodies.push(body);
+        return {
+          status: 200,
+          body: { ok: true, version: 7 + capturedSaveBodies.length - 1, updatedAt: TIMESTAMP }
+        };
+      }
+    });
+
+    await page.goto('/index.html');
+    await dragNoteBy(page, page.locator('.grid-item[data-id="item-1"]'), 65, 30);
+    await page.locator('#syncStatusButton').click();
+    await page.locator('#syncNowButton').click();
+
+    await expect.poll(() => capturedSaveBodies.length).toBe(1);
+    await expect.poll(() => capturedMutationBodies.length).toBe(1);
+
+    let outbox = await readMutationOutbox(page);
+    expect(outbox.snapshotConfirmedCount).toBe(1);
+    expect(outbox.serverAckedCount).toBe(0);
+    expect(outbox.serverPendingCount).toBe(1);
+    expect(outbox.records[0].status).toBe('snapshotConfirmed');
+    LOCAL_ONLY_OUTBOX_KEYS.forEach((key) => {
+      expect(Object.prototype.hasOwnProperty.call(capturedSaveBodies[0].data, key)).toBe(false);
+    });
+
+    await page.locator('#syncNowButton').click();
+    await expect.poll(() => capturedMutationBodies.length).toBe(2);
+    await expect.poll(async () => {
+      const currentOutbox = await readMutationOutbox(page);
+      return currentOutbox.serverAckedCount;
+    }).toBe(1);
+
+    outbox = await readMutationOutbox(page);
+    expect(outbox.totalCount).toBe(1);
+    expect(outbox.serverPendingCount).toBe(0);
+    expect(outbox.records[0].status).toBe('serverAcked');
   });
 });
 

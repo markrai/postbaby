@@ -17,7 +17,27 @@ import (
 	"postbaby-backend/internal/store"
 )
 
-const MaxDocumentBodyBytes int64 = 4 << 20
+const (
+	MaxDocumentBodyBytes            int64 = 4 << 20
+	MaxSyncMutationsBodyBytes       int64 = 1 << 20
+	maxSyncMutationBatchSize              = 100
+	maxSyncMutationPayloadBytes           = 32 << 10
+	maxSyncMutationIDLength               = 255
+	maxSyncMutationReplicaIDLength        = 255
+	maxSyncMutationEntityTypeLength       = 64
+	maxSyncMutationEntityIDLength         = 255
+	maxSyncMutationOperationLength        = 64
+	syncMutationProtocol                  = "PB-SYNC/1"
+)
+
+var allowedSyncMutationOperations = map[string]struct{}{
+	"CreateNode": {},
+	"UpdateNode": {},
+	"MoveNode":   {},
+	"DeleteNode": {},
+	"CreateEdge": {},
+	"DeleteEdge": {},
+}
 
 var errEntitlementRequired = errors.New("entitlement required")
 
@@ -73,6 +93,42 @@ type putDocumentResponse struct {
 	UpdatedAt string `json:"updatedAt"`
 }
 
+type postSyncMutationsRequest struct {
+	AppID     string                    `json:"appId"`
+	Mutations []postSyncMutationRequest `json:"mutations"`
+}
+
+type postSyncMutationRequest struct {
+	Protocol      string          `json:"protocol"`
+	ClientID      string          `json:"clientId"`
+	DeviceID      string          `json:"deviceId"`
+	MutationID    string          `json:"mutationId"`
+	BaseRevision  *int64          `json:"baseRevision"`
+	EntityType    string          `json:"entityType"`
+	EntityID      string          `json:"entityId"`
+	OperationType string          `json:"operationType"`
+	Payload       json.RawMessage `json:"payload"`
+}
+
+type postSyncMutationsResponse struct {
+	OK      bool                    `json:"ok"`
+	AppID   string                  `json:"appId"`
+	Results []syncMutationAckResult `json:"results"`
+}
+
+type syncMutationAckResult struct {
+	MutationID string                `json:"mutationId"`
+	Status     string                `json:"status"`
+	Duplicate  bool                  `json:"duplicate,omitempty"`
+	AcceptedAt string                `json:"acceptedAt,omitempty"`
+	Error      *syncMutationAckError `json:"error,omitempty"`
+}
+
+type syncMutationAckError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 type frontendSnapshot map[string]string
 
 func NewHandler(docStore store.DocumentStore, authManager *auth.Manager, entitlementManager *entitlement.Manager, deploymentMode config.DeploymentMode) http.Handler {
@@ -87,6 +143,7 @@ func NewHandler(docStore store.DocumentStore, authManager *auth.Manager, entitle
 	mux.HandleFunc("/api/health", api.handleHealth)
 	mux.HandleFunc("/api/document/meta", api.handleDocumentMeta)
 	mux.HandleFunc("/api/document", api.handleDocument)
+	mux.HandleFunc("/api/sync/mutations", api.handleSyncMutations)
 	return mux
 }
 
@@ -282,6 +339,99 @@ func (a *API) handlePutDocument(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *API) handleSyncMutations(w http.ResponseWriter, r *http.Request) {
+	httpcache.SetNoStore(w)
+
+	if !a.syncEnabled() {
+		writeError(w, http.StatusNotFound, "not_found", "sync is not enabled for this deployment")
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		return
+	}
+
+	user, err := a.requireDocumentWriteUser(w, r)
+	if err != nil {
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, MaxSyncMutationsBodyBytes)
+	defer r.Body.Close()
+
+	var req postSyncMutationsRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		writeSyncMutationsDecodeError(w, err)
+		return
+	}
+
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_json", "request body must contain a single JSON object")
+		return
+	}
+
+	req.AppID = strings.TrimSpace(req.AppID)
+	if req.AppID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "appId is required")
+		return
+	}
+
+	if len(req.Mutations) == 0 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "mutations must contain at least one envelope")
+		return
+	}
+	if len(req.Mutations) > maxSyncMutationBatchSize {
+		writeError(w, http.StatusBadRequest, "invalid_request", "mutation batch exceeds limit")
+		return
+	}
+
+	responseResults := make([]syncMutationAckResult, len(req.Mutations))
+	acceptedInputs := make([]store.SyncMutationReceiptInput, 0, len(req.Mutations))
+	acceptedIndexes := make([]int, 0, len(req.Mutations))
+
+	for index, mutationReq := range req.Mutations {
+		acceptedInput, rejectedResult := validateSyncMutationEnvelope(mutationReq)
+		if rejectedResult != nil {
+			responseResults[index] = *rejectedResult
+			continue
+		}
+
+		acceptedInputs = append(acceptedInputs, acceptedInput)
+		acceptedIndexes = append(acceptedIndexes, index)
+	}
+
+	if len(acceptedInputs) > 0 {
+		acceptedResults, err := a.store.AcceptSyncMutationReceipts(r.Context(), user.OwnerKey, req.AppID, acceptedInputs)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "failed to store mutation receipts")
+			return
+		}
+		if len(acceptedResults) != len(acceptedInputs) {
+			writeError(w, http.StatusInternalServerError, "internal_error", "failed to reconcile mutation receipts")
+			return
+		}
+
+		for resultIndex, acceptedResult := range acceptedResults {
+			responseResults[acceptedIndexes[resultIndex]] = syncMutationAckResult{
+				MutationID: acceptedResult.Receipt.MutationID,
+				Status:     store.SyncMutationReceiptStatusAccepted,
+				Duplicate:  acceptedResult.Duplicate,
+				AcceptedAt: acceptedResult.Receipt.AcceptedAt.UTC().Format(time.RFC3339),
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, postSyncMutationsResponse{
+		OK:      true,
+		AppID:   req.AppID,
+		Results: responseResults,
+	})
+}
+
 func normalizeExpectedVersion(w http.ResponseWriter, req putDocumentRequest) (*int64, bool) {
 	if req.Version != nil && req.BaseServerRevision != nil && *req.Version != *req.BaseServerRevision {
 		writeError(w, http.StatusBadRequest, "invalid_request", "version and baseServerRevision must match")
@@ -298,6 +448,18 @@ func writeDecodeError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.As(err, &maxBytesErr):
 		writeError(w, http.StatusRequestEntityTooLarge, "request_too_large", "request body exceeds 4 MiB limit")
+	case errors.Is(err, io.EOF):
+		writeError(w, http.StatusBadRequest, "invalid_json", "request body is required")
+	default:
+		writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+	}
+}
+
+func writeSyncMutationsDecodeError(w http.ResponseWriter, err error) {
+	var maxBytesErr *http.MaxBytesError
+	switch {
+	case errors.As(err, &maxBytesErr):
+		writeError(w, http.StatusRequestEntityTooLarge, "request_too_large", "request body exceeds 1 MiB limit")
 	case errors.Is(err, io.EOF):
 		writeError(w, http.StatusBadRequest, "invalid_json", "request body is required")
 	default:
@@ -335,6 +497,104 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func cloneJSON(value json.RawMessage) json.RawMessage {
 	return append(json.RawMessage(nil), value...)
+}
+
+func validateSyncMutationEnvelope(req postSyncMutationRequest) (store.SyncMutationReceiptInput, *syncMutationAckResult) {
+	mutationID := strings.TrimSpace(req.MutationID)
+	if mutationID == "" || len(mutationID) > maxSyncMutationIDLength {
+		return store.SyncMutationReceiptInput{}, rejectedSyncMutationAckResult(mutationID, "invalid_mutation_id", "mutationId is required and must be bounded")
+	}
+
+	protocol := strings.TrimSpace(req.Protocol)
+	if protocol != syncMutationProtocol {
+		return store.SyncMutationReceiptInput{}, rejectedSyncMutationAckResult(mutationID, "invalid_protocol", "protocol must be PB-SYNC/1")
+	}
+
+	clientID := strings.TrimSpace(req.ClientID)
+	if len(clientID) > maxSyncMutationReplicaIDLength {
+		return store.SyncMutationReceiptInput{}, rejectedSyncMutationAckResult(mutationID, "invalid_client_id", "clientId must be bounded")
+	}
+
+	deviceID := strings.TrimSpace(req.DeviceID)
+	if len(deviceID) > maxSyncMutationReplicaIDLength {
+		return store.SyncMutationReceiptInput{}, rejectedSyncMutationAckResult(mutationID, "invalid_device_id", "deviceId must be bounded")
+	}
+
+	entityType := strings.TrimSpace(req.EntityType)
+	if entityType == "" || len(entityType) > maxSyncMutationEntityTypeLength {
+		return store.SyncMutationReceiptInput{}, rejectedSyncMutationAckResult(mutationID, "invalid_entity_type", "entityType is required and must be bounded")
+	}
+
+	entityID := strings.TrimSpace(req.EntityID)
+	if entityID == "" || len(entityID) > maxSyncMutationEntityIDLength {
+		return store.SyncMutationReceiptInput{}, rejectedSyncMutationAckResult(mutationID, "invalid_entity_id", "entityId is required and must be bounded")
+	}
+
+	operationType := strings.TrimSpace(req.OperationType)
+	if operationType == "" || len(operationType) > maxSyncMutationOperationLength {
+		return store.SyncMutationReceiptInput{}, rejectedSyncMutationAckResult(mutationID, "invalid_operation_type", "operationType is required and must be bounded")
+	}
+	if _, ok := allowedSyncMutationOperations[operationType]; !ok {
+		return store.SyncMutationReceiptInput{}, rejectedSyncMutationAckResult(mutationID, "invalid_operation_type", "operationType is not supported")
+	}
+
+	if req.BaseRevision != nil && *req.BaseRevision < 0 {
+		return store.SyncMutationReceiptInput{}, rejectedSyncMutationAckResult(mutationID, "invalid_base_revision", "baseRevision must be zero or greater")
+	}
+
+	if err := validateSyncMutationPayload(req.Payload); err != nil {
+		if errors.Is(err, errSyncMutationPayloadTooLarge) {
+			return store.SyncMutationReceiptInput{}, rejectedSyncMutationAckResult(mutationID, "payload_too_large", "payload exceeds size limit")
+		}
+		return store.SyncMutationReceiptInput{}, rejectedSyncMutationAckResult(mutationID, "invalid_payload", "payload must be a JSON object within the allowed size limit")
+	}
+
+	return store.SyncMutationReceiptInput{
+		MutationID:    mutationID,
+		ClientID:      clientID,
+		DeviceID:      deviceID,
+		Protocol:      protocol,
+		EntityType:    entityType,
+		EntityID:      entityID,
+		OperationType: operationType,
+		Payload:       cloneJSON(req.Payload),
+		BaseRevision:  req.BaseRevision,
+	}, nil
+}
+
+var errSyncMutationPayloadTooLarge = errors.New("sync mutation payload too large")
+
+func validateSyncMutationPayload(value json.RawMessage) error {
+	if value == nil {
+		return errors.New("payload is required")
+	}
+
+	trimmed := bytes.TrimSpace(value)
+	if len(trimmed) == 0 {
+		return errors.New("payload is required")
+	}
+	if len(trimmed) > maxSyncMutationPayloadBytes {
+		return errSyncMutationPayloadTooLarge
+	}
+	if trimmed[0] != '{' {
+		return errors.New("payload must be an object")
+	}
+	if !json.Valid(trimmed) {
+		return errors.New("payload must be valid JSON")
+	}
+
+	return nil
+}
+
+func rejectedSyncMutationAckResult(mutationID, code, message string) *syncMutationAckResult {
+	return &syncMutationAckResult{
+		MutationID: mutationID,
+		Status:     "rejected",
+		Error: &syncMutationAckError{
+			Code:    code,
+			Message: message,
+		},
+	}
 }
 
 func validateFrontendSnapshot(value json.RawMessage) error {

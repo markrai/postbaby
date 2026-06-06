@@ -15,7 +15,7 @@ func TestOpenCreatesSchema(t *testing.T) {
 
 	docStore := openTestStore(t)
 
-	for _, tableName := range []string{"documents", "users", "sessions", "account_entitlements", "billing_customers", "billing_subscriptions"} {
+	for _, tableName := range []string{"documents", "users", "sessions", "account_entitlements", "billing_customers", "billing_subscriptions", "sync_mutation_receipts"} {
 		var found string
 		err := docStore.db.QueryRowContext(
 			context.Background(),
@@ -135,6 +135,64 @@ func TestPutDocumentStoresUTCTimestamp(t *testing.T) {
 
 	if !strings.HasSuffix(storedUpdatedAt, "Z") {
 		t.Fatalf("expected UTC timestamp, got %q", storedUpdatedAt)
+	}
+}
+
+func TestAcceptSyncMutationReceiptsStoresAcceptedReceiptsIdempotently(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+
+	firstResults, err := docStore.AcceptSyncMutationReceipts(ctx, "owner", "postbaby-web", []SyncMutationReceiptInput{
+		buildTestSyncMutationReceiptInput("mut-1", "CreateNode"),
+	})
+	if err != nil {
+		t.Fatalf("accept first sync mutation receipt: %v", err)
+	}
+	if len(firstResults) != 1 {
+		t.Fatalf("expected one receipt result, got %d", len(firstResults))
+	}
+	if firstResults[0].Duplicate {
+		t.Fatal("expected first receipt insertion to be new")
+	}
+	if firstResults[0].Receipt.Status != SyncMutationReceiptStatusAccepted {
+		t.Fatalf("expected accepted status, got %q", firstResults[0].Receipt.Status)
+	}
+
+	count, err := docStore.CountSyncMutationReceipts(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("count sync mutation receipts after first insert: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one stored receipt, got %d", count)
+	}
+
+	secondResults, err := docStore.AcceptSyncMutationReceipts(ctx, "owner", "postbaby-web", []SyncMutationReceiptInput{
+		buildTestSyncMutationReceiptInput("mut-1", "CreateNode"),
+	})
+	if err != nil {
+		t.Fatalf("accept duplicate sync mutation receipt: %v", err)
+	}
+	if len(secondResults) != 1 {
+		t.Fatalf("expected one duplicate receipt result, got %d", len(secondResults))
+	}
+	if !secondResults[0].Duplicate {
+		t.Fatal("expected duplicate receipt result")
+	}
+	if secondResults[0].Receipt.ID != firstResults[0].Receipt.ID {
+		t.Fatalf("expected duplicate receipt to reuse row id %d, got %d", firstResults[0].Receipt.ID, secondResults[0].Receipt.ID)
+	}
+	if !secondResults[0].Receipt.AcceptedAt.Equal(firstResults[0].Receipt.AcceptedAt) {
+		t.Fatalf("expected duplicate receipt accepted_at %v, got %v", firstResults[0].Receipt.AcceptedAt, secondResults[0].Receipt.AcceptedAt)
+	}
+
+	count, err = docStore.CountSyncMutationReceipts(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("count sync mutation receipts after duplicate insert: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected duplicate insertion to preserve one row, got %d", count)
 	}
 }
 
@@ -580,4 +638,19 @@ func openTestStore(t *testing.T) *Store {
 
 func timeUTC() *time.Location {
 	return time.UTC
+}
+
+func buildTestSyncMutationReceiptInput(mutationID, operationType string) SyncMutationReceiptInput {
+	baseRevision := int64(6)
+	return SyncMutationReceiptInput{
+		MutationID:    mutationID,
+		ClientID:      "client-1",
+		DeviceID:      "device-1",
+		Protocol:      "PB-SYNC/1",
+		EntityType:    "Node",
+		EntityID:      "item-1",
+		OperationType: operationType,
+		Payload:       json.RawMessage(`{"tabId":"tab-1","position":{"top":"0px","left":"0px"}}`),
+		BaseRevision:  &baseRevision,
+	}
 }
