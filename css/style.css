@@ -534,9 +534,12 @@ input:checked + .slider:before {
     font-size: 14px;
     text-align: left;
     background-color: var(--bg-modal-settings);
+    max-width: 480px;
+    max-height: min(85vh, 720px);
+    overflow-y: auto;
 }
 
-#settingsModal .modal-content p {
+#settingsModal .modal-content .modal-title {
     font-family: 'Kalam', sans-serif;
     text-align: center;
     font-size: 18px;
@@ -550,6 +553,135 @@ input:checked + .slider:before {
 
 .questions {
     font-size: 10px;
+}
+
+.settings-tabs {
+    display: flex;
+    gap: 8px;
+    margin: 0 0 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px dashed var(--border-tab-bar);
+}
+
+.settings-tab-button {
+    flex: 1;
+    min-width: 0;
+    border: 1px solid var(--border-tab-bar);
+    border-radius: 999px;
+    background-color: transparent;
+    color: var(--text-primary);
+    padding: 8px 12px;
+    font-family: 'Kalam', sans-serif;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.settings-tab-button[aria-selected="true"] {
+    background-color: var(--primary);
+    border-color: var(--primary);
+    color: #ffffff;
+}
+
+.settings-tab-button:focus-visible {
+    outline: 2px solid var(--note-selected-outline);
+    outline-offset: 2px;
+}
+
+.settings-tab-panel[hidden] {
+    display: none !important;
+}
+
+#settingsImportExportPanel .settings-save-load {
+    margin-top: 0;
+}
+
+.settings-modal-divider {
+    margin: 16px 0;
+    border-top: 1px dotted var(--border-tab-bar);
+}
+
+.settings-section-title {
+    margin: 0 0 8px;
+    font-family: 'Kalam', sans-serif;
+    font-size: 18px;
+    font-weight: bold;
+    text-align: left;
+}
+
+.settings-section-copy {
+    margin: 0 0 12px;
+    font-size: 13px;
+    font-weight: normal;
+    line-height: 1.4;
+    text-align: left;
+}
+
+.settings-mermaid-textarea {
+    width: 100%;
+    min-height: 160px;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    border: 1px solid var(--border-tab-bar);
+    border-radius: 8px;
+    background-color: var(--bg-modal);
+    color: var(--text-primary);
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 13px;
+    line-height: 1.4;
+    resize: vertical;
+}
+
+.settings-mermaid-button {
+    width: 100%;
+    margin: 12px 0 0;
+}
+
+.settings-mermaid-status {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-tab-bar);
+    border-radius: 8px;
+    background-color: color-mix(in srgb, var(--bg-modal) 88%, var(--text-primary) 12%);
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.35;
+}
+
+.settings-mermaid-status--success {
+    border-color: color-mix(in srgb, #2f9d62 62%, var(--border-tab-bar));
+}
+
+.settings-mermaid-status--error {
+    border-color: color-mix(in srgb, #c43d4b 68%, var(--border-tab-bar));
+}
+
+.settings-mermaid-status-title,
+.settings-mermaid-status-group-title {
+    margin: 0 0 6px;
+    font-family: 'Kalam', sans-serif;
+    font-size: 16px;
+    font-weight: bold;
+    text-align: left;
+}
+
+.settings-mermaid-status-group-title {
+    margin-top: 8px;
+    font-size: 14px;
+}
+
+.settings-mermaid-status-message {
+    margin: 0;
+    text-align: left;
+}
+
+.settings-mermaid-status-list {
+    margin: 0 0 0 18px;
+    padding: 0;
+}
+
+.settings-mermaid-status-item + .settings-mermaid-status-item {
+    margin-top: 4px;
 }
 
 #settingsModal .modal-content .settings-static-note {

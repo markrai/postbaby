@@ -571,6 +571,18 @@ async function openSettingsModal(page) {
   await expect(page.locator('#settingsModal')).toBeVisible();
 }
 
+async function switchSettingsTab(page, tabName) {
+  const tab = page.getByRole('tab', { name: tabName });
+  await tab.click();
+  await expect(tab).toHaveAttribute('aria-selected', 'true');
+}
+
+async function openSettingsImportExportTab(page) {
+  await openSettingsModal(page);
+  await switchSettingsTab(page, 'Import & Export');
+  await expect(page.locator('#settingsImportExportPanel')).toBeVisible();
+}
+
 async function openAccountModal(page) {
   await page.locator('#accountButton').click();
   await expect(page.locator('#accountModal')).toBeVisible();
@@ -7187,7 +7199,7 @@ test.describe('Settings and Account UI', () => {
     expect(dialogs[0].message).not.toContain('Your local notes stay saved in this browser on this device.');
   });
 
-  test('Settings modal contains only local settings plus import and export', async ({ page }) => {
+  test('Settings modal splits Preferences and Import & Export into separate tabs', async ({ page }) => {
     await prepareBlankPage(page);
     await mockRuntimeConfig(page, {
       deploymentMode: 'selfhosted',
@@ -7206,11 +7218,29 @@ test.describe('Settings and Account UI', () => {
 
     await openSettingsModal(page);
     await expect(page.locator('#settingsModal .modal-title')).toHaveText('Settings');
-    await expect(page.locator('#saveDataButton')).toBeVisible();
-    await expect(page.locator('#loadDataButton')).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Preferences' })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('tab', { name: 'Import & Export' })).toHaveAttribute('aria-selected', 'false');
+    await expect(page.locator('#settingsPreferencesPanel')).toBeVisible();
+    await expect(page.locator('#settingsImportExportPanel')).toBeHidden();
+    await expect(page.locator('#settingsPreferencesPanel .settings-option').filter({ hasText: 'Dark Mode' })).toBeVisible();
+    await expect(page.locator('#saveDataButton')).toBeHidden();
+    await expect(page.locator('#loadDataButton')).toBeHidden();
+    await expect(page.locator('#mermaidImportSource')).toBeHidden();
     await expect(page.locator('#settingsModal .settings-sync-panel')).toHaveCount(0);
     await expect(page.locator('#settingsModal #logoutForm')).toHaveCount(0);
     await expect(page.locator('#settingsModal #syncStateStatus')).toHaveCount(0);
+
+    await switchSettingsTab(page, 'Import & Export');
+    await expect(page.locator('#settingsPreferencesPanel')).toBeHidden();
+    await expect(page.locator('#settingsImportExportPanel')).toBeVisible();
+    await expect(page.locator('#saveDataButton')).toBeVisible();
+    await expect(page.locator('#loadDataButton')).toBeVisible();
+    await expect(page.locator('.settings-modal-divider')).toBeVisible();
+    await expect(page.locator('#mermaidImportSource')).toBeVisible();
+    await expect(page.locator('#mermaidImportButton')).toBeVisible();
+    await expect(page.locator('#mermaidImportStatus')).toBeHidden();
+
+    await switchSettingsTab(page, 'Preferences');
     await expect(page.locator('#staticSettingsNote')).toBeHidden();
   });
 
@@ -7221,12 +7251,129 @@ test.describe('Settings and Account UI', () => {
     await seedLocalStorage(page, localSnapshot);
     await page.goto('/index.html');
 
-    await openSettingsModal(page);
+    await openSettingsImportExportTab(page);
+    await expect(page.locator('#saveDataButton')).toBeVisible();
+    await expect(page.locator('#loadDataButton')).toBeVisible();
     const exported = await exportCurrentSnapshot(page);
     expect(exported.tabs).toBeTruthy();
 
     await importBackupSnapshot(page, buildLocalSnapshot('Imported From Settings'));
     await expectNoteVisible(page, 'Imported From Settings');
+  });
+
+  test('Mermaid import from Settings creates ordinary Postbaby items and edges and keeps the modal open', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    await openSettingsImportExportTab(page);
+    await page.locator('#mermaidImportSource').fill([
+      'flowchart LR',
+      'A[Source] --> B((Circle Target))',
+      'A --- C{Decision}'
+    ].join('\n'));
+    await page.locator('#mermaidImportButton').click();
+
+    await expect(page.locator('#settingsModal')).toBeVisible();
+    await expect(page.locator('#mermaidImportStatus')).toContainText('Mermaid import completed.');
+    await expect(page.locator('#mermaidImportStatus')).toContainText('Created 3 notes and 2 edges.');
+    await expect(page.locator('#mermaidImportSource')).toHaveValue('');
+    await expectNoteVisible(page, 'Source');
+    await expectNoteVisible(page, 'Circle Target');
+    await expectNoteVisible(page, 'Decision');
+    await expect(page.locator('.grid-item.selected')).toHaveCount(3);
+    await expect(page.locator('.edge-line')).toHaveCount(2);
+
+    const tabsSnapshot = await readTabsSnapshot(page);
+    const createdItems = tabsSnapshot[0].items;
+    const createdEdges = tabsSnapshot[0].edges;
+    expect(createdItems.map((item) => item.name)).toEqual(
+      expect.arrayContaining(['Source', 'Circle Target', 'Decision'])
+    );
+    expect(createdItems.find((item) => item.name === 'Circle Target')?.shape).toBe('circle');
+    expect(createdItems.find((item) => item.name === 'Decision')?.shape).toBe('diamond');
+    expect(createdEdges.map((edge) => edge.kind).sort()).toEqual(['arrow', 'line']);
+  });
+
+  test('Mermaid import from Settings surfaces warnings inline when supported syntax is normalized', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    await openSettingsImportExportTab(page);
+    await page.locator('#mermaidImportSource').fill([
+      'flowchart LR',
+      'A>Skewed] --> B'
+    ].join('\n'));
+    await page.locator('#mermaidImportButton').click();
+
+    await expect(page.locator('#mermaidImportStatus')).toContainText('Mermaid import completed.');
+    await expect(page.locator('#mermaidImportStatus')).toContainText('Warnings');
+    await expect(page.locator('#mermaidImportStatus')).toContainText('parallelogram nodes are not supported yet');
+    await expectNoteVisible(page, 'Skewed');
+    const tabsSnapshot = await readTabsSnapshot(page);
+    expect(tabsSnapshot[0].items.find((item) => item.name === 'Skewed')?.shape).toBe('default');
+    expect(tabsSnapshot[0].edges).toHaveLength(1);
+  });
+
+  test('invalid Mermaid from Settings shows inline errors and creates nothing', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    await openSettingsImportExportTab(page);
+    await page.locator('#mermaidImportSource').fill([
+      'sequenceDiagram',
+      'A->>B: Hello'
+    ].join('\n'));
+    await page.locator('#mermaidImportButton').click();
+
+    await expect(page.locator('#settingsModal')).toBeVisible();
+    await expect(page.locator('#mermaidImportStatus')).toContainText('Mermaid import failed.');
+    await expect(page.locator('#mermaidImportStatus')).toContainText('Unsupported Mermaid diagram type');
+    await expect(page.locator('#mermaidImportSource')).toHaveValue([
+      'sequenceDiagram',
+      'A->>B: Hello'
+    ].join('\n'));
+
+    const tabsSnapshot = await readTabsSnapshot(page);
+    expect(tabsSnapshot[0].items || []).toHaveLength(0);
+    expect(tabsSnapshot[0].edges || []).toHaveLength(0);
+  });
+
+  test('manual note and manual edge creation still work after Mermaid import from Settings', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    await openSettingsImportExportTab(page);
+    await page.locator('#mermaidImportSource').fill([
+      'flowchart LR',
+      'A[Manual Mermaid Source]',
+      'B((Manual Mermaid Target))'
+    ].join('\n'));
+    await page.locator('#mermaidImportButton').click();
+    await expect(page.locator('#mermaidImportStatus')).toContainText('Mermaid import completed.');
+
+    await page.locator('.close-settings').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+
+    await page.keyboard.press('n');
+    const textarea = page.locator('textarea.edit-textarea');
+    await expect(textarea).toBeVisible();
+    await textarea.fill('Manual Note After Mermaid Import');
+    await textarea.press('Escape');
+    await expectNoteVisible(page, 'Manual Note After Mermaid Import');
+
+    const sourceNote = page.locator('.grid-item', { hasText: 'Manual Mermaid Source' }).first();
+    const targetNote = page.locator('.grid-item', { hasText: 'Manual Mermaid Target' }).first();
+    await drawEdgeBetweenNotes(page, sourceNote, targetNote);
+
+    const tabsSnapshot = await readTabsSnapshot(page);
+    expect(tabsSnapshot[0].items.map((item) => item.name)).toEqual(
+      expect.arrayContaining(['Manual Mermaid Source', 'Manual Mermaid Target', 'Manual Note After Mermaid Import'])
+    );
+    expect(tabsSnapshot[0].edges).toHaveLength(1);
   });
 
   test('top-right controls stay compact at narrow widths', async ({ page }) => {

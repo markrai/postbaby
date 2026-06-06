@@ -226,105 +226,163 @@
         <div class="modal-content">
             <span class="close-settings" tabindex="0" aria-label="Close Settings Modal">&times;</span>
             <p class="modal-title">Settings</p>
-
-            <!-- Dark Mode -->
-            <div class="settings-option">
-                <span>Dark Mode</span>
-                <label class="switch">
-                    <input type="checkbox" id="toggleDarkMode">
-                    <span class="slider round"></span>
-                </label>
+            <div class="settings-tabs" role="tablist" aria-label="Settings Sections">
+                <button
+                    id="settingsTabPreferences"
+                    class="settings-tab-button"
+                    type="button"
+                    role="tab"
+                    aria-selected="true"
+                    aria-controls="settingsPreferencesPanel"
+                    data-settings-tab-button="preferences"
+                >
+                    Preferences
+                </button>
+                <button
+                    id="settingsTabImportExport"
+                    class="settings-tab-button"
+                    type="button"
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="settingsImportExportPanel"
+                    data-settings-tab-button="import-export"
+                    tabindex="-1"
+                >
+                    Import &amp; Export
+                </button>
             </div>
 
-            <div class="settings-option">
-                <span>Disable Color Change</span>
-                <label class="switch">
-                    <input type="checkbox" id="toggleDisableColorChange">
-                    <span class="slider round"></span>
-                </label>
+            <div
+                id="settingsPreferencesPanel"
+                class="settings-tab-panel"
+                role="tabpanel"
+                aria-labelledby="settingsTabPreferences"
+                data-settings-tab-panel="preferences"
+            >
+                <!-- Dark Mode -->
+                <div class="settings-option">
+                    <span>Dark Mode</span>
+                    <label class="switch">
+                        <input type="checkbox" id="toggleDarkMode">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+
+                <div class="settings-option">
+                    <span>Disable Color Change</span>
+                    <label class="switch">
+                        <input type="checkbox" id="toggleDisableColorChange">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+
+                <div class="settings-option">
+                    <span>Disable Note Resize</span>
+                    <label class="switch">
+                        <input type="checkbox" id="toggleDisableNoteResize">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+
+                <!-- Full Screen -->
+                <div class="settings-option">
+                    <span>Full Screen</span>
+                    <label class="switch">
+                        <input type="checkbox" id="toggleFullscreen">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+
+                <!-- Corporate Mode -->
+                <div class="settings-option">
+                    <span>Corporate Mode</span>
+                    <label class="switch">
+                        <input type="checkbox" id="toggleLogo">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+
+                <!-- Hide Instructions -->
+                <div class="settings-option">
+                    <span>Hide Instructions</span>
+                    <label class="switch">
+                        <input type="checkbox" id="toggleInstructions">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+
+                <!-- Use Grids Dropdown -->
+                <div class="settings-option">
+                    <span>Use Grids (Tab Specific)</span>
+                    <select id="useGrids">
+                        <option value="none">None</option>
+                        <option value="kanban">Kanban Board</option>
+                        <option value="eisenhower">Eisenhower Matrix</option>
+                        <option value="priority">Priority Matrix</option>
+                        <option value="smartgoals">SMART Goals</option>
+                        <option value="swot">SWOT Analysis</option>
+                        <option value="calendar">Calendar</option>
+                        <option value="nowlater">Now & Later</option>
+                        <option value="week">Week</option>
+                    </select>
+                </div>
+
+                <!-- Default Color Option -->
+                <div class="settings-option">
+                    <span>Default Color for New Items (Global)</span>
+                    <label class="switch">
+                        <input type="checkbox" id="toggleDefaultColor">
+                        <span class="slider round"></span>
+                    </label>
+                    <input type="color" id="defaultColorPicker" value="#4CAF50" disabled>
+                </div>
+
+                <span class="questions">Questions/Comments:
+                    <a href="mailto:markraidc@gmail.com" class="accent-link">markraidc@gmail.com</a>
+                </span>
+                <p id="staticSettingsNote" class="settings-static-note" hidden>
+                    Note: This static version saves notes only in this browser on this device. Account sign-in, cloud sync,
+                    billing, and cross-device recovery are not available in this mode. Clearing site data or using a
+                    different browser/device can make these notes unavailable.
+                </p>
             </div>
 
-            <div class="settings-option">
-                <span>Disable Note Resize</span>
-                <label class="switch">
-                    <input type="checkbox" id="toggleDisableNoteResize">
-                    <span class="slider round"></span>
-                </label>
-            </div>
+            <div
+                id="settingsImportExportPanel"
+                class="settings-tab-panel"
+                role="tabpanel"
+                aria-labelledby="settingsTabImportExport"
+                data-settings-tab-panel="import-export"
+                hidden
+            >
+                <div class="settings-save-load">
+                    <button id="saveDataButton" class="modal-button">Export Data</button>
+                    <button id="loadDataButton" class="modal-button">Import Data</button>
+                </div>
 
-            <!-- Full Screen -->
-            <div class="settings-option">
-                <span>Full Screen</span>
-                <label class="switch">
-                    <input type="checkbox" id="toggleFullscreen">
-                    <span class="slider round"></span>
-                </label>
-            </div>
+                <div class="settings-modal-divider" aria-hidden="true"></div>
 
-            <!-- Corporate Mode -->
-            <div class="settings-option">
-                <span>Corporate Mode</span>
-                <label class="switch">
-                    <input type="checkbox" id="toggleLogo">
-                    <span class="slider round"></span>
-                </label>
+                <section class="settings-mermaid-section" aria-labelledby="settingsMermaidTitle">
+                    <h3 id="settingsMermaidTitle" class="settings-section-title">Mermaid</h3>
+                    <p class="settings-section-copy">
+                        Import a supported Mermaid flowchart or graph. This creates ordinary Postbaby notes and edges.
+                    </p>
+                    <textarea
+                        id="mermaidImportSource"
+                        class="settings-mermaid-textarea"
+                        rows="8"
+                        spellcheck="false"
+                        placeholder="flowchart LR&#10;A[Start] --> B((Circle))&#10;A --- C{Decision}"
+                    ></textarea>
+                    <button id="mermaidImportButton" class="modal-button settings-mermaid-button" type="button">
+                        Import Mermaid
+                    </button>
+                    <div id="mermaidImportStatus" class="settings-mermaid-status" role="status" aria-live="polite" hidden></div>
+                </section>
             </div>
-
-            <!-- Hide Instructions -->
-            <div class="settings-option">
-                <span>Hide Instructions</span>
-                <label class="switch">
-                    <input type="checkbox" id="toggleInstructions">
-                    <span class="slider round"></span>
-                </label>
-            </div>
-
-            <!-- Use Grids Dropdown -->
-            <div class="settings-option">
-                <span>Use Grids (Tab Specific)</span>
-                <select id="useGrids">
-                    <option value="none">None</option>
-                    <option value="kanban">Kanban Board</option>
-                    <option value="eisenhower">Eisenhower Matrix</option>
-                    <option value="priority">Priority Matrix</option>
-                    <option value="smartgoals">SMART Goals</option>
-                    <option value="swot">SWOT Analysis</option>
-                    <option value="calendar">Calendar</option>
-                    <option value="nowlater">Now & Later</option>
-                    <option value="week">Week</option>
-                </select>
-            </div>
-
-            <!-- Default Color Option -->
-            <div class="settings-option">
-                <span>Default Color for New Items (Global)</span>
-                <label class="switch">
-                    <input type="checkbox" id="toggleDefaultColor">
-                    <span class="slider round"></span>
-                </label>
-                <input type="color" id="defaultColorPicker" value="#4CAF50" disabled>
-            </div>
-
-            <!-- Save and Load Buttons -->
-            <div class="settings-save-load">
-                <button id="saveDataButton" class="modal-button">Export Data</button>
-                <button id="loadDataButton" class="modal-button">Import Data</button>
-            </div>
-
-            <br>
 
             <!-- Hidden File Input for Loading Data -->
             <input type="file" id="loadDataInput" accept=".json" style="display: none;">
-
-
-            <span class="questions">Questions/Comments:
-                <a href="mailto:markraidc@gmail.com" class="accent-link">markraidc@gmail.com</a>
-            </span>
-            <p id="staticSettingsNote" class="settings-static-note" hidden>
-                Note: This static version saves notes only in this browser on this device. Account sign-in, cloud sync,
-                billing, and cross-device recovery are not available in this mode. Clearing site data or using a
-                different browser/device can make these notes unavailable.
-            </p>
         </div>
     </div>
 
