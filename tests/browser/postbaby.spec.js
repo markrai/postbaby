@@ -8,6 +8,11 @@ const PRIMARY_RECORD_ID = 'primary';
 const TIMESTAMP = '2026-05-13T12:00:00.000Z';
 const EDGE_ARM_DELAY_MS = 1000;
 const EDGE_ARROW_TARGET_INSET = 2;
+const MIN_CANVAS_COORD = -100000;
+const MAX_CANVAS_COORD = 100000;
+const MAX_ITEMS_PER_TAB = 500;
+const MAX_EDGES_PER_TAB = 2000;
+const MAX_ITEM_TEXT_CHARS = 4000;
 const GRAPH_MAX_NODES = 100;
 const GRAPH_MAX_EDGES = 300;
 const GRAPH_MAX_LABEL_CHARS = 240;
@@ -210,6 +215,64 @@ function buildLocalSnapshotWithItems(items, options = {}) {
   }
 
   return snapshot;
+}
+
+function buildBulkNoteItems(count, options = {}) {
+  const startLeft = options.startLeft === undefined ? 24 : options.startLeft;
+  const startTop = options.startTop === undefined ? 24 : options.startTop;
+  const stepX = options.stepX === undefined ? 160 : options.stepX;
+  const stepY = options.stepY === undefined ? 120 : options.stepY;
+  const columns = options.columns === undefined ? 20 : options.columns;
+
+  return Array.from({ length: count }, (_, index) => {
+    const row = Math.floor(index / columns);
+    const column = index % columns;
+    return buildNoteItem(options.labelBuilder ? options.labelBuilder(index) : `Bulk Item ${index + 1}`, {
+      itemId: options.idBuilder ? options.idBuilder(index) : `bulk-item-${index + 1}`,
+      position: {
+        top: `${startTop + (row * stepY)}px`,
+        left: `${startLeft + (column * stepX)}px`
+      }
+    });
+  });
+}
+
+function buildDenseUndirectedEdges(itemIds, count, options = {}) {
+  const edges = [];
+  const kind = options.kind || 'line';
+
+  for (let leftIndex = 0; leftIndex < itemIds.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < itemIds.length; rightIndex += 1) {
+      edges.push({
+        id: options.idBuilder ? options.idBuilder(edges.length) : `edge-${edges.length + 1}`,
+        fromItemId: itemIds[leftIndex],
+        toItemId: itemIds[rightIndex],
+        kind
+      });
+      if (edges.length === count) {
+        return edges;
+      }
+    }
+  }
+
+  throw new Error(`Unable to build ${count} unique undirected edges from ${itemIds.length} items.`);
+}
+
+function findMissingUndirectedEdgePair(itemIds, edges) {
+  const edgeKeys = new Set((edges || []).map((edge) => {
+    return [edge.fromItemId, edge.toItemId].sort().join('::');
+  }));
+
+  for (let leftIndex = 0; leftIndex < itemIds.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < itemIds.length; rightIndex += 1) {
+      const key = [itemIds[leftIndex], itemIds[rightIndex]].sort().join('::');
+      if (!edgeKeys.has(key)) {
+        return [itemIds[leftIndex], itemIds[rightIndex]];
+      }
+    }
+  }
+
+  throw new Error('Unable to find an unconnected item pair.');
 }
 
 function buildEmptySnapshot(options = {}) {
@@ -3943,8 +4006,9 @@ test.describe('Static behavior', () => {
     }));
     await page.goto('/index.html');
 
-    const helperResult = await page.evaluate(() => {
+    const helperResult = await page.evaluate((limits) => {
       const geometryDom = window.PostbabyGeometryDom;
+      const canvasLimits = window.PostbabyCanvasLimits;
       const mutableItem = {
         shape: 'default',
         width: 220,
@@ -3958,12 +4022,19 @@ test.describe('Static behavior', () => {
         parseFallback: geometryDom.parseCssPixelValue('bad', 7),
         formattedPixel: geometryDom.formatCssPixelValue(123),
         formattedPosition: geometryDom.formatItemPosition(10, 20),
+        clampHigh: canvasLimits.clampCanvasCoord(limits.max + 1),
+        clampLow: canvasLimits.clampCanvasCoord(limits.min - 1),
+        clampPassThrough: canvasLimits.clampCanvasCoord(123),
         parsedPosition: geometryDom.getItemPositionXY(mutableItem),
         updatedPosition: geometryDom.setItemPositionXY(mutableItem, 30, 40),
+        clampedPosition: geometryDom.setItemPositionXY(mutableItem, limits.max + 2000, limits.min - 2000),
         mutablePosition: mutableItem.position,
         rect: geometryDom.getItemRectFromData(mutableItem),
         center: geometryDom.getItemCenterFromData(mutableItem)
       };
+    }, {
+      min: MIN_CANVAS_COORD,
+      max: MAX_CANVAS_COORD
     });
 
     expect(helperResult.parsePositive).toBe(123);
@@ -3971,20 +4042,35 @@ test.describe('Static behavior', () => {
     expect(helperResult.parseFallback).toBe(7);
     expect(helperResult.formattedPixel).toBe('123px');
     expect(helperResult.formattedPosition).toEqual({ top: '20px', left: '10px' });
+    expect(helperResult.clampHigh).toBe(MAX_CANVAS_COORD);
+    expect(helperResult.clampLow).toBe(MIN_CANVAS_COORD);
+    expect(helperResult.clampPassThrough).toBe(123);
     expect(helperResult.parsedPosition).toEqual({ x: 10, y: 20 });
     expect(helperResult.updatedPosition).toEqual({ top: '40px', left: '30px' });
-    expect(helperResult.mutablePosition).toEqual({ top: '40px', left: '30px' });
+    expect(helperResult.clampedPosition).toEqual({
+      top: `${MIN_CANVAS_COORD}px`,
+      left: `${MAX_CANVAS_COORD}px`
+    });
+    expect(helperResult.mutablePosition).toEqual({
+      top: `${MIN_CANVAS_COORD}px`,
+      left: `${MAX_CANVAS_COORD}px`
+    });
     expect(helperResult.rect).toMatchObject({
-      x: 30,
-      y: 40,
-      left: 30,
-      top: 40,
+      x: MAX_CANVAS_COORD,
+      y: MIN_CANVAS_COORD,
+      left: MAX_CANVAS_COORD,
+      top: MIN_CANVAS_COORD,
       width: 220,
       height: 120,
-      right: 250,
-      bottom: 160
+      right: MAX_CANVAS_COORD + 220,
+      bottom: MIN_CANVAS_COORD + 120
     });
-    expect(helperResult.center).toEqual({ x: 140, y: 100, cx: 140, cy: 100 });
+    expect(helperResult.center).toEqual({
+      x: MAX_CANVAS_COORD + 110,
+      y: MIN_CANVAS_COORD + 60,
+      cx: MAX_CANVAS_COORD + 110,
+      cy: MIN_CANVAS_COORD + 60
+    });
 
     const storedPosition = await readItemPositionViaGeometryDom(page);
     expect(storedPosition).toEqual({ x: 10, y: 20 });
@@ -4033,6 +4119,155 @@ test.describe('Static behavior', () => {
     await resizeNoteBy(page, targetNote, 40, 20);
     await page.waitForTimeout(350);
     expect(await readItemPositionsById(page, trackedIds)).toEqual(beforePositions);
+  });
+
+  test('manual note creation clamps pointer-based positions within bounds without introducing numeric x/y fields', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    await page.locator('.grid-container').first().evaluate((element, point) => {
+      element.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        button: 2,
+        clientX: point.clientX,
+        clientY: point.clientY
+      }));
+    }, {
+      clientX: MAX_CANVAS_COORD + 5000,
+      clientY: MAX_CANVAS_COORD + 7000
+    });
+
+    const textarea = page.locator('textarea.edit-textarea');
+    await expect(textarea).toBeVisible();
+    await textarea.fill('Bounded Note');
+    await textarea.press('Escape');
+    await expectNoteVisible(page, 'Bounded Note');
+
+    const tabsSnapshot = await readTabsSnapshot(page);
+    expect(tabsSnapshot[0].items).toHaveLength(1);
+    const item = tabsSnapshot[0].items[0];
+    expect(item.position).toEqual({
+      top: `${MAX_CANVAS_COORD}px`,
+      left: `${MAX_CANVAS_COORD}px`
+    });
+    expect(item).not.toHaveProperty('x');
+    expect(item).not.toHaveProperty('y');
+  });
+
+  test('manual note creation refuses once the tab reaches the note limit', async ({ page }) => {
+    const items = buildBulkNoteItems(MAX_ITEMS_PER_TAB);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildLocalSnapshotWithItems(items));
+    await page.goto('/index.html');
+
+    await page.locator('.grid-container').first().evaluate((element) => {
+      element.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        button: 2,
+        clientX: 220,
+        clientY: 240
+      }));
+    });
+
+    await expect(page.locator('.toast').last()).toContainText('This tab has reached the note limit.');
+    await expect(page.locator('textarea.edit-textarea')).toHaveCount(0);
+    const tabsSnapshot = await readTabsSnapshot(page);
+    expect(tabsSnapshot[0].items).toHaveLength(MAX_ITEMS_PER_TAB);
+  });
+
+  test('manual edge creation refuses once the tab reaches the connection limit', async ({ page }) => {
+    const items = buildBulkNoteItems(65, { columns: 8 });
+    const itemIds = items.map((item) => item.id);
+    const edges = buildDenseUndirectedEdges(itemIds, MAX_EDGES_PER_TAB, { kind: 'line' });
+    const [sourceId, targetId] = findMissingUndirectedEdgePair(itemIds, edges);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildLocalSnapshotWithItems(items, { edges }));
+    await page.goto('/index.html');
+
+    const sourceNote = page.locator(`.grid-item[data-id="${sourceId}"]`);
+    const targetNote = page.locator(`.grid-item[data-id="${targetId}"]`);
+    await drawEdgeBetweenNotes(page, sourceNote, targetNote, { modifier: 'Shift' });
+
+    await expect(page.locator('.toast').last()).toContainText('This tab has reached the connection limit.');
+    const tabsSnapshot = await readTabsSnapshot(page);
+    expect(tabsSnapshot[0].edges).toHaveLength(MAX_EDGES_PER_TAB);
+  });
+
+  test('existing saved out-of-bounds items render unchanged until drag commit clamps them back into bounds', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Out Of Bounds Seed', {
+      itemId: 'far-item',
+      position: {
+        top: `${MAX_CANVAS_COORD + 250}px`,
+        left: `${MAX_CANVAS_COORD + 500}px`
+      }
+    });
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const beforeItem = await readItemSnapshot(page, 'far-item');
+    expect(beforeItem.position).toEqual({
+      top: `${MAX_CANVAS_COORD + 250}px`,
+      left: `${MAX_CANVAS_COORD + 500}px`
+    });
+
+    await showAllItemsForTest(page);
+    await expect.poll(async () => {
+      const rect = await readItemClientRect(page, 'far-item');
+      const viewport = await readWindowScroll(page);
+      return rect.left < viewport.width && rect.right > 0 && rect.top < viewport.height && rect.bottom > 0;
+    }).toBe(true);
+
+    expect((await readItemSnapshot(page, 'far-item')).position).toEqual(beforeItem.position);
+
+    const farNote = page.locator('.grid-item[data-id="far-item"]');
+    await dragNoteBy(page, farNote, 40, 25);
+    await page.waitForTimeout(350);
+
+    const afterItem = await readItemSnapshot(page, 'far-item');
+    expect(afterItem.position).toEqual({
+      top: `${MAX_CANVAS_COORD}px`,
+      left: `${MAX_CANVAS_COORD}px`
+    });
+  });
+
+  test('manual note edits over the text limit are blocked without truncating the draft or mutating saved content', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildLocalSnapshot('Short note'));
+    await page.goto('/index.html');
+
+    const note = page.locator('.grid-item[data-id="item-1"]');
+    await note.dblclick();
+    const textarea = page.locator('textarea.edit-textarea');
+    const longText = 'x'.repeat(MAX_ITEM_TEXT_CHARS + 1);
+    await textarea.fill(longText);
+    await textarea.press('Escape');
+
+    await expect(page.locator('.toast').last()).toContainText(`Notes can be up to ${MAX_ITEM_TEXT_CHARS} characters.`);
+    await expect(textarea).toBeVisible();
+    await expect(textarea).toHaveValue(longText);
+    expect((await readItemSnapshot(page, 'item-1')).name).toBe('Short note');
+
+    await textarea.fill('Trimmed note');
+    await textarea.press('Escape');
+    await expectNoteVisible(page, 'Trimmed note');
+    expect((await readItemSnapshot(page, 'item-1')).name).toBe('Trimmed note');
+  });
+
+  test('existing over-limit saved note text still loads unchanged until the user saves a shorter edit', async ({ page }) => {
+    const longSavedText = 'L'.repeat(MAX_ITEM_TEXT_CHARS + 1);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildLocalSnapshot(longSavedText));
+    await page.goto('/index.html');
+
+    expect((await readItemSnapshot(page, 'item-1')).name.length).toBe(MAX_ITEM_TEXT_CHARS + 1);
   });
 
   test('graph hook creates ordinary Postbaby items and edges from normalized graph data', async ({ page }) => {
@@ -4226,6 +4461,30 @@ test.describe('Static behavior', () => {
         buildGraphNode('A', { label: 'x'.repeat(GRAPH_MAX_LABEL_CHARS + 1) })
       ]),
       expectedCode: 'node_label_too_long'
+    },
+    {
+      name: 'explicit node coordinates outside the bounded canvas',
+      graph: buildNormalizedGraph([
+        buildGraphNode('A', {
+          x: MAX_CANVAS_COORD + 1,
+          y: 0
+        })
+      ]),
+      expectedCode: 'node_position_out_of_bounds'
+    },
+    {
+      name: 'generated positions outside the bounded canvas',
+      graph: buildNormalizedGraph([
+        buildGraphNode('A'),
+        buildGraphNode('B')
+      ], [
+        buildGraphEdge('A', 'B', { kind: 'arrow' })
+      ], {
+        originX: MAX_CANVAS_COORD,
+        originY: 0,
+        direction: 'LR'
+      }),
+      expectedCode: 'generated_node_position_out_of_bounds'
     }
   ].forEach((scenario) => {
     const graph = scenario.graph && scenario.graph.graph ? scenario.graph.graph : scenario.graph;
@@ -4341,6 +4600,47 @@ test.describe('Static behavior', () => {
 
     expect(positions['Explicit A']).toEqual({ top: '300px', left: '200px' });
     expect(positions['Explicit B']).toEqual({ top: '360px', left: '340px' });
+  });
+
+  test('graph hook rejects imports that exceed the target tab note capacity', async ({ page }) => {
+    const items = buildBulkNoteItems(MAX_ITEMS_PER_TAB - 1);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildLocalSnapshotWithItems(items));
+    await page.goto('/index.html');
+
+    const result = await createGraphForTest(page, buildNormalizedGraph([
+      buildGraphNode('A', { label: 'Capacity A' }),
+      buildGraphNode('B', { label: 'Capacity B' })
+    ], [
+      buildGraphEdge('A', 'B', { kind: 'arrow' })
+    ]));
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.map((error) => error.code)).toContain('tab_item_limit_exceeded');
+    expect((await readTabsSnapshot(page))[0].items).toHaveLength(MAX_ITEMS_PER_TAB - 1);
+  });
+
+  test('graph hook rejects imports that exceed the target tab edge capacity', async ({ page }) => {
+    const items = buildBulkNoteItems(65, { columns: 8 });
+    const edges = buildDenseUndirectedEdges(items.map((item) => item.id), MAX_EDGES_PER_TAB - 1, { kind: 'line' });
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildLocalSnapshotWithItems(items, { edges }));
+    await page.goto('/index.html');
+
+    const result = await createGraphForTest(page, buildNormalizedGraph([
+      buildGraphNode('A', { label: 'Capacity A' }),
+      buildGraphNode('B', { label: 'Capacity B' }),
+      buildGraphNode('C', { label: 'Capacity C' })
+    ], [
+      buildGraphEdge('A', 'B', { kind: 'arrow' }),
+      buildGraphEdge('A', 'C', { kind: 'line' })
+    ]));
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.map((error) => error.code)).toContain('tab_edge_limit_exceeded');
+    expect((await readTabsSnapshot(page))[0].edges).toHaveLength(MAX_EDGES_PER_TAB - 1);
   });
 
   test('graph-created arrow edges use shape-aware anchors and line edges keep target-center behavior', async ({ page }) => {
@@ -4719,6 +5019,42 @@ test.describe('Static behavior', () => {
 
     await expect(page.locator('.grid-item')).toHaveCount(3);
     await expect(page.locator('.edge-line')).toHaveCount(2);
+  });
+
+  test('mermaid-derived graphs enforce remaining tab note capacity', async ({ page }) => {
+    const items = buildBulkNoteItems(MAX_ITEMS_PER_TAB - 1);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildLocalSnapshotWithItems(items));
+    await page.goto('/index.html');
+
+    const result = await createGraphFromMermaidForTest(page, [
+      'flowchart LR',
+      'A[Mermaid A] --> B[Mermaid B]'
+    ].join('\n'));
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.map((error) => error.code)).toContain('tab_item_limit_exceeded');
+    expect((await readTabsSnapshot(page))[0].items).toHaveLength(MAX_ITEMS_PER_TAB - 1);
+  });
+
+  test('mermaid-derived graphs enforce remaining tab edge capacity', async ({ page }) => {
+    const items = buildBulkNoteItems(65, { columns: 8 });
+    const edges = buildDenseUndirectedEdges(items.map((item) => item.id), MAX_EDGES_PER_TAB - 1, { kind: 'line' });
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildLocalSnapshotWithItems(items, { edges }));
+    await page.goto('/index.html');
+
+    const result = await createGraphFromMermaidForTest(page, [
+      'flowchart LR',
+      'A --> B',
+      'A --- C'
+    ].join('\n'));
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.map((error) => error.code)).toContain('tab_edge_limit_exceeded');
+    expect((await readTabsSnapshot(page))[0].edges).toHaveLength(MAX_EDGES_PER_TAB - 1);
   });
 
   test('mermaid-derived graph edges keep current arrow and line rendering behavior and survive reload', async ({ page }) => {

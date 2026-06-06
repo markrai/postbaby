@@ -1,5 +1,6 @@
 (function () {
     const shapeGeometry = window.PostbabyShapeGeometry || null;
+    const canvasLimits = window.PostbabyCanvasLimits || null;
 
     // These helpers keep today's persisted top/left CSS-string format while
     // giving the app a single numeric read/write path for future bounded-canvas work.
@@ -56,7 +57,10 @@
     }
 
     function setItemPositionXY(item, x, y) {
-        const nextPosition = formatItemPosition(x, y);
+        const nextCoordinates = canvasLimits && typeof canvasLimits.clampItemPositionXY === 'function'
+            ? canvasLimits.clampItemPositionXY(x, y)
+            : { x: x, y: y };
+        const nextPosition = formatItemPosition(nextCoordinates.x, nextCoordinates.y);
         if (item && typeof item === 'object') {
             item.position = nextPosition;
         }

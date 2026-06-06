@@ -3,6 +3,10 @@
     if (!shapeGeometry) {
         throw new Error('PostbabyShapeGeometry is missing.');
     }
+    const canvasLimits = window.PostbabyCanvasLimits;
+    if (!canvasLimits) {
+        throw new Error('PostbabyCanvasLimits is missing.');
+    }
     const geometryDom = window.PostbabyGeometryDom;
     if (!geometryDom) {
         throw new Error('PostbabyGeometryDom is missing.');
@@ -13,6 +17,12 @@
         throw new Error('PostbabyEdgeGeometry is missing.');
     }
 
+    const {
+        MAX_GRAPH_IMPORT_NODES,
+        MAX_GRAPH_IMPORT_EDGES,
+        MAX_GRAPH_LABEL_CHARS,
+        isItemPositionWithinCanvas
+    } = canvasLimits;
     const {
         DEFAULT_ITEM_SHAPE,
         normalizeItemShape,
@@ -34,9 +44,9 @@
 
     const GRAPH_DIRECTION_LR = 'LR';
     const GRAPH_DIRECTION_TD = 'TD';
-    const GRAPH_MAX_NODES = 100;
-    const GRAPH_MAX_EDGES = 300;
-    const GRAPH_MAX_LABEL_CHARS = 240;
+    const GRAPH_MAX_NODES = MAX_GRAPH_IMPORT_NODES;
+    const GRAPH_MAX_EDGES = MAX_GRAPH_IMPORT_EDGES;
+    const GRAPH_MAX_LABEL_CHARS = MAX_GRAPH_LABEL_CHARS;
     const GRAPH_DEFAULT_SPACING_X = 260;
     const GRAPH_DEFAULT_SPACING_Y = 180;
     const GRAPH_DEFAULT_GAP_X = 40;
@@ -287,6 +297,15 @@
                 return;
             }
 
+            if (hasX && hasY && !isItemPositionWithinCanvas(rawNode.x, rawNode.y)) {
+                errors.push(buildValidationError(
+                    'node_position_out_of_bounds',
+                    'Explicit node positions must stay within the bounded canvas coordinates.',
+                    nodePath
+                ));
+                return;
+            }
+
             const normalizedShape = normalizeItemShape(rawNode.shape);
             const dimensionErrors = [];
             const dimensions = normalizeGraphNodeDimensions(
@@ -308,7 +327,8 @@
                 height: dimensions.height,
                 x: hasX ? Math.round(rawNode.x) : undefined,
                 y: hasY ? Math.round(rawNode.y) : undefined,
-                hasExplicitPosition: hasX && hasY
+                hasExplicitPosition: hasX && hasY,
+                sourceIndex: index
             });
         });
 
@@ -619,6 +639,28 @@
         };
     }
 
+    function validateFinalGraphPositions(nodes, layout, options) {
+        const errors = [];
+
+        nodes.forEach((node) => {
+            const relativePosition = layout.relativePositionsByNodeId.get(node.id) || { x: 0, y: 0 };
+            const absoluteX = options.originX + relativePosition.x;
+            const absoluteY = options.originY + relativePosition.y;
+
+            if (isItemPositionWithinCanvas(absoluteX, absoluteY)) {
+                return;
+            }
+
+            errors.push(buildValidationError(
+                'generated_node_position_out_of_bounds',
+                `Graph node "${node.id}" would be placed outside the bounded canvas coordinates.`,
+                `nodes[${node.sourceIndex}]`
+            ));
+        });
+
+        return errors;
+    }
+
     function getIdFactory(buildOptions) {
         if (buildOptions && typeof buildOptions.idFactory === 'function') {
             return buildOptions.idFactory;
@@ -660,6 +702,13 @@
             normalizedGraph.edges,
             options
         );
+        const positionErrors = validateFinalGraphPositions(normalizedGraph.nodes, layout, options);
+        if (positionErrors.length > 0) {
+            return {
+                ok: false,
+                errors: positionErrors
+            };
+        }
         const itemIdByNodeId = new Map();
         const items = normalizedGraph.nodes.map((node) => {
             const itemId = idFactory();
