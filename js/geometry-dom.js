@@ -310,6 +310,45 @@
 
         const scrollOptions = options && typeof options === 'object' ? options : {};
         const behavior = typeof scrollOptions.behavior === 'string' ? scrollOptions.behavior : 'auto';
+        const containerElement = scrollOptions.containerElement
+            && typeof scrollOptions.containerElement.getBoundingClientRect === 'function'
+            && typeof scrollOptions.containerElement.scrollTo === 'function'
+            ? scrollOptions.containerElement
+            : null;
+
+        if (containerElement) {
+            const containerRect = getElementClientRect(containerElement);
+            const targetLeft = Math.max(
+                0,
+                Math.round(
+                    containerElement.scrollLeft
+                    + (clientRect.left - containerRect.left)
+                    + (clientRect.width / 2)
+                    - (containerElement.clientWidth / 2)
+                )
+            );
+            const targetTop = Math.max(
+                0,
+                Math.round(
+                    containerElement.scrollTop
+                    + (clientRect.top - containerRect.top)
+                    + (clientRect.height / 2)
+                    - (containerElement.clientHeight / 2)
+                )
+            );
+
+            containerElement.scrollTo({
+                left: targetLeft,
+                top: targetTop,
+                behavior: behavior
+            });
+
+            return {
+                left: targetLeft,
+                top: targetTop
+            };
+        }
+
         const targetLeft = Math.max(
             0,
             Math.round(window.scrollX + clientRect.left + (clientRect.width / 2) - (window.innerWidth / 2))

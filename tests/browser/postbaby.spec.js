@@ -797,20 +797,58 @@ async function readWindowScroll(page) {
   }));
 }
 
+async function readWorkspaceScroll(page) {
+  return page.evaluate(() => {
+    const workspace = document.getElementById('tabContent');
+    if (!workspace) {
+      return {
+        x: 0,
+        y: 0,
+        width: window.innerWidth,
+        height: window.innerHeight,
+        scrollWidth: window.innerWidth,
+        scrollHeight: window.innerHeight
+      };
+    }
+
+    return {
+      x: workspace.scrollLeft,
+      y: workspace.scrollTop,
+      width: workspace.clientWidth,
+      height: workspace.clientHeight,
+      scrollWidth: workspace.scrollWidth,
+      scrollHeight: workspace.scrollHeight
+    };
+  });
+}
+
+async function resetWorkspaceScroll(page) {
+  await page.evaluate(() => {
+    const workspace = document.getElementById('tabContent');
+    if (workspace && typeof workspace.scrollTo === 'function') {
+      workspace.scrollTo({ left: 0, top: 0, behavior: 'auto' });
+      return;
+    }
+
+    window.scrollTo(0, 0);
+  });
+}
+
 async function readViewportRecoveryFootprint(page) {
   return page.evaluate(() => {
     const sizer = document.getElementById('viewportRecoverySizer');
-    const documentElement = document.documentElement;
-    const body = document.body;
+    const workspace = document.getElementById('tabContent');
     return {
       sizerLeft: sizer ? parseFloat(sizer.style.left || '0') : 0,
       sizerTop: sizer ? parseFloat(sizer.style.top || '0') : 0,
-      scrollWidth: Math.max(documentElement.scrollWidth, body ? body.scrollWidth : 0),
-      scrollHeight: Math.max(documentElement.scrollHeight, body ? body.scrollHeight : 0),
-      scrollX: window.scrollX,
-      scrollY: window.scrollY,
-      viewportWidth: window.innerWidth,
-      viewportHeight: window.innerHeight
+      scrollWidth: workspace ? workspace.scrollWidth : window.innerWidth,
+      scrollHeight: workspace ? workspace.scrollHeight : window.innerHeight,
+      scrollX: workspace ? workspace.scrollLeft : window.scrollX,
+      scrollY: workspace ? workspace.scrollTop : window.scrollY,
+      viewportWidth: workspace ? workspace.clientWidth : window.innerWidth,
+      viewportHeight: workspace ? workspace.clientHeight : window.innerHeight,
+      windowScrollX: window.scrollX,
+      windowScrollY: window.scrollY
     };
   });
 }
@@ -6058,7 +6096,7 @@ test.describe('Static behavior', () => {
       }),
       buildNoteItem('Keep Before Import', {
         itemId: 'item-2',
-        position: { top: '150px', left: '340px' }
+        position: { top: '260px', left: '460px' }
       })
     ]);
     const importedSnapshot = buildLocalSnapshot('Imported After Selection', {
@@ -8046,7 +8084,7 @@ test.describe('Settings and Account UI', () => {
 
     const beforeSnapshot = await readTabsSnapshot(page);
     const beforeRect = await readItemClientRect(page, 'far-item');
-    const beforeScroll = await readWindowScroll(page);
+    const beforeScroll = await readWorkspaceScroll(page);
     expect(beforeRect.left).toBeGreaterThan(beforeScroll.width);
     expect(beforeRect.top).toBeGreaterThan(beforeScroll.height);
 
@@ -8055,15 +8093,25 @@ test.describe('Settings and Account UI', () => {
     await expect(page.locator('#settingsModal')).toBeHidden();
 
     await expect.poll(async () => {
-      const scroll = await readWindowScroll(page);
+      const scroll = await readWorkspaceScroll(page);
       return scroll.x > 0 && scroll.y > 0;
     }).toBe(true);
 
+    const windowScroll = await readWindowScroll(page);
+    expect(windowScroll.x).toBe(0);
+    expect(windowScroll.y).toBe(0);
+
     await expect.poll(async () => {
       const rect = await readItemClientRect(page, 'far-item');
-      const viewport = await readWindowScroll(page);
+      const viewport = await readWorkspaceScroll(page);
       return rect.left < viewport.width && rect.right > 0 && rect.top < viewport.height && rect.bottom > 0;
     }).toBe(true);
+
+    const headerBox = await page.locator('.tab-bar-header').boundingBox();
+    if (!headerBox) {
+      throw new Error('Tab bar header bounding box was not available after recovery.');
+    }
+    expect(headerBox.y).toBeGreaterThanOrEqual(0);
 
     expect(await readTabsSnapshot(page)).toEqual(beforeSnapshot);
   });
@@ -8119,12 +8167,12 @@ test.describe('Settings and Account UI', () => {
     await page.waitForTimeout(350);
     const afterEditSnapshot = await readTabsSnapshot(page);
 
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await resetWorkspaceScroll(page);
     await jumpLastEditedItemForTest(page);
 
     await expect.poll(async () => {
       const rect = await readItemClientRect(page, 'far-edited-item');
-      const viewport = await readWindowScroll(page);
+      const viewport = await readWorkspaceScroll(page);
       return rect.left < viewport.width && rect.right > 0 && rect.top < viewport.height && rect.bottom > 0;
     }).toBe(true);
 
@@ -8273,7 +8321,7 @@ test.describe('Settings and Account UI', () => {
 
     await expect.poll(async () => {
       const rect = await readItemClientRect(page, 'tab-one-far');
-      const viewport = await readWindowScroll(page);
+      const viewport = await readWorkspaceScroll(page);
       return rect.left < viewport.width && rect.right > 0 && rect.top < viewport.height && rect.bottom > 0;
     }).toBe(true);
 
@@ -8298,7 +8346,7 @@ test.describe('Settings and Account UI', () => {
 
     await expect.poll(async () => {
       const rect = await readItemClientRect(page, 'tab-one-far');
-      const viewport = await readWindowScroll(page);
+      const viewport = await readWorkspaceScroll(page);
       return rect.left < viewport.width && rect.right > 0 && rect.top < viewport.height && rect.bottom > 0;
     }).toBe(true);
   });
@@ -8321,13 +8369,13 @@ test.describe('Settings and Account UI', () => {
 
     expect(graphResult.ok).toBe(true);
     const beforePositions = await readItemPositionsById(page, graphResult.createdItemIds);
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await resetWorkspaceScroll(page);
 
     await showAllItemsForTest(page);
 
     await expect.poll(async () => {
       const rect = await readItemClientRect(page, graphResult.createdItemIds[0]);
-      const viewport = await readWindowScroll(page);
+      const viewport = await readWorkspaceScroll(page);
       return rect.left < viewport.width && rect.right > 0 && rect.top < viewport.height && rect.bottom > 0;
     }).toBe(true);
 
@@ -8358,13 +8406,13 @@ test.describe('Settings and Account UI', () => {
     expect(mermaidResult.ok).toBe(true);
     const newestCreatedItemId = mermaidResult.createdItemIds[mermaidResult.createdItemIds.length - 1];
     const beforePositions = await readItemPositionsById(page, mermaidResult.createdItemIds);
-    await page.evaluate(() => window.scrollTo(0, 0));
+    await resetWorkspaceScroll(page);
 
     await jumpNewestItemForTest(page);
 
     await expect.poll(async () => {
       const rect = await readItemClientRect(page, newestCreatedItemId);
-      const viewport = await readWindowScroll(page);
+      const viewport = await readWorkspaceScroll(page);
       return rect.left < viewport.width && rect.right > 0 && rect.top < viewport.height && rect.bottom > 0;
     }).toBe(true);
 

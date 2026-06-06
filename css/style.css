@@ -20,6 +20,7 @@
 .tab-bar-header {
     position: relative;
     z-index: 2;
+    flex: 0 0 auto;
 }
 
 #tabBar {
@@ -391,6 +392,7 @@
     padding: 10px;
     position: relative;
     width: 100%;
+    min-height: 100%;
 }
 
 .tab-pane.active {
@@ -399,19 +401,22 @@
 
 /* Logo Container */
 .logo-container {
+    position: absolute;
+    top: 70px;
+    right: 20px;
+    bottom: 20px;
+    left: 20px;
     display: flex;
     justify-content: center;
     align-items: center;
-    width: 100%;
-    margin-top: auto;
+    width: auto;
+    margin: 0;
+    pointer-events: none;
+    z-index: 0;
 }
 
 /* Portrait Mode */
 @media (orientation: portrait) {
-    .logo-container {
-        margin-top: 50%;
-    }
-
     .grid-item {
         height: auto;
         min-height: 100px; /* Ensure a minimum height */
@@ -445,9 +450,6 @@
 
 /* Landscape Mode */
 @media (orientation: landscape) {
-    .logo-container {
-        margin-top: 5%;
-    }
 }
 
 .logo {
@@ -455,7 +457,7 @@
     height: auto;
     margin: 0 auto;
     user-select: none;
-    padding-top: 150px;
+    padding-top: 0;
     -webkit-user-select: none;
     -moz-user-select: none;
     -ms-user-select: none;
@@ -711,16 +713,28 @@ body {
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    align-items: center;
+    align-items: stretch;
     justify-content: flex-start;
     min-height: 100vh;
+    height: 100vh;
     margin: 0;
     background-color: var(--bg-page);
     color: var(--text-primary);
     font-family: Arial, sans-serif;
     padding: 20px;
+    position: relative;
     box-sizing: border-box;
     transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+#tabContent {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+    overflow: auto;
+    overscroll-behavior: contain;
+    z-index: 1;
 }
 
 .grid-container {
@@ -1193,7 +1207,7 @@ h1 {
     color: var(--text-muted);
     font-size: 15px;
     opacity: 0.8;
-    z-index: 0;
+    z-index: 3;
     font-family: 'Comfortaa', sans-serif;
     transition: transform 0.2s, opacity 0.2s;
     pointer-events: auto;
