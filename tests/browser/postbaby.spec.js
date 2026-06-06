@@ -70,6 +70,7 @@ const SYNC_HASH_STORAGE_KEYS = [
   'disableColorChange',
   'disableNoteResize',
   'hideInstructions',
+  'hideCameraControls',
   'corporateMode',
   'defaultColorEnabled',
   'defaultColor',
@@ -1196,6 +1197,8 @@ async function readNotePresentation(locator) {
     const beforeStyle = window.getComputedStyle(element, '::before');
     const handle = element.querySelector('.grid-item-resize-handle');
     const handleStyle = handle ? window.getComputedStyle(handle) : null;
+    const noteRect = element.getBoundingClientRect();
+    const handleRect = handle ? handle.getBoundingClientRect() : null;
     return {
       sizeMode: element.dataset.sizeMode || '',
       usesExplicitSizeClass: element.classList.contains('grid-item--explicit-size'),
@@ -1203,7 +1206,14 @@ async function readNotePresentation(locator) {
       beforeBorderRadius: beforeStyle.borderRadius,
       beforeClipPath: beforeStyle.clipPath,
       handleRight: handleStyle ? handleStyle.right : null,
-      handleBottom: handleStyle ? handleStyle.bottom : null
+      handleBottom: handleStyle ? handleStyle.bottom : null,
+      handleNotchAngle: handleStyle ? handleStyle.getPropertyValue('--resize-handle-notch-angle').trim() : null,
+      handleCenterXRatio: handleRect && noteRect.width > 0
+        ? ((handleRect.left + (handleRect.width / 2)) - noteRect.left) / noteRect.width
+        : null,
+      handleCenterYRatio: handleRect && noteRect.height > 0
+        ? ((handleRect.top + (handleRect.height / 2)) - noteRect.top) / noteRect.height
+        : null
     };
   });
 }
@@ -2502,6 +2512,9 @@ test.describe('Static behavior', () => {
       } else {
         expect(presentation.beforeClipPath).not.toBe('none');
         expect(Number.parseFloat(presentation.handleRight || '0')).toBeGreaterThan(30);
+        expect(presentation.handleCenterXRatio).toBeGreaterThan(0.62);
+        expect(presentation.handleCenterXRatio).toBeLessThan(0.72);
+        expect(presentation.handleCenterYRatio).toBeGreaterThan(0.78);
       }
 
       const colorBeforeHandleClick = await readItemColor(page);
@@ -2569,6 +2582,14 @@ test.describe('Static behavior', () => {
       expect(presentation.beforeClipPath).not.toBe('none');
       expect(Number.parseFloat(presentation.handleRight || '0')).toBeGreaterThan(10);
       expect(Number.parseFloat(presentation.handleBottom || '0')).toBeGreaterThan(10);
+
+      if (shape === 'upsideDownTriangle') {
+        expect(presentation.handleNotchAngle).toBe('117deg');
+        expect(presentation.handleCenterXRatio).toBeGreaterThan(0.54);
+        expect(presentation.handleCenterXRatio).toBeLessThan(0.62);
+        expect(presentation.handleCenterYRatio).toBeGreaterThan(0.79);
+      }
+
       expect(noteSize.width).toBe(expectedWidth);
       expect(noteSize.height).toBe(expectedHeight);
 
@@ -7052,6 +7073,48 @@ test.describe('Static behavior', () => {
     const resizedNote = await readNoteSize(note);
     expect(resizedNote.width).toBeGreaterThan(sizeBeforeDisable.width);
     expect(resizedNote.height).toBeGreaterThan(sizeBeforeDisable.height);
+  });
+
+  test('Hide Camera Remote hides camera controls, persists across reload, and restores them when re-enabled', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Camera Remote Toggle');
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    await expect.poll(async () => (await readCameraControlsState(page)).hidden).toBe(false);
+
+    await openSettingsModal(page);
+    const hideCameraControlsToggle = page.locator('#toggleHideCameraControls');
+    await expect(hideCameraControlsToggle).not.toBeChecked();
+    await hideCameraControlsToggle.evaluate((element) => element.click());
+    await expect(hideCameraControlsToggle).toBeChecked();
+    await expect.poll(async () => (await readCameraControlsState(page)).hidden).toBe(true);
+    await expect.poll(async () => {
+      const indexedDBState = await readIndexedDBState(page);
+      return indexedDBState.snapshot ? indexedDBState.snapshot.hideCameraControls : null;
+    }).toBe('true');
+    await page.locator('.close-settings').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+    await expect.poll(async () => (await readCameraControlsState(page)).hidden).toBe(true);
+
+    await page.reload();
+    await expectNoteVisible(page, 'Camera Remote Toggle');
+    await expect.poll(async () => (await readCameraControlsState(page)).hidden).toBe(true);
+
+    await openSettingsModal(page);
+    const reloadedHideCameraControlsToggle = page.locator('#toggleHideCameraControls');
+    await expect(reloadedHideCameraControlsToggle).toBeChecked();
+    await reloadedHideCameraControlsToggle.evaluate((element) => element.click());
+    await expect(reloadedHideCameraControlsToggle).not.toBeChecked();
+    await expect.poll(async () => (await readCameraControlsState(page)).hidden).toBe(false);
+    await expect.poll(async () => {
+      const indexedDBState = await readIndexedDBState(page);
+      return indexedDBState.snapshot ? indexedDBState.snapshot.hideCameraControls : null;
+    }).toBe('false');
+    await page.locator('.close-settings').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+    await expect.poll(async () => (await readCameraControlsState(page)).hidden).toBe(false);
   });
 
   test('enters textarea edit mode on desktop double-click', async ({ page }) => {

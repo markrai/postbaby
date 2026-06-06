@@ -1025,6 +1025,7 @@ body {
 
 .grid-item-resize-handle {
     --resize-handle-notch-angle: 135deg;
+    --resize-handle-notch-color: rgba(0, 0, 0, 0.6);
     position: absolute;
     right: 4px;
     bottom: 4px;
@@ -1038,9 +1039,13 @@ body {
             linear-gradient(
                     var(--resize-handle-notch-angle),
                     transparent 62%,
-                    rgba(0, 0, 0, 0.6) 62% 74%,
+                    var(--resize-handle-notch-color) 62% 74%,
                     transparent 74%
             );
+}
+
+[data-theme="dark"] .grid-item-resize-handle {
+    --resize-handle-notch-color: rgba(182, 182, 182, 0.92);
 }
 
 .grid-item[data-shape="circle"]:not(.editing) .grid-item-resize-handle {
@@ -1049,8 +1054,8 @@ body {
 }
 
 .grid-item[data-shape="diamond"]:not(.editing) .grid-item-resize-handle {
-    right: calc(25% - 4px);
-    bottom: calc(25% - 4px);
+    right: calc(32% - 4px);
+    bottom: calc(18% - 4px);
 }
 
 .grid-item[data-shape="triangle"]:not(.editing) .grid-item-resize-handle {
@@ -1059,8 +1064,9 @@ body {
 }
 
 .grid-item[data-shape="upsideDownTriangle"]:not(.editing) .grid-item-resize-handle {
-    right: calc(34% - 4px);
-    bottom: calc(24% - 4px);
+    --resize-handle-notch-angle: 117deg;
+    right: calc(41% - 4px);
+    bottom: calc(16% - 4px);
 }
 
 .grid-item[data-shape="hexagon"]:not(.editing) .grid-item-resize-handle {
