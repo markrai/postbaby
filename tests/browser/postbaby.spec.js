@@ -1724,24 +1724,7 @@ async function clickEmptyGrid(page, options = {}) {
     fallbackY: yPadding
   });
 
-  await page.evaluate(({ x, y }) => {
-    document.body.dispatchEvent(new MouseEvent('mousedown', {
-      bubbles: true,
-      cancelable: true,
-      button: 0,
-      buttons: 1,
-      clientX: x,
-      clientY: y
-    }));
-    document.dispatchEvent(new MouseEvent('mouseup', {
-      bubbles: true,
-      cancelable: true,
-      button: 0,
-      buttons: 0,
-      clientX: x,
-      clientY: y
-    }));
-  }, point);
+  await page.mouse.click(point.x, point.y);
 }
 
 async function readSelectedNoteIds(page) {
@@ -6072,6 +6055,134 @@ test.describe('Static behavior', () => {
     await expect.poll(() => readSelectedNoteIds(page)).toEqual([]);
   });
 
+  test('hand mode empty canvas click clears marquee selection', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Hand Mode Selected', {
+        itemId: 'item-1',
+        position: { top: '80px', left: '120px' }
+      }),
+      buildNoteItem('Hand Mode Other', {
+        itemId: 'item-2',
+        position: { top: '120px', left: '360px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const note = page.locator('.grid-item[data-id="item-1"]');
+    await marqueeSelectNotes(page, [note]);
+    await expect.poll(() => readSelectedNoteIds(page)).toEqual(['item-1']);
+
+    await setCanvasMode(page, 'pan');
+    expect(await readCanvasMode(page)).toBe('pan');
+
+    await clickEmptyGrid(page);
+    await expect.poll(() => readSelectedNoteIds(page)).toEqual([]);
+    expect(await readCanvasMode(page)).toBe('pan');
+  });
+
+  test('hand mode blank canvas drag keeps selection and pans camera', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Hand Mode Drag Selected', {
+        itemId: 'item-1',
+        position: { top: '360px', left: '520px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const note = page.locator('.grid-item[data-id="item-1"]');
+    await marqueeSelectNotes(page, [note]);
+    await expect.poll(() => readSelectedNoteIds(page)).toEqual(['item-1']);
+
+    await setCanvasMode(page, 'pan');
+    expect(await readCanvasMode(page)).toBe('pan');
+
+    const workspaceBox = await page.locator('#tabContent').boundingBox();
+    if (!workspaceBox) {
+      throw new Error('Workspace viewport bounding box was not available.');
+    }
+
+    const blankStartX = Math.round(workspaceBox.x + workspaceBox.width - 220);
+    const blankStartY = Math.round(workspaceBox.y + workspaceBox.height - 180);
+    const beforePanCamera = await readCamera(page);
+
+    await page.mouse.move(blankStartX, blankStartY);
+    await page.mouse.down();
+    await page.mouse.move(blankStartX + 120, blankStartY + 70, { steps: 8 });
+    await page.mouse.up();
+
+    const afterPanCamera = await readCamera(page);
+    expect(afterPanCamera.x).toBeLessThan(beforePanCamera.x);
+    expect(afterPanCamera.y).toBeLessThan(beforePanCamera.y);
+    await expect.poll(() => readSelectedNoteIds(page)).toEqual(['item-1']);
+  });
+
+  test('middle mouse blank canvas click does not clear selection', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Middle Mouse Selected', {
+        itemId: 'item-1',
+        position: { top: '80px', left: '120px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const note = page.locator('.grid-item[data-id="item-1"]');
+    await marqueeSelectNotes(page, [note]);
+    await expect.poll(() => readSelectedNoteIds(page)).toEqual(['item-1']);
+
+    const workspaceBox = await page.locator('#tabContent').boundingBox();
+    if (!workspaceBox) {
+      throw new Error('Workspace viewport bounding box was not available.');
+    }
+
+    const blankX = Math.round(workspaceBox.x + workspaceBox.width - 220);
+    const blankY = Math.round(workspaceBox.y + workspaceBox.height - 180);
+    await page.mouse.click(blankX, blankY, { button: 'middle' });
+
+    await expect.poll(() => readSelectedNoteIds(page)).toEqual(['item-1']);
+  });
+
+  test('Space pan blank canvas click does not clear selection', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Space Pan Selected', {
+        itemId: 'item-1',
+        position: { top: '80px', left: '120px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const note = page.locator('.grid-item[data-id="item-1"]');
+    await marqueeSelectNotes(page, [note]);
+    await expect.poll(() => readSelectedNoteIds(page)).toEqual(['item-1']);
+
+    const workspaceBox = await page.locator('#tabContent').boundingBox();
+    if (!workspaceBox) {
+      throw new Error('Workspace viewport bounding box was not available.');
+    }
+
+    const blankX = Math.round(workspaceBox.x + workspaceBox.width - 220);
+    const blankY = Math.round(workspaceBox.y + workspaceBox.height - 180);
+
+    await page.keyboard.down('Space');
+    await page.mouse.move(blankX, blankY);
+    await page.mouse.down();
+    await page.mouse.up();
+    await page.keyboard.up('Space');
+
+    await expect.poll(() => readSelectedNoteIds(page)).toEqual(['item-1']);
+  });
+
   test('empty canvas click over the logo area clears marquee selection', async ({ page }) => {
     const localSnapshot = buildLocalSnapshotWithItems([
       buildNoteItem('Selected Then Cleared', {
@@ -9574,6 +9685,35 @@ test.describe('Settings and Account UI', () => {
     expect(createdItems.find((item) => item.name === 'Circle Target')?.shape).toBe('circle');
     expect(createdItems.find((item) => item.name === 'Decision')?.shape).toBe('diamond');
     expect(createdEdges.map((edge) => edge.kind).sort()).toEqual(['arrow', 'line']);
+  });
+
+  test('Mermaid import in hand mode can be deselected by blank canvas click', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    await setCanvasMode(page, 'pan');
+    expect(await readCanvasMode(page)).toBe('pan');
+
+    await openSettingsImportExportTab(page);
+    await page.locator('#mermaidImportSource').fill([
+      'flowchart LR',
+      'A[Source] --> B((Circle Target))',
+      'A --- C{Decision}'
+    ].join('\n'));
+    await page.locator('#mermaidImportButton').click();
+
+    await expect(page.locator('#settingsModal')).toBeVisible();
+    await expect(page.locator('#mermaidImportStatus')).toContainText('Mermaid import completed.');
+    await expect(page.locator('.grid-item.selected')).toHaveCount(3);
+
+    await page.locator('.close-settings').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+    await expect(page.locator('.grid-item.selected')).toHaveCount(3);
+
+    await clickEmptyGrid(page);
+    await expect(page.locator('.grid-item.selected')).toHaveCount(0);
+    expect(await readCanvasMode(page)).toBe('pan');
   });
 
   test('Mermaid import from Settings surfaces warnings inline when supported syntax is normalized', async ({ page }) => {
