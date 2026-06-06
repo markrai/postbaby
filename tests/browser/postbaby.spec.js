@@ -77,6 +77,12 @@ const SYNC_HASH_STORAGE_KEYS = [
   'defaultColor',
   'hasRunBefore'
 ];
+const LOCAL_ONLY_OUTBOX_KEYS = [
+  'postbabySyncClientId',
+  'postbabySyncDeviceId',
+  'postbabySyncMutationCounter',
+  'postbabySyncMutationOutbox'
+];
 const FORBIDDEN_SHAPE_SIZE_FIELDS = ITEM_SHAPES
   .flatMap((shape) => [`${shape}Width`, `${shape}Height`])
   .concat(['shapeSizes', 'sizeByShape']);
@@ -753,7 +759,7 @@ async function expectNoteVisible(page, noteText) {
   await expect(page.locator('.grid-item span').filter({ hasText: noteText }).first()).toBeVisible();
 }
 
-async function createNoteAt(page, noteText, point = { x: 900, y: 300 }) {
+async function openNewNoteEditorAt(page, point = { x: 900, y: 300 }) {
   const grid = page.locator('.grid-container').first();
   await expect(grid).toBeVisible();
   await grid.evaluate((element, clickPoint) => {
@@ -768,13 +774,18 @@ async function createNoteAt(page, noteText, point = { x: 900, y: 300 }) {
 
   const textarea = page.locator('textarea.edit-textarea');
   await expect(textarea).toBeVisible();
+  return textarea;
+}
+
+async function createNoteAt(page, noteText, point = { x: 900, y: 300 }) {
+  const textarea = await openNewNoteEditorAt(page, point);
   await textarea.fill(noteText);
   await textarea.press('Escape');
   await expect(textarea).toHaveCount(0);
   await expectNoteVisible(page, noteText);
 }
 
-async function deleteNoteViaContextMenu(page, itemId) {
+async function openNoteDeleteConfirm(page, itemId) {
   const note = page.locator(`.grid-item[data-id="${itemId}"]`);
   await note.evaluate((element) => {
     element.dispatchEvent(new MouseEvent('contextmenu', {
@@ -785,14 +796,31 @@ async function deleteNoteViaContextMenu(page, itemId) {
     }));
   });
   await expect(page.locator('#confirmModal')).toBeVisible();
+}
+
+async function deleteNoteViaContextMenu(page, itemId) {
+  await openNoteDeleteConfirm(page, itemId);
   await page.click('#confirmDelete');
   await expect(page.locator(`.grid-item[data-id="${itemId}"]`)).toHaveCount(0);
 }
 
 async function readTabsSnapshot(page) {
+  let scopedRecordId = PRIMARY_RECORD_ID;
+  try {
+    const debugState = await page.evaluate(() => (
+      typeof window.postbabyDebugSync === 'function'
+        ? window.postbabyDebugSync()
+        : null
+    ));
+    if (debugState && typeof debugState.storageScopeKey === 'string' && debugState.storageScopeKey.trim()) {
+      scopedRecordId = debugState.storageScopeKey.trim();
+    }
+  } catch (error) {
+  }
+
   let tabsPayload = null;
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    const indexedDBState = await readIndexedDBState(page);
+    const indexedDBState = await readIndexedDBState(page, scopedRecordId);
     if (indexedDBState && indexedDBState.snapshot && indexedDBState.snapshot.tabs) {
       tabsPayload = indexedDBState.snapshot.tabs;
       break;
@@ -1218,6 +1246,11 @@ async function readItemColor(page, itemId = 'item-1') {
   return item ? item.color : null;
 }
 
+async function readMutationOutbox(page) {
+  const debugState = await page.evaluate(() => window.postbabyDebugSync());
+  return debugState.mutationOutbox;
+}
+
 async function readNoteSize(locator) {
   return locator.evaluate((element) => ({
     width: element.offsetWidth,
@@ -1594,6 +1627,11 @@ function buildShapeAwareArrowSnapshot(shape) {
 }
 
 async function deleteEdgeViaContextMenu(page, edgeLine) {
+  await openEdgeDeleteConfirm(page, edgeLine);
+  await page.click('#confirmDelete');
+}
+
+async function openEdgeDeleteConfirm(page, edgeLine) {
   await edgeLine.evaluate((element) => {
     const group = element.parentElement;
     const hit = group ? group.querySelector('.edge-hit-line') : null;
@@ -1622,7 +1660,6 @@ async function deleteEdgeViaContextMenu(page, edgeLine) {
     }));
   });
   await expect(page.locator('#confirmModal')).toBeVisible();
-  await page.click('#confirmDelete');
 }
 
 async function dragNoteBy(page, note, deltaX, deltaY) {
@@ -8570,6 +8607,7 @@ test.describe('Mocked sync startup reconciliation', () => {
       snapshot: buildServerSnapshotPayload(serverSnapshotData, 6),
       blockUploads: true
     };
+    const capturedSaveBodies = [];
     const localSnapshot = addDurableCloudSyncMetadata(
       buildEmptySnapshot({ hasRunBefore: true, theme: 'light', syncVersion: 6 }),
       {
@@ -8603,6 +8641,7 @@ test.describe('Mocked sync startup reconciliation', () => {
             };
           }
 
+          capturedSaveBodies.push(body);
           const nextVersion = serverState.snapshot.version + 1;
           serverState.snapshot = buildServerSnapshotPayload(body.data, nextVersion);
           return {
@@ -8641,8 +8680,9 @@ test.describe('Mocked sync startup reconciliation', () => {
       expect(titanDebugAfterReload.durablePendingCloudUpload).toBe(true);
       expect(titanDebugAfterReload.durableSyncMetadata.lastKnownServerRevision).toBe(6);
       expect(titanDebugAfterReload.syncState).not.toBe('synced');
-      expect(titanDebugAfterReload.mutationOutbox.pendingCount).toBe(1);
-      expect(titanDebugAfterReload.mutationOutbox.records.map((record) => record.operationType)).toEqual(['CreateNode']);
+      expect(titanDebugAfterReload.mutationOutbox.pendingCount).toBe(2);
+      expect(titanDebugAfterReload.mutationOutbox.records.map((record) => record.operationType)).toEqual(['CreateNode', 'UpdateNode']);
+      expect(titanDebugAfterReload.mutationOutbox.records.map((record) => record.status)).toEqual(['pending', 'pending']);
 
       serverState.blockUploads = false;
       await titan.page.locator('#syncStatusButton').click();
@@ -8657,7 +8697,12 @@ test.describe('Mocked sync startup reconciliation', () => {
       const titanDebugAfterSync = await titan.page.evaluate(() => window.postbabyDebugSync());
       expect(titanDebugAfterSync.durablePendingCloudUpload).toBe(false);
       expect(titanDebugAfterSync.mutationOutbox.pendingCount).toBe(0);
-      expect(titanDebugAfterSync.mutationOutbox.ackedCount).toBe(1);
+      expect(titanDebugAfterSync.mutationOutbox.snapshotConfirmedCount).toBe(2);
+      expect(titanDebugAfterSync.mutationOutbox.records.map((record) => record.status)).toEqual(['snapshotConfirmed', 'snapshotConfirmed']);
+      expect(capturedSaveBodies).toHaveLength(1);
+      LOCAL_ONLY_OUTBOX_KEYS.forEach((key) => {
+        expect(Object.prototype.hasOwnProperty.call(capturedSaveBodies[0].data, key)).toBe(false);
+      });
 
       await venom.page.reload();
       await expectNoteVisible(venom.page, 'Titan Quick Close Note');
@@ -8670,14 +8715,98 @@ test.describe('Mocked sync startup reconciliation', () => {
     }
   });
 
-  test('records low-risk client mutation envelopes locally for node and edge operations', async ({ page }) => {
+  test('records CreateNode immediately and records a later rename as UpdateNode', async ({ page }) => {
+    const localSnapshot = addDurableCloudSyncMetadata(
+      buildEmptySnapshot({ hasRunBefore: true, theme: 'light', syncVersion: 6 }),
+      {
+        pending: false,
+        revision: 6,
+        lastCloudUploadedAt: TIMESTAMP
+      }
+    );
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerSnapshotPayload(buildEmptySnapshot({ hasRunBefore: true, theme: 'light' }), 6),
+      onSave: async () => ({
+        status: 503,
+        body: { ok: false, error: { code: 'blocked_for_test', message: 'blocked for test' } }
+      })
+    });
+
+    await page.goto('/index.html');
+    const textarea = await openNewNoteEditorAt(page, { x: 760, y: 260 });
+
+    let outbox = await readMutationOutbox(page);
+    expect(outbox.pendingCount).toBe(1);
+    expect(outbox.snapshotConfirmedCount).toBe(0);
+    expect(outbox.records).toHaveLength(1);
+    expect(outbox.records[0].operationType).toBe('CreateNode');
+    expect(outbox.records[0].status).toBe('pending');
+    expect(outbox.records[0].payload.name).toMatch(/^New Item /);
+
+    await textarea.fill('Created Then Renamed');
+    await textarea.press('Escape');
+    await expect(textarea).toHaveCount(0);
+    await expectNoteVisible(page, 'Created Then Renamed');
+
+    outbox = await readMutationOutbox(page);
+    expect(outbox.records.map((record) => record.operationType)).toEqual(['CreateNode', 'UpdateNode']);
+    expect(outbox.records[1].status).toBe('pending');
+    expect(outbox.records[1].payload).toEqual({
+      tabId: 'tab-1',
+      changes: {
+        name: 'Created Then Renamed'
+      }
+    });
+  });
+
+  test('records one MoveNode envelope per completed move and keeps mutation ids unique across rapid operations', async ({ page }) => {
+    const localSnapshot = addDurableCloudSyncMetadata(
+      buildLocalSnapshot('Move Outbox Note', { syncVersion: 6 }),
+      {
+        pending: false,
+        revision: 6,
+        lastCloudUploadedAt: TIMESTAMP
+      }
+    );
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Move Outbox Note', 6),
+      onSave: async () => ({
+        status: 503,
+        body: { ok: false, error: { code: 'blocked_for_test', message: 'blocked for test' } }
+      })
+    });
+
+    await page.goto('/index.html');
+    const note = page.locator('.grid-item[data-id="item-1"]');
+    await dragNoteBy(page, note, 80, 40);
+    await dragNoteBy(page, note, 70, 35);
+
+    const outbox = await readMutationOutbox(page);
+    const moveRecords = outbox.records.filter((record) => record.operationType === 'MoveNode');
+    expect(moveRecords).toHaveLength(2);
+    expect(new Set(moveRecords.map((record) => record.mutationId)).size).toBe(2);
+    expect(new Set(outbox.records.map((record) => record.mutationId)).size).toBe(outbox.records.length);
+    expect(moveRecords.every((record) => record.status === 'pending')).toBe(true);
+  });
+
+  test('records CreateEdge once and records DeleteNode and DeleteEdge only after confirm commit', async ({ page }) => {
     const localSnapshot = addDurableCloudSyncMetadata(
       buildLocalSnapshotWithItems([
-        buildNoteItem('Outbox Source', {
+        buildNoteItem('Delete Edge Source', {
           itemId: 'item-1',
           position: { top: '100px', left: '140px' }
         }),
-        buildNoteItem('Outbox Target', {
+        buildNoteItem('Delete Edge Target', {
           itemId: 'item-2',
           position: { top: '140px', left: '420px' }
         })
@@ -8697,11 +8826,11 @@ test.describe('Mocked sync startup reconciliation', () => {
     await enableMockedSync(page, {
       metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
       documentPayload: buildServerSnapshotPayload(buildLocalSnapshotWithItems([
-        buildNoteItem('Outbox Source', {
+        buildNoteItem('Delete Edge Source', {
           itemId: 'item-1',
           position: { top: '100px', left: '140px' }
         }),
-        buildNoteItem('Outbox Target', {
+        buildNoteItem('Delete Edge Target', {
           itemId: 'item-2',
           position: { top: '140px', left: '420px' }
         })
@@ -8713,39 +8842,261 @@ test.describe('Mocked sync startup reconciliation', () => {
     });
 
     await page.goto('/index.html');
-    await createNoteAt(page, 'Outbox Created Note', { x: 760, y: 260 });
+    await drawEdgeBetweenNotes(page, page.locator('.grid-item[data-id="item-1"]'), page.locator('.grid-item[data-id="item-2"]'));
+    let outbox = await readMutationOutbox(page);
+    expect(outbox.records.filter((record) => record.operationType === 'CreateEdge')).toHaveLength(1);
 
-    let createdItem = null;
-    await expect.poll(async () => {
-      const indexedDBState = await readIndexedDBState(page, 'owner-scope');
-      if (!indexedDBState || !indexedDBState.snapshot || !indexedDBState.snapshot.tabs) {
-        return '';
+    await openEdgeDeleteConfirm(page, page.locator('.edge-line').first());
+    outbox = await readMutationOutbox(page);
+    expect(outbox.records.filter((record) => record.operationType === 'DeleteEdge')).toHaveLength(0);
+    await page.click('#confirmDelete');
+
+    outbox = await readMutationOutbox(page);
+    expect(outbox.records.filter((record) => record.operationType === 'DeleteEdge')).toHaveLength(1);
+
+    await openNoteDeleteConfirm(page, 'item-1');
+    outbox = await readMutationOutbox(page);
+    expect(outbox.records.filter((record) => record.operationType === 'DeleteNode')).toHaveLength(0);
+    await page.click('#confirmDelete');
+
+    outbox = await readMutationOutbox(page);
+    expect(outbox.records.filter((record) => record.operationType === 'DeleteNode')).toHaveLength(1);
+  });
+
+  test('records UpdateNode envelopes for rename, color, shape, and resize changes', async ({ page }) => {
+    const localSnapshot = addDurableCloudSyncMetadata(
+      buildLocalSnapshot('Update Outbox Note', { syncVersion: 6 }),
+      {
+        pending: false,
+        revision: 6,
+        lastCloudUploadedAt: TIMESTAMP
       }
+    );
 
-      const tabsSnapshot = JSON.parse(indexedDBState.snapshot.tabs);
-      createdItem = tabsSnapshot[0].items.find((item) => item.name === 'Outbox Created Note') || null;
-      return createdItem ? createdItem.id : '';
-    }).not.toBe('');
-    expect(createdItem).toBeTruthy();
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Update Outbox Note', 6),
+      onSave: async () => ({
+        status: 503,
+        body: { ok: false, error: { code: 'blocked_for_test', message: 'blocked for test' } }
+      })
+    });
 
-    const createdNote = page.locator(`.grid-item[data-id="${createdItem.id}"]`);
-    await dragNoteBy(page, createdNote, 80, 40);
-    await drawEdgeBetweenNotes(page, page.locator('.grid-item[data-id="item-1"]'), createdNote);
-    await deleteEdgeViaContextMenu(page, page.locator('.edge-line').first());
-    await deleteNoteViaContextMenu(page, createdItem.id);
+    await page.goto('/index.html');
+    const note = page.locator('.grid-item[data-id="item-1"]');
+    await note.dblclick();
+    const textarea = page.locator('textarea.edit-textarea');
+    await textarea.fill('Update Outbox Renamed');
+    await textarea.press('Escape');
+    await expect(textarea).toHaveCount(0);
 
-    const debugState = await page.evaluate(() => window.postbabyDebugSync());
-    expect(debugState.mutationOutbox.clientId).toMatch(/^client_/);
-    expect(debugState.mutationOutbox.deviceId).toMatch(/^device_/);
-    expect(debugState.mutationOutbox.pendingCount).toBe(5);
-    expect(debugState.mutationOutbox.ackedCount).toBe(0);
-    expect(debugState.mutationOutbox.records.map((record) => record.operationType)).toEqual([
-      'CreateNode',
-      'MoveNode',
-      'CreateEdge',
-      'DeleteEdge',
-      'DeleteNode'
-    ]);
+    await note.click();
+    await expect.poll(async () => {
+      const currentOutbox = await readMutationOutbox(page);
+      return currentOutbox.records.filter((record) => (
+        record.operationType === 'UpdateNode'
+        && record.payload
+        && record.payload.changes
+        && Object.prototype.hasOwnProperty.call(record.payload.changes, 'color')
+      )).length;
+    }).toBe(1);
+    const updatedColor = await readItemColor(page, 'item-1');
+    await cycleNoteShape(note);
+    await resizeNoteBy(page, note, 80, 50);
+    const updatedItem = await readItemSnapshot(page, 'item-1');
+
+    const outbox = await readMutationOutbox(page);
+    const updateRecords = outbox.records.filter((record) => record.operationType === 'UpdateNode');
+    expect(updateRecords).toHaveLength(4);
+    expect(updateRecords.map((record) => record.payload)).toEqual(expect.arrayContaining([
+      {
+        tabId: 'tab-1',
+        changes: {
+          name: 'Update Outbox Renamed'
+        }
+      },
+      {
+        tabId: 'tab-1',
+        changes: {
+          color: updatedColor
+        }
+      },
+      {
+        tabId: 'tab-1',
+        changes: {
+          shape: 'circle'
+        }
+      },
+      {
+        tabId: 'tab-1',
+        changes: {
+          width: updatedItem.width,
+          height: updatedItem.height
+        }
+      }
+    ]));
+  });
+
+  test('keeps pending envelopes across reload and marks them snapshotConfirmed after upload without uploading outbox metadata', async ({ page }) => {
+    const localSnapshot = addDurableCloudSyncMetadata(
+      buildLocalSnapshot('Reload Pending Note', { syncVersion: 6 }),
+      {
+        pending: false,
+        revision: 6,
+        lastCloudUploadedAt: TIMESTAMP
+      }
+    );
+    let capturedSaveBody = null;
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Reload Pending Note', 6),
+      onSave: async (body) => {
+        capturedSaveBody = body;
+        return {
+          status: 200,
+          body: { ok: true, version: 7, updatedAt: TIMESTAMP }
+        };
+      }
+    });
+
+    await page.goto('/index.html');
+    const note = page.locator('.grid-item[data-id="item-1"]');
+    await dragNoteBy(page, note, 90, 40);
+
+    let outbox = await readMutationOutbox(page);
+    expect(outbox.pendingCount).toBe(1);
+    const mutationIdBeforeReload = outbox.records[0].mutationId;
+
+    await page.reload();
+    outbox = await readMutationOutbox(page);
+    expect(outbox.pendingCount).toBe(1);
+    expect(outbox.records[0].mutationId).toBe(mutationIdBeforeReload);
+    expect(outbox.records[0].status).toBe('pending');
+
+    await page.locator('#syncStatusButton').click();
+    await page.locator('#syncNowButton').click();
+    await expect.poll(() => capturedSaveBody !== null).toBe(true);
+
+    outbox = await readMutationOutbox(page);
+    expect(outbox.pendingCount).toBe(0);
+    expect(outbox.snapshotConfirmedCount).toBe(1);
+    expect(outbox.records[0].mutationId).toBe(mutationIdBeforeReload);
+    expect(outbox.records[0].status).toBe('snapshotConfirmed');
+    LOCAL_ONLY_OUTBOX_KEYS.forEach((key) => {
+      expect(Object.prototype.hasOwnProperty.call(capturedSaveBody.data, key)).toBe(false);
+    });
+  });
+
+  test('snapshot conflict keeps retryable envelopes and excludes outbox metadata from the uploaded document payload', async ({ page }) => {
+    const localSnapshot = addDurableCloudSyncMetadata(
+      buildLocalSnapshot('Conflict Pending Note', { syncVersion: 6 }),
+      {
+        pending: false,
+        revision: 6,
+        lastCloudUploadedAt: TIMESTAMP
+      }
+    );
+    let capturedSaveBody = null;
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Conflict Pending Note', 6),
+      onSave: async (body) => {
+        capturedSaveBody = body;
+        return {
+          status: 409,
+          body: {
+            ok: false,
+            error: {
+              code: 'version_conflict',
+              currentVersion: 7,
+              message: 'forced version conflict'
+            }
+          }
+        };
+      }
+    });
+
+    await page.goto('/index.html');
+    await dragNoteBy(page, page.locator('.grid-item[data-id="item-1"]'), 70, 35);
+    await page.locator('#syncStatusButton').click();
+    await page.locator('#syncNowButton').click();
+    await expect.poll(() => capturedSaveBody !== null).toBe(true);
+
+    const outbox = await readMutationOutbox(page);
+    expect(outbox.pendingCount).toBe(1);
+    expect(outbox.snapshotConflictCount).toBe(1);
+    expect(outbox.records[0].status).toBe('snapshotConflict');
+    LOCAL_ONLY_OUTBOX_KEYS.forEach((key) => {
+      expect(Object.prototype.hasOwnProperty.call(capturedSaveBody.data, key)).toBe(false);
+    });
+  });
+
+  test('generates unique mutation ids across same-context tabs opened from the same starting counter', async ({ browser }) => {
+    const localSnapshot = addDurableCloudSyncMetadata(
+      buildEmptySnapshot({ hasRunBefore: true, theme: 'light', syncVersion: 6 }),
+      {
+        pending: false,
+        revision: 6,
+        lastCloudUploadedAt: TIMESTAMP
+      }
+    );
+    const context = await browser.newContext({
+      baseURL: TEST_BASE_URL,
+      serviceWorkers: 'block'
+    });
+
+    try {
+      await enableDynamicMockedSync(context, {
+        runtimeOverrides: {
+          isAuthenticated: true
+        },
+        getMetaPayload: () => ({
+          ok: true,
+          exists: true,
+          version: 6,
+          updatedAt: TIMESTAMP
+        }),
+        getDocumentPayload: () => buildServerSnapshotPayload(buildEmptySnapshot({ hasRunBefore: true, theme: 'light' }), 6),
+        onSave: async () => ({
+          status: 503,
+          body: { ok: false, error: { code: 'blocked_for_test', message: 'blocked for test' } }
+        })
+      });
+
+      const firstPage = await context.newPage();
+      await prepareBlankPage(firstPage);
+      await seedLocalStorage(firstPage, localSnapshot, 'owner-scope');
+      await seedIndexedDB(firstPage, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+
+      const secondPage = await context.newPage();
+      await Promise.all([
+        firstPage.goto('/index.html'),
+        secondPage.goto('/index.html')
+      ]);
+
+      await openNewNoteEditorAt(firstPage, { x: 720, y: 250 });
+      await openNewNoteEditorAt(secondPage, { x: 780, y: 300 });
+
+      const firstOutbox = await readMutationOutbox(firstPage);
+      const secondOutbox = await readMutationOutbox(secondPage);
+      const firstCreateId = firstOutbox.records.find((record) => record.operationType === 'CreateNode').mutationId;
+      const secondCreateId = secondOutbox.records.find((record) => record.operationType === 'CreateNode').mutationId;
+
+      expect(firstCreateId).not.toBe(secondCreateId);
+    } finally {
+      await context.close();
+    }
   });
 });
 
