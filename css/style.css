@@ -1390,6 +1390,7 @@ h1 {
 }
 
 .grid-item.viewport-recovery-flash {
+    outline: 3px solid var(--note-selected-outline);
     outline: 3px solid color-mix(in srgb, var(--note-selected-outline) 78%, #ffffff 22%);
     outline-offset: 4px;
     animation: viewportRecoveryPulse 1s ease-out 1;
@@ -1397,11 +1398,13 @@ h1 {
 
 @keyframes viewportRecoveryPulse {
     0% {
+        outline-color: var(--note-selected-outline);
         outline-color: color-mix(in srgb, var(--note-selected-outline) 88%, #ffffff 12%);
         outline-offset: 8px;
     }
 
     100% {
+        outline-color: var(--note-selected-outline);
         outline-color: color-mix(in srgb, var(--note-selected-outline) 68%, #ffffff 32%);
         outline-offset: 4px;
     }

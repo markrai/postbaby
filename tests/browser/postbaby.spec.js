@@ -734,6 +734,24 @@ async function readWindowScroll(page) {
   }));
 }
 
+async function readViewportRecoveryFootprint(page) {
+  return page.evaluate(() => {
+    const sizer = document.getElementById('viewportRecoverySizer');
+    const documentElement = document.documentElement;
+    const body = document.body;
+    return {
+      sizerLeft: sizer ? parseFloat(sizer.style.left || '0') : 0,
+      sizerTop: sizer ? parseFloat(sizer.style.top || '0') : 0,
+      scrollWidth: Math.max(documentElement.scrollWidth, body ? body.scrollWidth : 0),
+      scrollHeight: Math.max(documentElement.scrollHeight, body ? body.scrollHeight : 0),
+      scrollX: window.scrollX,
+      scrollY: window.scrollY,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight
+    };
+  });
+}
+
 async function readItemClientRect(page, itemId) {
   return page.locator(`.grid-item[data-id="${itemId}"]`).evaluate((element) => {
     const rect = element.getBoundingClientRect();
@@ -7613,6 +7631,49 @@ test.describe('Settings and Account UI', () => {
     expect(await readTabsSnapshot(page)).toEqual(afterEditSnapshot);
   });
 
+  test('Jump To Newest does not overwrite the session last edited note', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Last Edited Anchor', {
+        itemId: 'edited-item',
+        position: { top: '24px', left: '24px' }
+      }),
+      buildNoteItem('Newest Offscreen Note', {
+        itemId: 'newest-item',
+        position: { top: '2100px', left: '2400px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    await page.locator('.grid-item[data-id="edited-item"]').click();
+    await page.waitForTimeout(350);
+    const afterEditSnapshot = await readTabsSnapshot(page);
+
+    await openSettingsModal(page);
+    await page.locator('#jumpNewestItemButton').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+
+    await expect.poll(async () => {
+      const rect = await readItemClientRect(page, 'newest-item');
+      const viewport = await readWindowScroll(page);
+      return rect.left < viewport.width && rect.right > 0 && rect.top < viewport.height && rect.bottom > 0;
+    }).toBe(true);
+
+    await openSettingsModal(page);
+    await page.locator('#jumpLastEditedItemButton').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+
+    await expect.poll(async () => {
+      const rect = await readItemClientRect(page, 'edited-item');
+      const viewport = await readWindowScroll(page);
+      return rect.left < viewport.width && rect.right > 0 && rect.top < viewport.height && rect.bottom > 0;
+    }).toBe(true);
+
+    expect(await readTabsSnapshot(page)).toEqual(afterEditSnapshot);
+  });
+
   test('Recovery controls show safe toasts when the active tab has no notes', async ({ page }) => {
     await prepareBlankPage(page);
     await seedLocalStorage(page, buildEmptySnapshot());
@@ -7632,6 +7693,128 @@ test.describe('Settings and Account UI', () => {
 
     const tabsSnapshot = await readTabsSnapshot(page);
     expect(tabsSnapshot[0].items || []).toHaveLength(0);
+  });
+
+  test('deleting far-away content shrinks the recovery footprint and clears stale last-edited state', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Near Survivor', {
+        itemId: 'near-item',
+        position: { top: '24px', left: '24px' }
+      }),
+      buildNoteItem('Far Deleted Note', {
+        itemId: 'far-item',
+        position: { top: '2400px', left: '2600px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const beforeNearPosition = await readItemPositionsById(page, ['near-item']);
+    const beforeFootprint = await readViewportRecoveryFootprint(page);
+
+    await openSettingsModal(page);
+    await page.locator('#showAllItemsButton').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+
+    const farNote = page.locator('.grid-item[data-id="far-item"]');
+    await expect(farNote).toBeVisible();
+    await farNote.click();
+    await page.waitForTimeout(350);
+    await farNote.click({ button: 'right' });
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    await page.click('#confirmDelete');
+    await expect(farNote).toHaveCount(0);
+
+    await expect.poll(async () => {
+      const footprint = await readViewportRecoveryFootprint(page);
+      return footprint.sizerLeft <= beforeFootprint.sizerLeft - 1000
+        && footprint.sizerTop <= beforeFootprint.sizerTop - 1000;
+    }).toBe(true);
+
+    expect(await readItemPositionsById(page, ['near-item'])).toEqual(beforeNearPosition);
+
+    await openSettingsModal(page);
+    await page.locator('#jumpLastEditedItemButton').click();
+    await expect(page.locator('.toast').last()).toContainText('No edited note found yet in this tab.');
+  });
+
+  test('switching tabs keeps viewport recovery scoped to the active tab only', async ({ page }) => {
+    const localSnapshot = {
+      tabs: JSON.stringify([
+        {
+          id: 'tab-1',
+          name: '1',
+          items: [
+            buildNoteItem('Tab One Far Note', {
+              itemId: 'tab-one-far',
+              position: { top: '2200px', left: '2500px' }
+            })
+          ],
+          colorIndex: 0,
+          gridSetting: 'none',
+          edges: []
+        },
+        {
+          id: 'tab-2',
+          name: '2',
+          items: [
+            buildNoteItem('Tab Two Near Note', {
+              itemId: 'tab-two-near',
+              position: { top: '24px', left: '24px' }
+            })
+          ],
+          colorIndex: 0,
+          gridSetting: 'none',
+          edges: []
+        }
+      ]),
+      activeTabId: 'tab-1',
+      hasRunBefore: 'true',
+      theme: 'light'
+    };
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    await openSettingsModal(page);
+    await page.locator('#showAllItemsButton').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+
+    await expect.poll(async () => {
+      const rect = await readItemClientRect(page, 'tab-one-far');
+      const viewport = await readWindowScroll(page);
+      return rect.left < viewport.width && rect.right > 0 && rect.top < viewport.height && rect.bottom > 0;
+    }).toBe(true);
+
+    await page.locator('.tab[data-tab-id="tab-2"]').click();
+    await expectNoteVisible(page, 'Tab Two Near Note');
+
+    await expect.poll(async () => {
+      const footprint = await readViewportRecoveryFootprint(page);
+      return footprint.sizerLeft <= footprint.viewportWidth + 1000
+        && footprint.sizerTop <= footprint.viewportHeight + 1200
+        && footprint.scrollX < 400
+        && footprint.scrollY < 400;
+    }).toBe(true);
+
+    await page.locator('.tab[data-tab-id="tab-1"]').click();
+    await expect.poll(async () => {
+      const footprint = await readViewportRecoveryFootprint(page);
+      return footprint.sizerLeft > footprint.viewportWidth + 1000
+        && footprint.sizerTop > footprint.viewportHeight + 1000;
+    }).toBe(true);
+    await openSettingsModal(page);
+    await page.locator('#showAllItemsButton').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+
+    await expect.poll(async () => {
+      const rect = await readItemClientRect(page, 'tab-one-far');
+      const viewport = await readWindowScroll(page);
+      return rect.left < viewport.width && rect.right > 0 && rect.top < viewport.height && rect.bottom > 0;
+    }).toBe(true);
   });
 
   test('Show All Notes recovers graph-created notes without rewriting stored positions', async ({ page }) => {
@@ -7665,6 +7848,14 @@ test.describe('Settings and Account UI', () => {
     }).toBe(true);
 
     expect(await readItemPositionsById(page, graphResult.createdItemIds)).toEqual(beforePositions);
+
+    const graphSource = page.locator(`.grid-item[data-id="${graphResult.createdItemIds[0]}"]`);
+    await dragNoteBy(page, graphSource, 90, 45);
+    await page.waitForTimeout(350);
+    await expect(page.locator('.edge-line')).toHaveCount(1);
+    expect(await readEdgePresentation(page.locator('.edge-line').first())).toMatchObject({
+      markerEnd: expect.stringMatching(/^url\(#.+-arrow\)$/)
+    });
   });
 
   test('Jump To Newest recovers Mermaid-created notes without rewriting stored positions', async ({ page }) => {
@@ -7696,6 +7887,113 @@ test.describe('Settings and Account UI', () => {
     }).toBe(true);
 
     expect(await readItemPositionsById(page, mermaidResult.createdItemIds)).toEqual(beforePositions);
+
+    const mermaidSource = page.locator(`.grid-item[data-id="${mermaidResult.createdItemIds[0]}"]`);
+    await dragNoteBy(page, mermaidSource, 80, 40);
+    await page.waitForTimeout(350);
+    await expect(page.locator('.edge-line')).toHaveCount(1);
+    expect(await readEdgePresentation(page.locator('.edge-line').first())).toMatchObject({
+      markerEnd: expect.stringMatching(/^url\(#.+-arrow\)$/)
+    });
+  });
+
+  test('Show All Notes recovery leaves manual note creation, drag, resize, and edge creation usable', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Recovered Source', {
+        itemId: 'source-item',
+        position: { top: '2100px', left: '2200px' }
+      }),
+      buildNoteItem('Recovered Target', {
+        itemId: 'target-item',
+        position: { top: '2280px', left: '2520px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    await openSettingsModal(page);
+    await page.locator('#showAllItemsButton').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+
+    const sourceNote = page.locator('.grid-item[data-id="source-item"]');
+    const targetNote = page.locator('.grid-item[data-id="target-item"]');
+    const beforeSource = await readItemSnapshot(page, 'source-item');
+    const beforeTarget = await readItemSnapshot(page, 'target-item');
+
+    await dragNoteBy(page, sourceNote, 120, 60);
+    await page.waitForTimeout(350);
+    const afterSource = await readItemSnapshot(page, 'source-item');
+    expect(afterSource.position).not.toEqual(beforeSource.position);
+
+    await resizeNoteBy(page, targetNote, 90, 50);
+    await page.waitForTimeout(350);
+    const afterTarget = await readItemSnapshot(page, 'target-item');
+    expect(afterTarget.width).not.toBe(beforeTarget.width);
+    expect(afterTarget.height).not.toBe(beforeTarget.height);
+
+    await drawEdgeBetweenNotes(page, sourceNote, targetNote, { modifier: 'Control' });
+    await expect(page.locator('.edge-line')).toHaveCount(1);
+
+    const grid = page.locator('.grid-container').first();
+    await grid.evaluate((element) => {
+      element.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        button: 2,
+        clientX: 900,
+        clientY: 320
+      }));
+    });
+
+    const textarea = page.locator('textarea.edit-textarea');
+    await expect(textarea).toBeVisible();
+    await textarea.fill('Manual Note After Recovery');
+    await textarea.press('Escape');
+    await expectNoteVisible(page, 'Manual Note After Recovery');
+  });
+
+  test('clearing far-away graph-created content shrinks the recovery footprint after recovery', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    const graphResult = await createGraphForTest(page, buildNormalizedGraph([
+      buildGraphNode('A', { label: 'Graph Clear A' }),
+      buildGraphNode('B', { label: 'Graph Clear B' })
+    ], [
+      buildGraphEdge('A', 'B', { kind: 'arrow' })
+    ], {
+      originX: 2500,
+      originY: 2200,
+      direction: 'LR'
+    }));
+
+    expect(graphResult.ok).toBe(true);
+    const beforeFootprint = await readViewportRecoveryFootprint(page);
+
+    await openSettingsModal(page);
+    await page.locator('#showAllItemsButton').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+
+    await expect.poll(async () => {
+      const rect = await readItemClientRect(page, graphResult.createdItemIds[0]);
+      const viewport = await readWindowScroll(page);
+      return rect.left < viewport.width && rect.right > 0 && rect.top < viewport.height && rect.bottom > 0;
+    }).toBe(true);
+
+    await page.keyboard.press('c');
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    await page.click('#confirmDelete');
+    await page.waitForLoadState('domcontentloaded');
+    await expect(page.locator('.grid-item')).toHaveCount(0);
+
+    await expect.poll(async () => {
+      const footprint = await readViewportRecoveryFootprint(page);
+      return footprint.sizerLeft <= beforeFootprint.sizerLeft - 1000
+        && footprint.sizerTop <= beforeFootprint.sizerTop - 1000;
+    }).toBe(true);
   });
 
   test('import and export still work from Settings', async ({ page }) => {
