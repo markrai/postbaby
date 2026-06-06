@@ -4651,6 +4651,64 @@ test.describe('Static behavior', () => {
     expect(await readItemPositionsById(page, ['control-fit-note'])).toEqual(beforePositions);
   });
 
+  test('0 and f camera keyboard shortcuts work even when top-right chrome has focus', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Keyboard Fit Note', {
+        itemId: 'keyboard-fit-note',
+        position: { top: '2280px', left: '2440px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    await setCamera(page, { x: 900, y: 800, zoom: 1.5 });
+    await page.locator('#settingsButton').focus();
+    await page.keyboard.press('0');
+    expect(await readCamera(page)).toEqual(DEFAULT_CAMERA);
+
+    await setCamera(page, { x: 1200, y: 1000, zoom: 2 });
+    await page.locator('#canvasModeToggleButton').focus();
+    await page.keyboard.press('f');
+    const afterFitCamera = await readCamera(page);
+    expect(afterFitCamera).not.toEqual({ x: 1200, y: 1000, zoom: 2 });
+  });
+
+  test('grid underlay and labels render below notes in the stacking order', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Grid Stack Note', {
+      position: { top: '180px', left: '220px' }
+    });
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    await openSettingsModal(page);
+    await page.locator('#useGrids').selectOption('kanban');
+    await page.locator('.close-settings').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+
+    const stacking = await page.evaluate(() => {
+      const tabContent = document.getElementById('tabContent');
+      const gridUnderlay = document.getElementById('gridUnderlay');
+      const note = document.querySelector('.grid-item[data-id="item-1"]');
+      if (!tabContent || !gridUnderlay || !note) {
+        throw new Error('Expected tab content, grid underlay, and note to exist.');
+      }
+
+      return {
+        tabContentZ: window.getComputedStyle(tabContent).zIndex,
+        gridUnderlayZ: window.getComputedStyle(gridUnderlay).zIndex,
+        noteZ: window.getComputedStyle(note).zIndex
+      };
+    });
+
+    expect(stacking.tabContentZ).toBe('1');
+    expect(stacking.gridUnderlayZ).toBe('0');
+    expect(stacking.noteZ).toBe('2');
+  });
+
   test('top-right hand toggle persists browser-locally and empty-canvas drag pans only in hand mode', async ({ page }) => {
     const localSnapshot = buildLocalSnapshotWithItems([
       buildNoteItem('Mode Toggle Note', {

@@ -5,7 +5,7 @@
     left: 0;
     width: 100%;
     height: calc(100% - 50px); /* Adjust to exclude Tab Bar */
-    z-index: 1;
+    z-index: 0;
     pointer-events: none;
     background-repeat: no-repeat;
     background-size: 100% 100%;
@@ -37,7 +37,7 @@
     width: 100%;
     height: calc(100% - 50px);
     pointer-events: none;
-    z-index: 1;
+    z-index: 0;
 }
 
 .grid-eisenhower::before,
@@ -69,7 +69,7 @@
     width: 100%;
     height: calc(100% - 50px);
     pointer-events: none;
-    z-index: 1;
+    z-index: 0;
 }
 
 .grid-priority::before,
@@ -128,7 +128,7 @@
     height: calc(100% - 50px); /* Exclude Tab Bar height */
     display: none; /* Hidden by default */
     grid-template-columns: repeat(4, 1fr); /* Four equal columns */
-    z-index: 1; /* Same as #gridUnderlay */
+    z-index: 0; /* Same as #gridUnderlay */
     pointer-events: none;
 }
 
@@ -183,7 +183,7 @@
     width: 100%;
     height: calc(100% - 50px);
     pointer-events: none;
-    z-index: 1;
+    z-index: 0;
 }
 
 .grid-label-eisenhower span {
@@ -224,7 +224,7 @@
     width: 100%;
     height: calc(100% - 50px);
     pointer-events: none;
-    z-index: 1;
+    z-index: 0;
 }
 
 /* Do First Section */
@@ -282,7 +282,7 @@
     display: none; /* Hidden by default */
     grid-template-columns: repeat(1, 1fr); /* Single column */
     grid-template-rows: repeat(5, 1fr); /* Five rows for each SMART goal */
-    z-index: 1; /* Same as #gridUnderlay */
+    z-index: 0; /* Same as #gridUnderlay */
     pointer-events: none; /* Allows interactions through the labels */
 }
 
@@ -336,7 +336,7 @@
     width: 100%;
     height: calc(100% - 50px);
     pointer-events: none;
-    z-index: 1;
+    z-index: 0;
     background-color: transparent; /* Ensure no background color interferes */
 }
 
@@ -375,7 +375,7 @@
     width: 100%;
     height: calc(100% - 50px);
     pointer-events: none;
-    z-index: 1;
+    z-index: 0;
 }
 
 /* Individual SWOT Grid Labels */
@@ -426,7 +426,7 @@
     width: 100%;
     height: calc(100% - 50px);
     pointer-events: none;
-    z-index: 1; /* Above other grid labels but below tabBar */
+    z-index: 0; /* Above other grid labels but below tabBar */
 }
 
 .grid-nowlater::before {
@@ -450,7 +450,7 @@
     width: 100%;
     height: calc(100% - 50px);
     pointer-events: none;
-    z-index: 1; /* Below Tab Bar (z-index: 2) */
+    z-index: 0; /* Below Tab Bar (z-index: 2) */
 }
 
 /* Show Now & Later labels when Now & Later grid is active */
@@ -494,7 +494,7 @@
     width: 100%;
     height: calc(100% - 50px);
     pointer-events: none;
-    z-index: 1;
+    z-index: 0;
 }
 
 /* Individual Week Grid Labels */
@@ -542,7 +542,7 @@
     justify-content: space-between;
     padding: 10px 0;
     pointer-events: none;
-    z-index: 1;
+    z-index: 0;
 }
 
 .grid-time-label {
@@ -585,7 +585,7 @@
     left: 0;
     top: 0;
     pointer-events: none;
-    z-index: 1;
+    z-index: 0;
 }
 
 .week-hour-line {

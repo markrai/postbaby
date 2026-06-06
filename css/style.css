@@ -979,7 +979,7 @@ body {
     height: calc(100% - 50px); /* Adjust to exclude the Tab Bar */
     display: grid;
     grid-template-columns: repeat(4, 1fr); /* Four equal columns */
-    z-index: 1; /* Same as #gridUnderlay */
+    z-index: 0; /* Below #tabContent and notes */
     pointer-events: none; /* Allows interactions through the labels */
 }
 
