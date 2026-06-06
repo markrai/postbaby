@@ -130,6 +130,15 @@
     display: block;
 }
 
+.top-app-canvas-mode-button {
+    position: relative;
+}
+
+.top-app-canvas-mode-button[aria-pressed="true"] {
+    border-color: color-mix(in srgb, #2a7de1 62%, var(--border-tab-bar));
+    background-color: color-mix(in srgb, var(--bg-tab) 82%, #cfe0ff);
+}
+
 .top-app-sync-button[data-sync-state="synced"] {
     border-color: color-mix(in srgb, #2f9d62 62%, var(--border-tab-bar));
 }

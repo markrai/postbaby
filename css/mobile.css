@@ -54,7 +54,7 @@
         top: 8px;
         right: 8px;
         gap: 6px;
-        max-width: min(132px, calc(100vw - 180px));
+        max-width: min(174px, calc(100vw - 150px));
     }
 
     .top-app-control-button {

@@ -861,6 +861,24 @@ async function setCamera(page, camera, tabId = null) {
   });
 }
 
+async function readCanvasMode(page) {
+  return page.evaluate(() => {
+    if (typeof window.postbabyGetCanvasModeForTest !== 'function') {
+      throw new Error('postbabyGetCanvasModeForTest is not available.');
+    }
+    return window.postbabyGetCanvasModeForTest();
+  });
+}
+
+async function setCanvasMode(page, mode) {
+  return page.evaluate((nextMode) => {
+    if (typeof window.postbabySetCanvasModeForTest !== 'function') {
+      throw new Error('postbabySetCanvasModeForTest is not available.');
+    }
+    return window.postbabySetCanvasModeForTest(nextMode);
+  }, mode);
+}
+
 async function resetCamera(page, tabId = null) {
   return page.evaluate((resolvedTabId) => {
     if (typeof window.postbabyResetCameraForTest !== 'function') {
@@ -980,7 +998,7 @@ async function readItemClientRect(page, itemId) {
 }
 
 async function dispatchWheelEvent(page, selector, options = {}) {
-  await page.locator(selector).evaluate((element, wheelOptions) => {
+  return page.locator(selector).evaluate((element, wheelOptions) => {
     const rect = element.getBoundingClientRect();
     const clientX = Number.isFinite(wheelOptions.clientX)
       ? wheelOptions.clientX
@@ -988,7 +1006,7 @@ async function dispatchWheelEvent(page, selector, options = {}) {
     const clientY = Number.isFinite(wheelOptions.clientY)
       ? wheelOptions.clientY
       : rect.top + (rect.height / 2);
-    element.dispatchEvent(new WheelEvent('wheel', {
+    const wheelEvent = new WheelEvent('wheel', {
       bubbles: true,
       cancelable: wheelOptions.cancelable !== false,
       deltaX: wheelOptions.deltaX || 0,
@@ -999,12 +1017,17 @@ async function dispatchWheelEvent(page, selector, options = {}) {
       shiftKey: wheelOptions.shiftKey === true,
       clientX,
       clientY
-    }));
+    });
+    const dispatchResult = element.dispatchEvent(wheelEvent);
+    return {
+      defaultPrevented: wheelEvent.defaultPrevented,
+      canceled: dispatchResult === false
+    };
   }, options);
 }
 
 async function dispatchWorkspaceWheel(page, options = {}) {
-  await dispatchWheelEvent(page, '#tabContent', options);
+  return dispatchWheelEvent(page, '#tabContent', options);
 }
 
 async function readCameraControlsState(page) {
@@ -1023,6 +1046,21 @@ async function readCameraControlsState(page) {
       zoomInDisabled: zoomIn ? zoomIn.disabled : null,
       fitDisabled: fitAll ? fitAll.disabled : null,
       insideGrid: Boolean(controls && grid && grid.contains(controls))
+    };
+  });
+}
+
+async function readCanvasModeToggleState(page) {
+  return page.evaluate(() => {
+    const button = document.getElementById('canvasModeToggleButton');
+    const grid = document.querySelector('.tab-pane.active .grid-container');
+    return {
+      hidden: !button || button.hidden,
+      insideGrid: Boolean(button && grid && grid.contains(button)),
+      pressed: button ? button.getAttribute('aria-pressed') : null,
+      label: button ? button.getAttribute('aria-label') : '',
+      title: button ? button.getAttribute('title') : '',
+      storageValue: window.localStorage.getItem('postbabyCanvasMode')
     };
   });
 }
@@ -4363,14 +4401,17 @@ test.describe('Static behavior', () => {
     expect(helperResult.clampedZoomHigh).toBe(MAX_ZOOM);
   });
 
-  test('camera state stays per-tab, unsynced, and memory-only across reloads', async ({ page }) => {
+  test('camera state stays per-tab and memory-only while canvas mode persists browser-locally across reloads', async ({ page }) => {
     await prepareBlankPage(page);
     await seedLocalStorage(page, buildEmptySnapshot());
     await page.goto('/index.html');
 
+    expect(await readCanvasMode(page)).toBe('select');
     expect(await readCamera(page)).toEqual(DEFAULT_CAMERA);
     await setCamera(page, { x: 420, y: 360, zoom: 1.75 });
+    await setCanvasMode(page, 'pan');
     expect(await readCamera(page)).toEqual({ x: 420, y: 360, zoom: 1.75 });
+    expect(await readCanvasMode(page)).toBe('pan');
 
     await page.click('#addTab');
     const newestTabId = await page.locator('#tabBar .tab[data-tab-id]').last().getAttribute('data-tab-id');
@@ -4387,12 +4428,15 @@ test.describe('Static behavior', () => {
     expect(JSON.stringify(tabsSnapshot)).not.toContain('"viewport"');
     expect(JSON.stringify(tabsSnapshot)).not.toContain('"pan"');
     expect(JSON.stringify(tabsSnapshot)).not.toContain('"zoom"');
+    expect(JSON.stringify(tabsSnapshot)).not.toContain('"canvasMode"');
+    expect(await page.evaluate(() => window.localStorage.getItem('postbabyCanvasMode'))).toBe('pan');
 
     await page.reload();
     expect(await readCamera(page)).toEqual(DEFAULT_CAMERA);
+    expect(await readCanvasMode(page)).toBe('pan');
   });
 
-  test('space-drag pan and Shift+wheel zoom update camera without mutating stored note positions', async ({ page }) => {
+  test('space-drag pan and Shift+wheel horizontal pan update camera without mutating stored note positions', async ({ page }) => {
     const localSnapshot = buildLocalSnapshotWithItems([
       buildNoteItem('Camera Pan Note', {
         itemId: 'camera-pan-note',
@@ -4424,23 +4468,20 @@ test.describe('Static behavior', () => {
     expect(afterPanCamera.y).toBeLessThan(0);
     expect(await readItemPositionsById(page, ['camera-pan-note'])).toEqual(beforePositions);
 
-    await page.locator('#tabContent').evaluate((element) => {
-      element.dispatchEvent(new WheelEvent('wheel', {
-        bubbles: true,
-        cancelable: true,
-        deltaY: -120,
-        shiftKey: true,
-        clientX: element.getBoundingClientRect().left + (element.clientWidth / 2),
-        clientY: element.getBoundingClientRect().top + (element.clientHeight / 2)
-      }));
+    const shiftPanResult = await dispatchWorkspaceWheel(page, {
+      deltaY: 140,
+      shiftKey: true
     });
+    expect(shiftPanResult.defaultPrevented).toBe(true);
+    expect(shiftPanResult.canceled).toBe(true);
 
-    const afterZoomCamera = await readCamera(page);
-    expect(afterZoomCamera.zoom).toBeGreaterThan(afterPanCamera.zoom);
+    const afterShiftPanCamera = await readCamera(page);
+    expect(afterShiftPanCamera.x).toBeGreaterThan(afterPanCamera.x);
+    expect(afterShiftPanCamera.y).toBeCloseTo(afterPanCamera.y, 3);
     expect(await readItemPositionsById(page, ['camera-pan-note'])).toEqual(beforePositions);
   });
 
-  test('ordinary wheel and trackpad-style wheel deltas pan the active camera without mutating note positions', async ({ page }) => {
+  test('ordinary wheel, tilt-style deltaX, and Shift+wheel horizontal pan update only camera state', async ({ page }) => {
     const localSnapshot = buildLocalSnapshotWithItems([
       buildNoteItem('Wheel Pan Note', {
         itemId: 'wheel-pan-note',
@@ -4453,19 +4494,33 @@ test.describe('Static behavior', () => {
     await page.goto('/index.html');
 
     const beforePositions = await readItemPositionsById(page, ['wheel-pan-note']);
-    await dispatchWorkspaceWheel(page, { deltaY: 180 });
+    const verticalPanResult = await dispatchWorkspaceWheel(page, { deltaY: 180 });
+    expect(verticalPanResult.defaultPrevented).toBe(true);
+    expect(verticalPanResult.canceled).toBe(true);
     const afterVerticalPan = await readCamera(page);
     expect(afterVerticalPan.y).toBeGreaterThan(0);
     expect(afterVerticalPan.zoom).toBe(1);
 
-    await dispatchWorkspaceWheel(page, { deltaX: 120, deltaY: 80 });
+    const trackpadPanResult = await dispatchWorkspaceWheel(page, { deltaX: 120, deltaY: 80 });
+    expect(trackpadPanResult.defaultPrevented).toBe(true);
+    expect(trackpadPanResult.canceled).toBe(true);
     const afterTrackpadPan = await readCamera(page);
     expect(afterTrackpadPan.x).toBeGreaterThan(afterVerticalPan.x);
     expect(afterTrackpadPan.y).toBeGreaterThan(afterVerticalPan.y);
+
+    const shiftHorizontalPanResult = await dispatchWorkspaceWheel(page, {
+      deltaY: 160,
+      shiftKey: true
+    });
+    expect(shiftHorizontalPanResult.defaultPrevented).toBe(true);
+    expect(shiftHorizontalPanResult.canceled).toBe(true);
+    const afterShiftHorizontalPan = await readCamera(page);
+    expect(afterShiftHorizontalPan.x).toBeGreaterThan(afterTrackpadPan.x);
+    expect(afterShiftHorizontalPan.y).toBeCloseTo(afterTrackpadPan.y, 3);
     expect(await readItemPositionsById(page, ['wheel-pan-note'])).toEqual(beforePositions);
   });
 
-  test('wheel over edit textareas and settings modals does not pan the camera', async ({ page }) => {
+  test('wheel over edit textareas, settings modals, and top-right chrome does not pan or zoom the camera', async ({ page }) => {
     const localSnapshot = buildLocalSnapshotWithItems([
       buildNoteItem('Protected Wheel Note', {
         itemId: 'protected-wheel-note',
@@ -4488,9 +4543,13 @@ test.describe('Static behavior', () => {
     const beforeModalWheelCamera = await readCamera(page);
     await dispatchWheelEvent(page, '#settingsModal', { deltaY: 240 });
     expect(await readCamera(page)).toEqual(beforeModalWheelCamera);
+
+    const beforeChromeWheelCamera = await readCamera(page);
+    await dispatchWheelEvent(page, '#canvasModeToggleButton', { deltaY: 240, shiftKey: true });
+    expect(await readCamera(page)).toEqual(beforeChromeWheelCamera);
   });
 
-  test('Ctrl-wheel zoom, Shift-wheel zoom, and visible camera controls update only camera state', async ({ page }) => {
+  test('Ctrl-wheel zoom, Ctrl+Shift-wheel precedence, and visible camera controls update only camera state', async ({ page }) => {
     const localSnapshot = buildLocalSnapshotWithItems([
       buildNoteItem('Control Fit Note', {
         itemId: 'control-fit-note',
@@ -4523,12 +4582,14 @@ test.describe('Static behavior', () => {
       );
     }, anchorPoint);
 
-    await dispatchWorkspaceWheel(page, {
+    const ctrlZoomResult = await dispatchWorkspaceWheel(page, {
       deltaY: -180,
       ctrlKey: true,
       clientX: anchorPoint.clientX,
       clientY: anchorPoint.clientY
     });
+    expect(ctrlZoomResult.defaultPrevented).toBe(true);
+    expect(ctrlZoomResult.canceled).toBe(true);
     const afterCtrlZoomCamera = await readCamera(page);
     expect(afterCtrlZoomCamera.zoom).toBeGreaterThan(1);
 
@@ -4544,14 +4605,17 @@ test.describe('Static behavior', () => {
     expect(worldAfterCtrlZoom.x).toBeCloseTo(worldBeforeZoom.x, 1);
     expect(worldAfterCtrlZoom.y).toBeCloseTo(worldBeforeZoom.y, 1);
 
-    await dispatchWorkspaceWheel(page, {
+    const ctrlShiftZoomResult = await dispatchWorkspaceWheel(page, {
       deltaY: -120,
+      ctrlKey: true,
       shiftKey: true,
       clientX: anchorPoint.clientX,
       clientY: anchorPoint.clientY
     });
-    const afterShiftZoomCamera = await readCamera(page);
-    expect(afterShiftZoomCamera.zoom).toBeGreaterThan(afterCtrlZoomCamera.zoom);
+    expect(ctrlShiftZoomResult.defaultPrevented).toBe(true);
+    expect(ctrlShiftZoomResult.canceled).toBe(true);
+    const afterCtrlShiftZoomCamera = await readCamera(page);
+    expect(afterCtrlShiftZoomCamera.zoom).toBeGreaterThan(afterCtrlZoomCamera.zoom);
 
     const controlsBeforeFit = await readCameraControlsState(page);
     expect(controlsBeforeFit.hidden).toBe(false);
@@ -4575,6 +4639,74 @@ test.describe('Static behavior', () => {
     const controlsAfterReset = await readCameraControlsState(page);
     expect(controlsAfterReset.text).toBe('100%');
     expect(await readItemPositionsById(page, ['control-fit-note'])).toEqual(beforePositions);
+  });
+
+  test('top-right hand toggle persists browser-locally and empty-canvas drag pans only in hand mode', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Mode Toggle Note', {
+        itemId: 'mode-toggle-note',
+        position: { top: '360px', left: '520px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const initialToggleState = await readCanvasModeToggleState(page);
+    expect(initialToggleState.hidden).toBe(false);
+    expect(initialToggleState.insideGrid).toBe(false);
+    expect(initialToggleState.pressed).toBe('false');
+    expect(initialToggleState.label).toContain('Canvas mode: Select');
+    expect(initialToggleState.storageValue).toBe('select');
+
+    const workspaceBox = await page.locator('#tabContent').boundingBox();
+    if (!workspaceBox) {
+      throw new Error('Workspace viewport bounding box was not available.');
+    }
+
+    const blankStartX = Math.round(workspaceBox.x + workspaceBox.width - 220);
+    const blankStartY = Math.round(workspaceBox.y + workspaceBox.height - 180);
+    await page.mouse.move(blankStartX, blankStartY);
+    await page.mouse.down();
+    await page.mouse.move(blankStartX + 80, blankStartY + 60, { steps: 6 });
+    await expect(page.locator('.grid-selection-marquee')).toHaveCount(1);
+    await page.mouse.up();
+    await expect(page.locator('.grid-selection-marquee')).toHaveCount(0);
+
+    const beforePanModeCamera = await readCamera(page);
+    await page.click('#canvasModeToggleButton');
+    const panToggleState = await readCanvasModeToggleState(page);
+    expect(panToggleState.pressed).toBe('true');
+    expect(panToggleState.label).toContain('Canvas mode: Hand pan');
+    expect(panToggleState.storageValue).toBe('pan');
+    expect(await readCanvasMode(page)).toBe('pan');
+
+    await page.mouse.move(blankStartX, blankStartY);
+    await page.mouse.down();
+    await page.mouse.move(blankStartX + 120, blankStartY + 70, { steps: 8 });
+    await expect(page.locator('.grid-selection-marquee')).toHaveCount(0);
+    await page.mouse.up();
+    const afterPanModeCamera = await readCamera(page);
+    expect(afterPanModeCamera.x).toBeLessThan(beforePanModeCamera.x);
+    expect(afterPanModeCamera.y).toBeLessThan(beforePanModeCamera.y);
+
+    const noteBeforeDrag = await readItemPositionViaGeometryDom(page, 'mode-toggle-note');
+    await dragNoteBy(page, page.locator('.grid-item[data-id="mode-toggle-note"]'), 90, 40);
+    await page.waitForTimeout(250);
+    const noteAfterDrag = await readItemPositionViaGeometryDom(page, 'mode-toggle-note');
+    expect(noteAfterDrag.x).toBe(noteBeforeDrag.x + 90);
+    expect(noteAfterDrag.y).toBe(noteBeforeDrag.y + 40);
+
+    await page.reload();
+    expect(await readCamera(page)).toEqual(DEFAULT_CAMERA);
+    expect(await readCanvasMode(page)).toBe('pan');
+    const reloadedToggleState = await readCanvasModeToggleState(page);
+    expect(reloadedToggleState.pressed).toBe('true');
+
+    await page.click('#canvasModeToggleButton');
+    expect(await readCanvasMode(page)).toBe('select');
+    expect(await page.evaluate(() => window.localStorage.getItem('postbabyCanvasMode'))).toBe('select');
   });
 
   test('two-pointer touch pinch pans and zooms the camera without mutating item positions and cleans up on cancel', async ({ page }) => {
@@ -8077,12 +8209,13 @@ test.describe('Settings and Account UI', () => {
     await expect(page.locator('.grid-item[data-id="item-1"]')).toHaveCount(0);
   });
 
-  test('static UI shows only gear and includes the local-only settings note', async ({ page }) => {
+  test('static UI shows the gear plus the hand/select toggle and includes the local-only settings note', async ({ page }) => {
     await prepareBlankPage(page);
     await page.goto('/index.html');
 
     await expect(page.locator('#settingsButton .top-app-settings-icon')).toBeVisible();
-    await expect(page.locator('#topAppControls button:visible')).toHaveCount(1);
+    await expect(page.locator('#canvasModeToggleButton')).toBeVisible();
+    await expect(page.locator('#topAppControls button:visible')).toHaveCount(2);
     await expect(page.locator('#accountButton')).toBeHidden();
 
     await openSettingsModal(page);
