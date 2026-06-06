@@ -10,6 +10,9 @@ const EDGE_ARM_DELAY_MS = 1000;
 const EDGE_ARROW_TARGET_INSET = 2;
 const MIN_CANVAS_COORD = -100000;
 const MAX_CANVAS_COORD = 100000;
+const DEFAULT_CAMERA = { x: 0, y: 0, zoom: 1 };
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 3;
 const MAX_ITEMS_PER_TAB = 500;
 const MAX_EDGES_PER_TAB = 2000;
 const MAX_ITEM_TEXT_CHARS = 4000;
@@ -802,6 +805,7 @@ async function readWindowScroll(page) {
 async function readWorkspaceScroll(page) {
   return page.evaluate(() => {
     const workspace = document.getElementById('tabContent');
+    const cameraHook = window.postbabyGetCameraForTest;
     if (!workspace) {
       return {
         x: 0,
@@ -810,6 +814,18 @@ async function readWorkspaceScroll(page) {
         height: window.innerHeight,
         scrollWidth: window.innerWidth,
         scrollHeight: window.innerHeight
+      };
+    }
+
+    if (typeof cameraHook === 'function') {
+      const camera = cameraHook();
+      return {
+        x: camera.x,
+        y: camera.y,
+        width: workspace.clientWidth,
+        height: workspace.clientHeight,
+        scrollWidth: workspace.clientWidth,
+        scrollHeight: workspace.clientHeight
       };
     }
 
@@ -824,8 +840,55 @@ async function readWorkspaceScroll(page) {
   });
 }
 
+async function readCamera(page, tabId = null) {
+  return page.evaluate((resolvedTabId) => {
+    if (typeof window.postbabyGetCameraForTest !== 'function') {
+      throw new Error('postbabyGetCameraForTest is not available.');
+    }
+    return window.postbabyGetCameraForTest(resolvedTabId);
+  }, tabId);
+}
+
+async function setCamera(page, camera, tabId = null) {
+  return page.evaluate(({ nextCamera, resolvedTabId }) => {
+    if (typeof window.postbabySetCameraForTest !== 'function') {
+      throw new Error('postbabySetCameraForTest is not available.');
+    }
+    return window.postbabySetCameraForTest(nextCamera, resolvedTabId);
+  }, {
+    nextCamera: camera,
+    resolvedTabId: tabId
+  });
+}
+
+async function resetCamera(page, tabId = null) {
+  return page.evaluate((resolvedTabId) => {
+    if (typeof window.postbabyResetCameraForTest !== 'function') {
+      throw new Error('postbabyResetCameraForTest is not available.');
+    }
+    return window.postbabyResetCameraForTest(resolvedTabId);
+  }, tabId);
+}
+
+async function centerCameraOnWorldPoint(page, x, y, tabId = null) {
+  return page.evaluate(({ worldX, worldY, resolvedTabId }) => {
+    if (typeof window.postbabyCenterCameraOnWorldPointForTest !== 'function') {
+      throw new Error('postbabyCenterCameraOnWorldPointForTest is not available.');
+    }
+    return window.postbabyCenterCameraOnWorldPointForTest(worldX, worldY, resolvedTabId);
+  }, {
+    worldX: x,
+    worldY: y,
+    resolvedTabId: tabId
+  });
+}
+
 async function resetWorkspaceScroll(page) {
   await page.evaluate(() => {
+    if (typeof window.postbabyResetCameraForTest === 'function') {
+      window.postbabyResetCameraForTest();
+      return;
+    }
     const workspace = document.getElementById('tabContent');
     if (workspace && typeof workspace.scrollTo === 'function') {
       workspace.scrollTo({ left: 0, top: 0, behavior: 'auto' });
@@ -838,6 +901,14 @@ async function resetWorkspaceScroll(page) {
 
 async function scrollWorkspaceTo(page, left, top) {
   await page.evaluate((position) => {
+    if (typeof window.postbabySetCameraForTest === 'function') {
+      window.postbabySetCameraForTest({
+        x: position.left,
+        y: position.top,
+        zoom: 1
+      });
+      return;
+    }
     const workspace = document.getElementById('tabContent');
     if (workspace && typeof workspace.scrollTo === 'function') {
       workspace.scrollTo({
@@ -4132,6 +4203,137 @@ test.describe('Static behavior', () => {
     expect(storedPosition).toEqual({ x: 10, y: 20 });
   });
 
+  test('canvas-camera helpers round-trip world and screen coordinates and keep zoom-at-point stable', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    const helperResult = await page.evaluate(() => {
+      const camera = window.PostbabyCanvasCamera;
+      const viewport = document.getElementById('tabContent');
+      const initialCamera = { x: 120, y: 80, zoom: 1.5 };
+      const viewportPoint = camera.worldPointToViewportPoint(220, 140, initialCamera);
+      const roundTrip = camera.viewportPointToWorldPoint(viewportPoint.x, viewportPoint.y, initialCamera);
+      const viewportRect = viewport.getBoundingClientRect();
+      const clientX = viewportRect.left + 180;
+      const clientY = viewportRect.top + 140;
+      const pointedWorldBefore = camera.clientPointToWorldPoint(clientX, clientY, viewport, initialCamera);
+      const zoomedCamera = camera.zoomCameraAtClientPoint(initialCamera, clientX, clientY, 2, viewport);
+      const pointedWorldAfter = camera.clientPointToWorldPoint(clientX, clientY, viewport, zoomedCamera);
+      const centeredCamera = camera.centerCameraOnWorldPoint(initialCamera, viewport, 400, 300);
+      const fitCamera = camera.fitCameraToWorldRect({
+        left: 200,
+        top: 150,
+        right: 600,
+        bottom: 450
+      }, viewport);
+
+      return {
+        viewportPoint,
+        roundTrip,
+        worldDelta: camera.screenDeltaToWorldDelta(90, 45, { x: 0, y: 0, zoom: 2 }),
+        pointedWorldBefore,
+        pointedWorldAfter,
+        centeredCamera,
+        fitCamera,
+        normalized: camera.normalizeCameraState({ x: 'bad', y: 20, zoom: 99 }),
+        clampedZoomLow: camera.clampZoom(0.1),
+        clampedZoomHigh: camera.clampZoom(9)
+      };
+    });
+
+    expect(helperResult.viewportPoint).toEqual({ x: 150, y: 90 });
+    expect(helperResult.roundTrip.x).toBeCloseTo(220, 4);
+    expect(helperResult.roundTrip.y).toBeCloseTo(140, 4);
+    expect(helperResult.worldDelta.x).toBeCloseTo(45, 4);
+    expect(helperResult.worldDelta.y).toBeCloseTo(22.5, 4);
+    expect(helperResult.pointedWorldAfter.x).toBeCloseTo(helperResult.pointedWorldBefore.x, 4);
+    expect(helperResult.pointedWorldAfter.y).toBeCloseTo(helperResult.pointedWorldBefore.y, 4);
+    expect(helperResult.centeredCamera.zoom).toBeCloseTo(1.5, 4);
+    expect(helperResult.fitCamera.zoom).toBeGreaterThanOrEqual(MIN_ZOOM);
+    expect(helperResult.fitCamera.zoom).toBeLessThanOrEqual(MAX_ZOOM);
+    expect(helperResult.normalized).toEqual({ x: 0, y: 20, zoom: MAX_ZOOM });
+    expect(helperResult.clampedZoomLow).toBe(MIN_ZOOM);
+    expect(helperResult.clampedZoomHigh).toBe(MAX_ZOOM);
+  });
+
+  test('camera state stays per-tab, unsynced, and memory-only across reloads', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    expect(await readCamera(page)).toEqual(DEFAULT_CAMERA);
+    await setCamera(page, { x: 420, y: 360, zoom: 1.75 });
+    expect(await readCamera(page)).toEqual({ x: 420, y: 360, zoom: 1.75 });
+
+    await page.click('#addTab');
+    const newestTabId = await page.locator('#tabBar .tab[data-tab-id]').last().getAttribute('data-tab-id');
+    if (!newestTabId) {
+      throw new Error('New tab id was not available.');
+    }
+
+    expect(await readCamera(page, newestTabId)).toEqual(DEFAULT_CAMERA);
+    await page.locator('.tab[data-tab-id="tab-1"]').click();
+    expect(await readCamera(page, 'tab-1')).toEqual({ x: 420, y: 360, zoom: 1.75 });
+
+    const tabsSnapshot = await readTabsSnapshot(page);
+    expect(JSON.stringify(tabsSnapshot)).not.toContain('"camera"');
+    expect(JSON.stringify(tabsSnapshot)).not.toContain('"viewport"');
+    expect(JSON.stringify(tabsSnapshot)).not.toContain('"pan"');
+    expect(JSON.stringify(tabsSnapshot)).not.toContain('"zoom"');
+
+    await page.reload();
+    expect(await readCamera(page)).toEqual(DEFAULT_CAMERA);
+  });
+
+  test('space-drag pan and Shift+wheel zoom update camera without mutating stored note positions', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Camera Pan Note', {
+        itemId: 'camera-pan-note',
+        position: { top: '640px', left: '720px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const beforePositions = await readItemPositionsById(page, ['camera-pan-note']);
+    const viewportBox = await page.locator('#tabContent').boundingBox();
+    if (!viewportBox) {
+      throw new Error('Camera viewport bounding box was not available.');
+    }
+
+    const startX = Math.round(viewportBox.x + (viewportBox.width / 2));
+    const startY = Math.round(viewportBox.y + (viewportBox.height / 2));
+    await page.keyboard.down(' ');
+    await page.mouse.move(startX, startY);
+    await page.mouse.down();
+    await page.mouse.move(startX + 120, startY + 80, { steps: 12 });
+    await page.mouse.up();
+    await page.keyboard.up(' ');
+
+    const afterPanCamera = await readCamera(page);
+    expect(afterPanCamera.x).toBeLessThan(0);
+    expect(afterPanCamera.y).toBeLessThan(0);
+    expect(await readItemPositionsById(page, ['camera-pan-note'])).toEqual(beforePositions);
+
+    await page.locator('#tabContent').evaluate((element) => {
+      element.dispatchEvent(new WheelEvent('wheel', {
+        bubbles: true,
+        cancelable: true,
+        deltaY: -120,
+        shiftKey: true,
+        clientX: element.getBoundingClientRect().left + (element.clientWidth / 2),
+        clientY: element.getBoundingClientRect().top + (element.clientHeight / 2)
+      }));
+    });
+
+    const afterZoomCamera = await readCamera(page);
+    expect(afterZoomCamera.zoom).toBeGreaterThan(afterPanCamera.zoom);
+    expect(await readItemPositionsById(page, ['camera-pan-note'])).toEqual(beforePositions);
+  });
+
   test('render, shape refresh, and edge rerender do not mutate persisted item positions', async ({ page }) => {
     const localSnapshot = buildLocalSnapshotWithItems([
       buildNoteItem('Invariant Source', {
@@ -4362,7 +4564,7 @@ test.describe('Static behavior', () => {
     await showAllItemsForTest(page);
     await expect.poll(async () => {
       const rect = await readItemClientRect(page, 'far-item');
-      const viewport = await readWindowScroll(page);
+      const viewport = await readWorkspaceScroll(page);
       return rect.left < viewport.width && rect.right > 0 && rect.top < viewport.height && rect.bottom > 0;
     }).toBe(true);
 
@@ -8102,18 +8304,14 @@ test.describe('Settings and Account UI', () => {
 
     const beforeSnapshot = await readTabsSnapshot(page);
     const beforeRect = await readItemClientRect(page, 'far-item');
-    const beforeScroll = await readWorkspaceScroll(page);
-    expect(beforeRect.left).toBeGreaterThan(beforeScroll.width);
-    expect(beforeRect.top).toBeGreaterThan(beforeScroll.height);
+    const beforeViewport = await readWorkspaceScroll(page);
+    expect(beforeRect.left).toBeGreaterThan(beforeViewport.width);
+    expect(beforeRect.top).toBeGreaterThan(beforeViewport.height);
+    expect(await readCamera(page)).toEqual(DEFAULT_CAMERA);
 
     await openSettingsModal(page);
     await showAllItemsForTest(page);
     await expect(page.locator('#settingsModal')).toBeHidden();
-
-    await expect.poll(async () => {
-      const scroll = await readWorkspaceScroll(page);
-      return scroll.x > 0 && scroll.y > 0;
-    }).toBe(true);
 
     const windowScroll = await readWindowScroll(page);
     expect(windowScroll.x).toBe(0);
@@ -8157,7 +8355,7 @@ test.describe('Settings and Account UI', () => {
 
     await expect.poll(async () => {
       const rect = await readItemClientRect(page, 'newest-item');
-      const viewport = await readWindowScroll(page);
+      const viewport = await readWorkspaceScroll(page);
       return rect.left < viewport.width && rect.right > 0 && rect.top < viewport.height && rect.bottom > 0;
     }).toBe(true);
 
@@ -8223,7 +8421,7 @@ test.describe('Settings and Account UI', () => {
 
     await expect.poll(async () => {
       const rect = await readItemClientRect(page, 'newest-item');
-      const viewport = await readWindowScroll(page);
+      const viewport = await readWorkspaceScroll(page);
       return rect.left < viewport.width && rect.right > 0 && rect.top < viewport.height && rect.bottom > 0;
     }).toBe(true);
 
@@ -8231,7 +8429,7 @@ test.describe('Settings and Account UI', () => {
 
     await expect.poll(async () => {
       const rect = await readItemClientRect(page, 'edited-item');
-      const viewport = await readWindowScroll(page);
+      const viewport = await readWorkspaceScroll(page);
       return rect.left < viewport.width && rect.right > 0 && rect.top < viewport.height && rect.bottom > 0;
     }).toBe(true);
 
@@ -8256,7 +8454,7 @@ test.describe('Settings and Account UI', () => {
     expect(tabsSnapshot[0].items || []).toHaveLength(0);
   });
 
-  test('deleting far-away content shrinks the recovery footprint and clears stale last-edited state', async ({ page }) => {
+  test('deleting far-away content keeps camera recovery stable and clears stale last-edited state', async ({ page }) => {
     const localSnapshot = buildLocalSnapshotWithItems([
       buildNoteItem('Near Survivor', {
         itemId: 'near-item',
@@ -8273,10 +8471,8 @@ test.describe('Settings and Account UI', () => {
     await page.goto('/index.html');
 
     const beforeNearPosition = await readItemPositionsById(page, ['near-item']);
-    const beforeFootprint = await readViewportRecoveryFootprint(page);
 
     await showAllItemsForTest(page);
-
     const farNote = page.locator('.grid-item[data-id="far-item"]');
     await expect(farNote).toBeVisible();
     await farNote.click();
@@ -8286,19 +8482,20 @@ test.describe('Settings and Account UI', () => {
     await page.click('#confirmDelete');
     await expect(farNote).toHaveCount(0);
 
-    await expect.poll(async () => {
-      const footprint = await readViewportRecoveryFootprint(page);
-      return footprint.sizerLeft <= beforeFootprint.sizerLeft - 1000
-        && footprint.sizerTop <= beforeFootprint.sizerTop - 1000;
-    }).toBe(true);
-
     expect(await readItemPositionsById(page, ['near-item'])).toEqual(beforeNearPosition);
 
     await jumpLastEditedItemForTest(page);
     await expect(page.locator('.toast').last()).toContainText('No edited note found yet in this tab.');
+
+    await showAllItemsForTest(page);
+    await expect.poll(async () => {
+      const rect = await readItemClientRect(page, 'near-item');
+      const viewport = await readWindowScroll(page);
+      return rect.left < viewport.width && rect.right > 0 && rect.top < viewport.height && rect.bottom > 0;
+    }).toBe(true);
   });
 
-  test('switching tabs keeps viewport recovery scoped to the active tab only', async ({ page }) => {
+  test('switching tabs keeps camera recovery scoped to the active tab only', async ({ page }) => {
     const localSnapshot = {
       tabs: JSON.stringify([
         {
@@ -8338,7 +8535,6 @@ test.describe('Settings and Account UI', () => {
     await page.goto('/index.html');
 
     await showAllItemsForTest(page);
-
     await expect.poll(async () => {
       const rect = await readItemClientRect(page, 'tab-one-far');
       const viewport = await readWorkspaceScroll(page);
@@ -8347,21 +8543,9 @@ test.describe('Settings and Account UI', () => {
 
     await page.locator('.tab[data-tab-id="tab-2"]').click();
     await expectNoteVisible(page, 'Tab Two Near Note');
-
-    await expect.poll(async () => {
-      const footprint = await readViewportRecoveryFootprint(page);
-      return footprint.sizerLeft <= footprint.viewportWidth + 1000
-        && footprint.sizerTop <= footprint.viewportHeight + 1200
-        && footprint.scrollX < 400
-        && footprint.scrollY < 400;
-    }).toBe(true);
+    expect(await readCamera(page, 'tab-2')).toEqual(DEFAULT_CAMERA);
 
     await page.locator('.tab[data-tab-id="tab-1"]').click();
-    await expect.poll(async () => {
-      const footprint = await readViewportRecoveryFootprint(page);
-      return footprint.sizerLeft > footprint.viewportWidth + 1000
-        && footprint.sizerTop > footprint.viewportHeight + 1000;
-    }).toBe(true);
     await showAllItemsForTest(page);
 
     await expect.poll(async () => {
@@ -8502,7 +8686,7 @@ test.describe('Settings and Account UI', () => {
     await expectNoteVisible(page, 'Manual Note After Recovery');
   });
 
-  test('clearing far-away graph-created content shrinks the recovery footprint after recovery', async ({ page }) => {
+  test('clearing far-away graph-created content leaves camera recovery safe after recovery', async ({ page }) => {
     await prepareBlankPage(page);
     await seedLocalStorage(page, buildEmptySnapshot());
     await page.goto('/index.html');
@@ -8519,9 +8703,11 @@ test.describe('Settings and Account UI', () => {
     }));
 
     expect(graphResult.ok).toBe(true);
-    const beforeFootprint = await readViewportRecoveryFootprint(page);
 
     await showAllItemsForTest(page);
+    const recoveredCamera = await readCamera(page);
+    expect(recoveredCamera.x).toBeGreaterThan(0);
+    expect(recoveredCamera.y).toBeGreaterThan(0);
 
     await expect.poll(async () => {
       const rect = await readItemClientRect(page, graphResult.createdItemIds[0]);
@@ -8535,14 +8721,11 @@ test.describe('Settings and Account UI', () => {
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('.grid-item')).toHaveCount(0);
 
-    await expect.poll(async () => {
-      const footprint = await readViewportRecoveryFootprint(page);
-      return footprint.sizerLeft <= beforeFootprint.sizerLeft - 1000
-        && footprint.sizerTop <= beforeFootprint.sizerTop - 1000;
-    }).toBe(true);
+    await showAllItemsForTest(page);
+    await expect(page.locator('.toast').last()).toContainText('No notes to recover in this tab.');
   });
 
-  test('workspace-scrolled note creation keeps right-click and Add Item placement inside the visible workspace', async ({ page }) => {
+  test('camera-panned note creation keeps right-click and Add Item placement inside the visible workspace', async ({ page }) => {
     const localSnapshot = buildLocalSnapshotWithItems([
       buildNoteItem('Scroll Anchor', {
         itemId: 'scroll-anchor',
@@ -8571,16 +8754,17 @@ test.describe('Settings and Account UI', () => {
       clientY: Math.round(workspaceBox.y + 160)
     };
     const expectedGridPoint = await page.evaluate((point) => {
-      const grid = document.querySelector('.tab-pane.active .grid-container');
-      if (!grid) {
-        throw new Error('Active grid was not available.');
+      const workspace = document.getElementById('tabContent');
+      if (!workspace) {
+        throw new Error('Workspace viewport was not available.');
       }
 
-      const rect = grid.getBoundingClientRect();
-      return {
-        x: Math.round(point.clientX - rect.left),
-        y: Math.round(point.clientY - rect.top)
-      };
+      return window.PostbabyCanvasCamera.clientPointToWorldPoint(
+        point.clientX,
+        point.clientY,
+        workspace,
+        window.postbabyGetCameraForTest()
+      );
     }, createClientPoint);
 
     await page.locator('.grid-container').first().evaluate((element, point) => {
@@ -8694,6 +8878,94 @@ test.describe('Settings and Account UI', () => {
     await expect(targetNote).toHaveCount(0);
     await expect(page.locator('.edge-line')).toHaveCount(0);
     await expect(sourceNote).toBeVisible();
+  });
+
+  test('camera-zoomed creation, drag, resize, edge creation, and marquee selection stay world-correct', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Zoom Source', {
+        itemId: 'zoom-source',
+        position: { top: '640px', left: '620px' }
+      }),
+      buildNoteItem('Zoom Target', {
+        itemId: 'zoom-target',
+        position: { top: '720px', left: '860px' }
+      }),
+      buildNoteItem('Zoom Outside', {
+        itemId: 'zoom-outside',
+        position: { top: '1120px', left: '1400px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    await setCamera(page, { x: 520, y: 540, zoom: 2 });
+    const sourceNote = page.locator('.grid-item[data-id="zoom-source"]');
+    const targetNote = page.locator('.grid-item[data-id="zoom-target"]');
+    const outsideNote = page.locator('.grid-item[data-id="zoom-outside"]');
+    const sourceBefore = await readItemPositionViaGeometryDom(page, 'zoom-source');
+    const targetBeforeSize = await readNoteSize(targetNote);
+
+    const workspaceBox = await page.locator('#tabContent').boundingBox();
+    if (!workspaceBox) {
+      throw new Error('Workspace viewport bounding box was not available.');
+    }
+
+    await dragNoteBy(page, sourceNote, 120, 60);
+    await page.waitForTimeout(350);
+    const sourceAfter = await readItemPositionViaGeometryDom(page, 'zoom-source');
+    expect(sourceAfter.x).toBeCloseTo(sourceBefore.x + 60, 0);
+    expect(sourceAfter.y).toBeCloseTo(sourceBefore.y + 30, 0);
+
+    await resizeNoteBy(page, targetNote, 80, 40);
+    await page.waitForTimeout(350);
+    const targetAfterSize = await readNoteSize(targetNote);
+    expect(targetAfterSize.width).toBeGreaterThan(targetBeforeSize.width + 30);
+    expect(targetAfterSize.height).toBeGreaterThan(targetBeforeSize.height + 10);
+
+    await drawEdgeBetweenNotes(page, sourceNote, targetNote, { modifier: 'Control' });
+    await expect(page.locator('.edge-line')).toHaveCount(1);
+
+    await marqueeSelectNotes(page, [sourceNote, targetNote], { margin: 8 });
+    await expect(page.locator('.grid-item.selected')).toHaveCount(2);
+    await expect(sourceNote).toHaveClass(/selected/);
+    await expect(targetNote).toHaveClass(/selected/);
+    await expect(outsideNote).not.toHaveClass(/selected/);
+
+    const createClientPoint = {
+      clientX: Math.round(workspaceBox.x + workspaceBox.width - 180),
+      clientY: Math.round(workspaceBox.y + 120)
+    };
+    const expectedWorldPoint = await page.evaluate((point) => {
+      const workspace = document.getElementById('tabContent');
+      return window.PostbabyCanvasCamera.clientPointToWorldPoint(
+        point.clientX,
+        point.clientY,
+        workspace,
+        window.postbabyGetCameraForTest()
+      );
+    }, createClientPoint);
+
+    await page.locator('.grid-container').first().evaluate((element, point) => {
+      element.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        button: 2,
+        clientX: point.clientX,
+        clientY: point.clientY
+      }));
+    }, createClientPoint);
+
+    let textarea = page.locator('textarea.edit-textarea');
+    await expect(textarea).toBeVisible();
+    await textarea.fill('Camera Zoom Created');
+    await textarea.press('Escape');
+    const createdItem = (await readTabsSnapshot(page))[0].items.find((item) => item.name === 'Camera Zoom Created');
+    expect(createdItem).toBeTruthy();
+    const createdPosition = await page.evaluate((item) => window.PostbabyGeometryDom.getItemPositionXY(item), createdItem);
+    expect(createdPosition.x).toBeCloseTo(expectedWorldPoint.x, 1);
+    expect(createdPosition.y).toBeCloseTo(expectedWorldPoint.y, 1);
   });
 
   test('workspace scroll keeps top chrome hit targets usable for settings, tabs, and trash interactions', async ({ page }) => {

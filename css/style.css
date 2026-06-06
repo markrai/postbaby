@@ -389,10 +389,12 @@
 /* Tab Content Styles */
 .tab-pane {
     display: none;
-    padding: 10px;
     position: relative;
     width: 100%;
     min-height: 100%;
+    height: 100%;
+    padding: 0;
+    overflow: hidden;
 }
 
 .tab-pane.active {
@@ -732,17 +734,25 @@ body {
     flex: 1 1 auto;
     min-height: 0;
     width: 100%;
-    overflow: auto;
-    overscroll-behavior: contain;
+    overflow: hidden;
+    overscroll-behavior: none;
     z-index: 1;
 }
 
 .grid-container {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    grid-gap: 10px;
-    width: 80%;
-    position: relative;
+    display: block;
+    width: 100%;
+    height: 100%;
+    position: absolute;
+    left: 0;
+    top: 0;
+    overflow: visible;
+    transform-origin: 0 0;
+    will-change: transform;
+}
+
+#tabContent.camera-viewport--panning {
+    cursor: grabbing;
 }
 
 .grid-item {

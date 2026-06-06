@@ -275,6 +275,33 @@
         return bounds;
     }
 
+    function getItemsBoundsFromOffsetElements(elements) {
+        if (!elements) {
+            return null;
+        }
+
+        let bounds = null;
+        Array.from(elements).forEach(function (element) {
+            if (!element) {
+                return;
+            }
+
+            const rect = getElementOffsetRect(element);
+            if (
+                !Number.isFinite(rect.left)
+                || !Number.isFinite(rect.top)
+                || !Number.isFinite(rect.right)
+                || !Number.isFinite(rect.bottom)
+            ) {
+                return;
+            }
+
+            bounds = mergeRectBounds(bounds, rect);
+        });
+
+        return bounds;
+    }
+
     function getElementCenterClientPoint(element) {
         const rect = getElementClientRect(element);
         return {
@@ -426,6 +453,7 @@
         getContainerRelativePositionStringsFromPage,
         getElementClientRect,
         getItemsBoundsFromElements,
+        getItemsBoundsFromOffsetElements,
         getElementCenterClientPoint,
         getElementOffsetRect,
         getElementOffsetCenter,
