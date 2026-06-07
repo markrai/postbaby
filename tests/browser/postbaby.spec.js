@@ -1251,6 +1251,13 @@ async function readMutationOutbox(page) {
   return debugState.mutationOutbox;
 }
 
+async function waitForDeltaMetadataCheckCount(page, count) {
+  await expect.poll(async () => {
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    return debugState.deltaMetadataCheckCount || 0;
+  }).toBe(count);
+}
+
 async function readNoteSize(locator) {
   return locator.evaluate((element) => ({
     width: element.offsetWidth,
@@ -8846,6 +8853,540 @@ test.describe('Mocked sync startup reconciliation', () => {
     expect(capturedSaveBody.baseServerRevision).toBe(6);
     expect(debugStateAfterManualSync.runtimeConfig.syncUsable).toBe(true);
     expect(debugStateAfterManualSync.syncState).toBe('synced');
+  });
+
+  test('manual advisory delta check runs only after successful manual sync and stays diagnostic-only', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Manual Advisory Stable Note', { syncVersion: 6 });
+    const dialogs = [];
+    const requestSequence = [];
+    let capturedSaveBody = null;
+    let deltaCallCount = 0;
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Manual Advisory Stable Note', 6),
+      onSave: async (body) => {
+        capturedSaveBody = body;
+        requestSequence.push(`document-put:${body.baseServerRevision}`);
+        return {
+          status: 200,
+          body: { ok: true, version: 7, updatedAt: TIMESTAMP }
+        };
+      },
+      onDelta: async (request) => {
+        deltaCallCount += 1;
+        const url = new URL(request.url());
+        const sinceVersion = url.searchParams.get('sinceVersion');
+        requestSequence.push(`delta:${deltaCallCount}:${sinceVersion}`);
+        if (deltaCallCount === 1) {
+          return {
+            status: 200,
+            body: {
+              ok: true,
+              reason: 'up_to_date',
+              currentDocumentVersion: 6,
+              currentDocumentHash: 'hash-6',
+              clientVersion: 6,
+              requiresSnapshotRefresh: false,
+              warnings: []
+            }
+          };
+        }
+
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            reason: 'applications_available',
+            currentDocumentVersion: 7,
+            currentDocumentHash: 'hash-7',
+            clientVersion: 7,
+            requiresSnapshotRefresh: false,
+            applicationWatermark: 41,
+            nextApplicationWatermark: 43,
+            applications: [
+              {
+                mutationId: 'mut-applied-manual',
+                applicationStatus: 'authoritativeApplied',
+                applicationReason: 'policy_allowed',
+                canonicalDocumentVersionBefore: 6,
+                canonicalDocumentVersionAfter: 7,
+                canonicalDocumentHashBefore: 'hash-6',
+                canonicalDocumentHashAfter: 'hash-7',
+                replayObservationId: 19,
+                createdAt: TIMESTAMP
+              }
+            ],
+            warnings: []
+          }
+        };
+      }
+    });
+    attachDialogHandler(page, [], dialogs);
+
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Manual Advisory Stable Note');
+    await waitForDeltaMetadataCheckCount(page, 1);
+
+    requestSequence.length = 0;
+
+    await setCamera(page, { x: 180, y: 110, zoom: 1.35 });
+    const tabsBefore = await readTabsSnapshot(page);
+    const outboxBefore = await readMutationOutbox(page);
+    const cameraBefore = await readCamera(page);
+
+    await page.locator('#syncStatusButton').click();
+    await page.locator('#syncNowButton').click();
+
+    await expect.poll(() => capturedSaveBody !== null).toBe(true);
+    await waitForDeltaMetadataCheckCount(page, 2);
+    await expect.poll(async () => {
+      const state = await page.evaluate(() => window.postbabyDebugSync());
+      return state.deltaMetadataLastTrigger;
+    }).toBe('manual-sync');
+
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    const tabsAfter = await readTabsSnapshot(page);
+    const outboxAfter = await readMutationOutbox(page);
+    const cameraAfter = await readCamera(page);
+
+    expect(capturedSaveBody.baseServerRevision).toBe(6);
+    expect(requestSequence[0]).toBe('document-put:6');
+    expect(requestSequence).toContain('delta:2:7');
+    expect(requestSequence.indexOf('delta:2:7')).toBeGreaterThan(requestSequence.indexOf('document-put:6'));
+    expect(dialogs).toEqual([]);
+    expect(page.url()).not.toContain('/login');
+    expect(debugState.syncState).toBe('synced');
+    expect(debugState.syncStoredVersion).toBe(7);
+    expect(debugState.deltaMetadataAvailable).toBe(true);
+    expect(debugState.deltaMetadataUnavailableForSession).toBe(false);
+    expect(debugState.deltaMetadataLastTrigger).toBe('manual-sync');
+    expect(debugState.deltaMetadataLastReason).toBe('applications_available');
+    expect(debugState.deltaMetadataLastError).toBe('');
+    expect(debugState.deltaMetadataLastServerVersion).toBe(7);
+    expect(debugState.deltaMetadataCheckCount).toBe(2);
+    expect(debugState.deltaMetadataLastRequiresSnapshotRefresh).toBe(false);
+    expect(tabsAfter).toEqual(tabsBefore);
+    expect(outboxAfter).toEqual(outboxBefore);
+    expect(cameraAfter).toEqual(cameraBefore);
+    expect(JSON.stringify(tabsAfter)).not.toContain('mut-applied-manual');
+  });
+
+  test('manual advisory document_version_changed stays diagnostic-only and does not fetch another snapshot', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Manual Advisory Version Note', { syncVersion: 6 });
+    const dialogs = [];
+    const requestSequence = [];
+    let deltaCallCount = 0;
+
+    page.on('request', (request) => {
+      const url = request.url();
+      if (url.includes('/api/document/meta')) {
+        return;
+      }
+      if (url.includes('/api/document')) {
+        requestSequence.push(request.method() === 'GET' ? 'document-get' : 'document-put');
+      } else if (url.includes('/api/sync/delta')) {
+        const sinceVersion = new URL(url).searchParams.get('sinceVersion');
+        requestSequence.push(`delta:${sinceVersion}`);
+      }
+    });
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Manual Advisory Version Note', 6),
+      onSave: async () => ({
+        status: 200,
+        body: { ok: true, version: 7, updatedAt: TIMESTAMP }
+      }),
+      onDelta: async () => {
+        deltaCallCount += 1;
+        if (deltaCallCount === 1) {
+          return {
+            status: 200,
+            body: {
+              ok: true,
+              reason: 'up_to_date',
+              currentDocumentVersion: 6,
+              currentDocumentHash: 'hash-6',
+              clientVersion: 6,
+              requiresSnapshotRefresh: false,
+              warnings: []
+            }
+          };
+        }
+
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            reason: 'document_version_changed',
+            currentDocumentVersion: 8,
+            currentDocumentHash: 'hash-8',
+            clientVersion: 7,
+            requiresSnapshotRefresh: true,
+            warnings: []
+          }
+        };
+      }
+    });
+    attachDialogHandler(page, [], dialogs);
+
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Manual Advisory Version Note');
+    await waitForDeltaMetadataCheckCount(page, 1);
+
+    requestSequence.length = 0;
+
+    await setCamera(page, { x: 150, y: 90, zoom: 1.2 });
+    const tabsBefore = await readTabsSnapshot(page);
+    const outboxBefore = await readMutationOutbox(page);
+    const cameraBefore = await readCamera(page);
+
+    await page.locator('#syncStatusButton').click();
+    await page.locator('#syncNowButton').click();
+
+    await waitForDeltaMetadataCheckCount(page, 2);
+    await expect.poll(async () => {
+      const state = await page.evaluate(() => window.postbabyDebugSync());
+      return state.deltaMetadataLastTrigger;
+    }).toBe('manual-sync');
+
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    const tabsAfter = await readTabsSnapshot(page);
+    const outboxAfter = await readMutationOutbox(page);
+    const cameraAfter = await readCamera(page);
+
+    expect(requestSequence[0]).toBe('document-put');
+    expect(requestSequence).toContain('delta:7');
+    expect(requestSequence.filter((entry) => entry === 'document-get')).toEqual([]);
+    expect(dialogs).toEqual([]);
+    expect(debugState.syncState).toBe('synced');
+    expect(debugState.syncStoredVersion).toBe(7);
+    expect(debugState.deltaMetadataAvailable).toBe(true);
+    expect(debugState.deltaMetadataLastReason).toBe('document_version_changed');
+    expect(debugState.deltaMetadataLastTrigger).toBe('manual-sync');
+    expect(debugState.deltaMetadataLastServerVersion).toBe(7);
+    expect(debugState.deltaMetadataLastRequiresSnapshotRefresh).toBe(true);
+    expect(tabsAfter).toEqual(tabsBefore);
+    expect(outboxAfter).toEqual(outboxBefore);
+    expect(cameraAfter).toEqual(cameraBefore);
+  });
+
+  test('manual advisory delta 404 after manual sync is non-fatal', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Manual Advisory 404 Note', { syncVersion: 6 });
+    const dialogs = [];
+    let deltaCallCount = 0;
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Manual Advisory 404 Note', 6),
+      onSave: async () => ({
+        status: 200,
+        body: { ok: true, version: 7, updatedAt: TIMESTAMP }
+      }),
+      onDelta: async () => {
+        deltaCallCount += 1;
+        if (deltaCallCount === 1) {
+          return {
+            status: 200,
+            body: {
+              ok: true,
+              reason: 'up_to_date',
+              currentDocumentVersion: 6,
+              clientVersion: 6,
+              requiresSnapshotRefresh: false,
+              warnings: []
+            }
+          };
+        }
+
+        return {
+          status: 404,
+          body: {
+            ok: false,
+            error: {
+              code: 'not_found',
+              message: 'not found'
+            }
+          }
+        };
+      }
+    });
+    attachDialogHandler(page, [], dialogs);
+
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Manual Advisory 404 Note');
+    await waitForDeltaMetadataCheckCount(page, 1);
+
+    await setCamera(page, { x: 210, y: 130, zoom: 1.45 });
+    const tabsBefore = await readTabsSnapshot(page);
+    const outboxBefore = await readMutationOutbox(page);
+    const cameraBefore = await readCamera(page);
+
+    await page.locator('#syncStatusButton').click();
+    await page.locator('#syncNowButton').click();
+
+    await waitForDeltaMetadataCheckCount(page, 2);
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    const tabsAfter = await readTabsSnapshot(page);
+    const outboxAfter = await readMutationOutbox(page);
+    const cameraAfter = await readCamera(page);
+
+    expect(dialogs).toEqual([]);
+    expect(debugState.syncState).toBe('synced');
+    expect(debugState.syncStoredVersion).toBe(7);
+    expect(debugState.runtimeConfig.syncUsable).toBe(true);
+    expect(debugState.deltaMetadataAvailable).toBe(false);
+    expect(debugState.deltaMetadataUnavailableForSession).toBe(true);
+    expect(debugState.deltaMetadataLastTrigger).toBe('manual-sync');
+    expect(debugState.deltaMetadataLastReason).toBe('not_found');
+    expect(debugState.deltaMetadataLastError).toBe('');
+    expect(tabsAfter).toEqual(tabsBefore);
+    expect(outboxAfter).toEqual(outboxBefore);
+    expect(cameraAfter).toEqual(cameraBefore);
+  });
+
+  test('manual advisory delta network failure after manual sync is non-fatal', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Manual Advisory Network Note', { syncVersion: 6 });
+    const dialogs = [];
+    let deltaCallCount = 0;
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Manual Advisory Network Note', 6),
+      onSave: async () => ({
+        status: 200,
+        body: { ok: true, version: 7, updatedAt: TIMESTAMP }
+      }),
+      onDelta: async () => {
+        deltaCallCount += 1;
+        if (deltaCallCount === 1) {
+          return {
+            status: 200,
+            body: {
+              ok: true,
+              reason: 'up_to_date',
+              currentDocumentVersion: 6,
+              clientVersion: 6,
+              requiresSnapshotRefresh: false,
+              warnings: []
+            }
+          };
+        }
+
+        return { abort: 'failed' };
+      }
+    });
+    attachDialogHandler(page, [], dialogs);
+
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Manual Advisory Network Note');
+    await waitForDeltaMetadataCheckCount(page, 1);
+
+    await setCamera(page, { x: 160, y: 100, zoom: 1.25 });
+    const tabsBefore = await readTabsSnapshot(page);
+    const outboxBefore = await readMutationOutbox(page);
+    const cameraBefore = await readCamera(page);
+
+    await page.locator('#syncStatusButton').click();
+    await page.locator('#syncNowButton').click();
+
+    await waitForDeltaMetadataCheckCount(page, 2);
+    await expect.poll(async () => {
+      const state = await page.evaluate(() => window.postbabyDebugSync());
+      return state.deltaMetadataLastError;
+    }).not.toBe('');
+
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    const tabsAfter = await readTabsSnapshot(page);
+    const outboxAfter = await readMutationOutbox(page);
+    const cameraAfter = await readCamera(page);
+
+    expect(dialogs).toEqual([]);
+    expect(debugState.syncState).toBe('synced');
+    expect(debugState.syncStoredVersion).toBe(7);
+    expect(debugState.runtimeConfig.syncUsable).toBe(true);
+    expect(debugState.deltaMetadataAvailable).toBe(false);
+    expect(debugState.deltaMetadataUnavailableForSession).toBe(false);
+    expect(debugState.deltaMetadataLastTrigger).toBe('manual-sync');
+    expect(debugState.deltaMetadataLastReason).toBe('network_error');
+    expect(debugState.deltaMetadataLastError).not.toBe('');
+    expect(tabsAfter).toEqual(tabsBefore);
+    expect(outboxAfter).toEqual(outboxBefore);
+    expect(cameraAfter).toEqual(cameraBefore);
+  });
+
+  test('manual advisory delta unauthorized failure stays probe-local after manual sync', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Manual Advisory Unauthorized Note', { syncVersion: 6 });
+    const dialogs = [];
+    let deltaCallCount = 0;
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Manual Advisory Unauthorized Note', 6),
+      onSave: async () => ({
+        status: 200,
+        body: { ok: true, version: 7, updatedAt: TIMESTAMP }
+      }),
+      onDelta: async () => {
+        deltaCallCount += 1;
+        if (deltaCallCount === 1) {
+          return {
+            status: 200,
+            body: {
+              ok: true,
+              reason: 'up_to_date',
+              currentDocumentVersion: 6,
+              clientVersion: 6,
+              requiresSnapshotRefresh: false,
+              warnings: []
+            }
+          };
+        }
+
+        return {
+          status: 401,
+          body: {
+            ok: false,
+            error: {
+              code: 'auth_required',
+              message: 'login required for delta'
+            }
+          }
+        };
+      }
+    });
+    attachDialogHandler(page, [], dialogs);
+
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Manual Advisory Unauthorized Note');
+    await waitForDeltaMetadataCheckCount(page, 1);
+
+    await setCamera(page, { x: 170, y: 120, zoom: 1.3 });
+    const tabsBefore = await readTabsSnapshot(page);
+    const outboxBefore = await readMutationOutbox(page);
+    const cameraBefore = await readCamera(page);
+
+    await page.locator('#syncStatusButton').click();
+    await page.locator('#syncNowButton').click();
+
+    await waitForDeltaMetadataCheckCount(page, 2);
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    const tabsAfter = await readTabsSnapshot(page);
+    const outboxAfter = await readMutationOutbox(page);
+    const cameraAfter = await readCamera(page);
+
+    expect(dialogs).toEqual([]);
+    expect(page.url()).not.toContain('/login');
+    expect(debugState.syncState).toBe('synced');
+    expect(debugState.syncStoredVersion).toBe(7);
+    expect(debugState.runtimeConfig.syncUsable).toBe(true);
+    expect(debugState.isSyncAwaitingAuthentication).toBe(false);
+    expect(debugState.isSyncBlockedByEntitlement).toBe(false);
+    expect(debugState.isBackgroundSyncActive).toBe(true);
+    expect(debugState.deltaMetadataAvailable).toBe(false);
+    expect(debugState.deltaMetadataUnavailableForSession).toBe(true);
+    expect(debugState.deltaMetadataLastTrigger).toBe('manual-sync');
+    expect(debugState.deltaMetadataLastReason).toBe('auth_required');
+    expect(debugState.deltaMetadataLastError).toBe('unauthorized');
+    expect(tabsAfter).toEqual(tabsBefore);
+    expect(outboxAfter).toEqual(outboxBefore);
+    expect(cameraAfter).toEqual(cameraBefore);
+  });
+
+  test('manual advisory delta entitlement failure stays probe-local after manual sync', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Manual Advisory Entitlement Note', { syncVersion: 6 });
+    const dialogs = [];
+    let deltaCallCount = 0;
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Manual Advisory Entitlement Note', 6),
+      onSave: async () => ({
+        status: 200,
+        body: { ok: true, version: 7, updatedAt: TIMESTAMP }
+      }),
+      onDelta: async () => {
+        deltaCallCount += 1;
+        if (deltaCallCount === 1) {
+          return {
+            status: 200,
+            body: {
+              ok: true,
+              reason: 'up_to_date',
+              currentDocumentVersion: 6,
+              clientVersion: 6,
+              requiresSnapshotRefresh: false,
+              warnings: []
+            }
+          };
+        }
+
+        return {
+          status: 403,
+          body: {
+            ok: false,
+            error: {
+              code: 'entitlement_required',
+              message: 'delta entitlement unavailable'
+            }
+          }
+        };
+      }
+    });
+    attachDialogHandler(page, [], dialogs);
+
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Manual Advisory Entitlement Note');
+    await waitForDeltaMetadataCheckCount(page, 1);
+
+    await setCamera(page, { x: 220, y: 140, zoom: 1.5 });
+    const tabsBefore = await readTabsSnapshot(page);
+    const outboxBefore = await readMutationOutbox(page);
+    const cameraBefore = await readCamera(page);
+
+    await page.locator('#syncStatusButton').click();
+    await page.locator('#syncNowButton').click();
+
+    await waitForDeltaMetadataCheckCount(page, 2);
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    const tabsAfter = await readTabsSnapshot(page);
+    const outboxAfter = await readMutationOutbox(page);
+    const cameraAfter = await readCamera(page);
+
+    expect(dialogs).toEqual([]);
+    expect(debugState.syncState).toBe('synced');
+    expect(debugState.syncStoredVersion).toBe(7);
+    expect(debugState.runtimeConfig.syncUsable).toBe(true);
+    expect(debugState.isSyncAwaitingAuthentication).toBe(false);
+    expect(debugState.isSyncBlockedByEntitlement).toBe(false);
+    expect(debugState.isBackgroundSyncActive).toBe(true);
+    expect(debugState.deltaMetadataAvailable).toBe(false);
+    expect(debugState.deltaMetadataUnavailableForSession).toBe(true);
+    expect(debugState.deltaMetadataLastTrigger).toBe('manual-sync');
+    expect(debugState.deltaMetadataLastReason).toBe('entitlement_required');
+    expect(debugState.deltaMetadataLastError).toBe('entitlement_required');
+    expect(tabsAfter).toEqual(tabsBefore);
+    expect(outboxAfter).toEqual(outboxBefore);
+    expect(cameraAfter).toEqual(cameraBefore);
   });
 
   test('repairs durable pending upload after reload when server revision is unchanged', async ({ page }) => {
