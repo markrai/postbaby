@@ -852,6 +852,244 @@ func TestRunApplyAllSkippedAdvancesVersionWithoutChangingBodyAndIsIdempotent(t *
 	assertReplayAdminStateEqual(t, afterState, afterSecondState)
 }
 
+func TestRunApplySequentialSameObservationExitsIdempotentlyWithoutSecondStoreApplyCall(t *testing.T) {
+	t.Setenv(envEnableInternalSyncReplayCLI, "1")
+	t.Setenv(envEnableInternalSyncReplayApply, "1")
+	t.Setenv(envDeploymentMode, "selfhosted")
+
+	fixture := createReplayPreflightFixture(t, replayPreflightFixtureOptions{})
+	firstSpyHolder := &replayAdminStoreSpy{}
+	beforeState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	sqliteStore := openReplayAdminTestStore(t, fixture.dbPath)
+	dryRun, err := sqliteStore.ReplaySyncMutationReceiptsDryRun(context.Background(), fixture.ownerKey, fixture.appID)
+	if err != nil {
+		t.Fatalf("build dry-run preview before sequential apply: %v", err)
+	}
+	firstStdout := &bytes.Buffer{}
+	firstStderr := &bytes.Buffer{}
+
+	exitCode := runWithDeps(makeReplayAdminCommandDeps(t, firstSpyHolder, nil), buildApplyArgs(fixture), firstStdout, firstStderr)
+	if exitCode != 0 {
+		t.Fatalf("expected first exit code 0, got %d stderr=%q", exitCode, firstStderr.String())
+	}
+
+	firstResult := decodeApplyResult(t, firstStdout.String())
+	if firstResult.Status != applyStatusApplied || firstResult.PreflightStatus != preflightStatusSafe {
+		t.Fatalf("unexpected first sequential apply result: %+v", firstResult)
+	}
+	if firstSpyHolder.store == nil || firstSpyHolder.store.applyCallCount != 1 {
+		t.Fatalf("expected first sequential apply to call store apply once, got %+v", firstSpyHolder.store)
+	}
+
+	afterFirstState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	if afterFirstState.DocumentVersion != beforeState.DocumentVersion+1 {
+		t.Fatalf("expected sequential apply to advance version once from %d to %d, got %d", beforeState.DocumentVersion, beforeState.DocumentVersion+1, afterFirstState.DocumentVersion)
+	}
+	if afterFirstState.DocumentBody != string(dryRun.PreviewBody) {
+		t.Fatalf("expected sequential apply body to match preview\nafter=%s\npreview=%s", afterFirstState.DocumentBody, dryRun.PreviewBody)
+	}
+	if len(afterFirstState.Applications) != 1 {
+		t.Fatalf("expected one application row after first sequential apply, got %+v", afterFirstState.Applications)
+	}
+	assertReplayAdminReceiptsAndObservationsEqual(t, beforeState, afterFirstState)
+
+	secondSpyHolder := &replayAdminStoreSpy{}
+	secondStdout := &bytes.Buffer{}
+	secondStderr := &bytes.Buffer{}
+	exitCode = runWithDeps(makeReplayAdminCommandDeps(t, secondSpyHolder, nil), buildApplyArgs(fixture), secondStdout, secondStderr)
+	if exitCode != 0 {
+		t.Fatalf("expected second exit code 0, got %d stderr=%q", exitCode, secondStderr.String())
+	}
+
+	secondResult := decodeApplyResult(t, secondStdout.String())
+	if secondResult.Status != applyStatusIdempotent || secondResult.PreflightStatus != preflightStatusIdempotent {
+		t.Fatalf("unexpected second sequential apply result: %+v", secondResult)
+	}
+	if secondSpyHolder.store == nil || secondSpyHolder.store.applyCallCount != 0 {
+		t.Fatalf("expected second sequential apply to exit before store apply, got %+v", secondSpyHolder.store)
+	}
+
+	afterSecondState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	assertReplayAdminStateEqual(t, afterFirstState, afterSecondState)
+}
+
+func TestRunApplyFailpointThenRetrySucceeds(t *testing.T) {
+	t.Setenv(envEnableInternalSyncReplayCLI, "1")
+	t.Setenv(envEnableInternalSyncReplayApply, "1")
+	t.Setenv(envDeploymentMode, "selfhosted")
+
+	fixture := createReplayPreflightFixture(t, replayPreflightFixtureOptions{})
+	beforeState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	sqliteStore := openReplayAdminTestStore(t, fixture.dbPath)
+	dryRun, err := sqliteStore.ReplaySyncMutationReceiptsDryRun(context.Background(), fixture.ownerKey, fixture.appID)
+	if err != nil {
+		t.Fatalf("build dry-run preview before failpoint retry: %v", err)
+	}
+
+	firstSpyHolder := &replayAdminStoreSpy{}
+	firstStdout := &bytes.Buffer{}
+	firstStderr := &bytes.Buffer{}
+	exitCode := runWithDeps(makeReplayAdminCommandDeps(t, firstSpyHolder, func(testStore *countingReplayAdminStore) {
+		testStore.applyFunc = func(ctx context.Context, ownerKey, appID string, observationID int64, options store.SyncMutationReplayAuthoritativeApplyOptions) (store.SyncMutationReplayAuthoritativeApplyResult, error) {
+			failAfter := 0
+			options.FailAfterApplicationRowInserts = &failAfter
+			return testStore.inner.ApplySyncMutationReplayAuthoritativeInternal(ctx, ownerKey, appID, observationID, options)
+		}
+	}), buildApplyArgs(fixture), firstStdout, firstStderr)
+	if exitCode != 1 {
+		t.Fatalf("expected first exit code 1, got %d stderr=%q", exitCode, firstStderr.String())
+	}
+
+	firstResult := decodeApplyResult(t, firstStdout.String())
+	if firstResult.Status != applyStatusInternalError {
+		t.Fatalf("unexpected first failpoint apply result: %+v", firstResult)
+	}
+	if firstSpyHolder.store == nil || firstSpyHolder.store.applyCallCount != 1 {
+		t.Fatalf("expected first failpoint apply to call store once, got %+v", firstSpyHolder.store)
+	}
+
+	afterFailState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	assertReplayAdminStateEqual(t, beforeState, afterFailState)
+
+	secondSpyHolder := &replayAdminStoreSpy{}
+	secondStdout := &bytes.Buffer{}
+	secondStderr := &bytes.Buffer{}
+	exitCode = runWithDeps(makeReplayAdminCommandDeps(t, secondSpyHolder, nil), buildApplyArgs(fixture), secondStdout, secondStderr)
+	if exitCode != 0 {
+		t.Fatalf("expected second exit code 0, got %d stderr=%q", exitCode, secondStderr.String())
+	}
+
+	secondResult := decodeApplyResult(t, secondStdout.String())
+	if secondResult.Status != applyStatusApplied || secondResult.PreflightStatus != preflightStatusSafe {
+		t.Fatalf("unexpected second failpoint retry result: %+v", secondResult)
+	}
+	if secondSpyHolder.store == nil || secondSpyHolder.store.applyCallCount != 1 {
+		t.Fatalf("expected second failpoint retry to call store once, got %+v", secondSpyHolder.store)
+	}
+
+	afterSuccessState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	if afterSuccessState.DocumentVersion != beforeState.DocumentVersion+1 {
+		t.Fatalf("expected failpoint retry success to advance version once from %d to %d, got %d", beforeState.DocumentVersion, beforeState.DocumentVersion+1, afterSuccessState.DocumentVersion)
+	}
+	if afterSuccessState.DocumentBody != string(dryRun.PreviewBody) {
+		t.Fatalf("expected failpoint retry success body to match preview\nafter=%s\npreview=%s", afterSuccessState.DocumentBody, dryRun.PreviewBody)
+	}
+	if len(afterSuccessState.Applications) != 1 {
+		t.Fatalf("expected one application row after failpoint retry success, got %+v", afterSuccessState.Applications)
+	}
+	assertReplayAdminReceiptsAndObservationsEqual(t, beforeState, afterSuccessState)
+}
+
+func TestRunApplyPolicyAbortCanBeRetriedSafelyWithoutPartialRows(t *testing.T) {
+	t.Setenv(envEnableInternalSyncReplayCLI, "1")
+	t.Setenv(envEnableInternalSyncReplayApply, "1")
+	t.Setenv(envDeploymentMode, "selfhosted")
+
+	fixture := createReplayPreflightFixture(t, replayPreflightFixtureOptions{
+		customReceiptInputs: []store.SyncMutationReceiptInput{
+			buildReplayReceiptInputForCommand("mut-invalid-payload", "Node", "item-1", "MoveNode", `[]`),
+		},
+	})
+	beforeState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		spyHolder := &replayAdminStoreSpy{}
+		stdout := &bytes.Buffer{}
+		stderr := &bytes.Buffer{}
+
+		exitCode := runWithDeps(makeReplayAdminCommandDeps(t, spyHolder, nil), buildApplyArgs(fixture), stdout, stderr)
+		if exitCode != 1 {
+			t.Fatalf("expected attempt %d exit code 1, got %d stderr=%q", attempt, exitCode, stderr.String())
+		}
+
+		result := decodeApplyResult(t, stdout.String())
+		if result.Status != applyStatusAbortedPolicy {
+			t.Fatalf("unexpected policy retry result on attempt %d: %+v", attempt, result)
+		}
+		if len(result.MutationResults) != 1 || result.MutationResults[0].ApplicationStatus != store.SyncMutationReplayApplicationStatusFailed {
+			t.Fatalf("unexpected policy retry mutation results on attempt %d: %+v", attempt, result.MutationResults)
+		}
+		if spyHolder.store == nil || spyHolder.store.applyCallCount != 1 {
+			t.Fatalf("expected attempt %d to call store apply once, got %+v", attempt, spyHolder.store)
+		}
+
+		afterState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+		assertReplayAdminStateEqual(t, beforeState, afterState)
+	}
+}
+
+func TestRunApplyStaleObservationRequiresFreshObservationBeforeSuccess(t *testing.T) {
+	t.Setenv(envEnableInternalSyncReplayCLI, "1")
+	t.Setenv(envEnableInternalSyncReplayApply, "1")
+	t.Setenv(envDeploymentMode, "selfhosted")
+
+	fixture := createReplayPreflightFixture(t, replayPreflightFixtureOptions{mutateCanonicalAfterObservation: true})
+	beforeState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	firstSpyHolder := &replayAdminStoreSpy{}
+	firstStdout := &bytes.Buffer{}
+	firstStderr := &bytes.Buffer{}
+
+	exitCode := runWithDeps(makeReplayAdminCommandDeps(t, firstSpyHolder, nil), buildApplyArgs(fixture), firstStdout, firstStderr)
+	if exitCode != 1 {
+		t.Fatalf("expected first exit code 1, got %d stderr=%q", exitCode, firstStderr.String())
+	}
+
+	firstResult := decodeApplyResult(t, firstStdout.String())
+	if firstResult.Status != applyStatusStaleCanonical || firstResult.PreflightStatus != preflightStatusStaleCanonical {
+		t.Fatalf("unexpected stale observation apply result: %+v", firstResult)
+	}
+	if firstSpyHolder.store == nil || firstSpyHolder.store.applyCallCount != 0 {
+		t.Fatalf("expected stale observation attempt to stop before store apply, got %+v", firstSpyHolder.store)
+	}
+
+	afterFirstState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	assertReplayAdminStateEqual(t, beforeState, afterFirstState)
+
+	sqliteStore := openReplayAdminTestStore(t, fixture.dbPath)
+	refreshedObservation, err := sqliteStore.RecordSyncMutationReplayDryRunObservation(context.Background(), fixture.ownerKey, fixture.appID)
+	if err != nil {
+		t.Fatalf("record refreshed observation: %v", err)
+	}
+	refreshedObservationID := strconv.FormatInt(refreshedObservation.ID, 10)
+	dryRun, err := sqliteStore.ReplaySyncMutationReceiptsDryRun(context.Background(), fixture.ownerKey, fixture.appID)
+	if err != nil {
+		t.Fatalf("build dry-run preview for refreshed observation: %v", err)
+	}
+	beforeSecondState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+
+	secondSpyHolder := &replayAdminStoreSpy{}
+	secondStdout := &bytes.Buffer{}
+	secondStderr := &bytes.Buffer{}
+	secondArgs := buildApplyArgs(fixture)
+	secondArgs = replaceFlagValue(secondArgs, "--observation-id", refreshedObservationID)
+	secondArgs = replaceFlagValue(secondArgs, "--confirm-observation-id", refreshedObservationID)
+
+	exitCode = runWithDeps(makeReplayAdminCommandDeps(t, secondSpyHolder, nil), secondArgs, secondStdout, secondStderr)
+	if exitCode != 0 {
+		t.Fatalf("expected refreshed observation exit code 0, got %d stderr=%q", exitCode, secondStderr.String())
+	}
+
+	secondResult := decodeApplyResult(t, secondStdout.String())
+	if secondResult.Status != applyStatusApplied || secondResult.PreflightStatus != preflightStatusSafe {
+		t.Fatalf("unexpected refreshed observation apply result: %+v", secondResult)
+	}
+	if secondSpyHolder.store == nil || secondSpyHolder.store.applyCallCount != 1 {
+		t.Fatalf("expected refreshed observation attempt to call store apply once, got %+v", secondSpyHolder.store)
+	}
+
+	afterSecondState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	if afterSecondState.DocumentVersion != beforeSecondState.DocumentVersion+1 {
+		t.Fatalf("expected refreshed observation success to advance version once from %d to %d, got %d", beforeSecondState.DocumentVersion, beforeSecondState.DocumentVersion+1, afterSecondState.DocumentVersion)
+	}
+	if afterSecondState.DocumentBody != string(dryRun.PreviewBody) {
+		t.Fatalf("expected refreshed observation success body to match preview\nafter=%s\npreview=%s", afterSecondState.DocumentBody, dryRun.PreviewBody)
+	}
+	if len(afterSecondState.Applications) != 1 {
+		t.Fatalf("expected one application row after refreshed observation success, got %+v", afterSecondState.Applications)
+	}
+	assertReplayAdminReceiptsAndObservationsEqual(t, beforeSecondState, afterSecondState)
+}
+
 func TestRunPreflightRejectsUnsupportedOutputFormat(t *testing.T) {
 	fixture := createReplayPreflightFixture(t, replayPreflightFixtureOptions{})
 	stdout := &bytes.Buffer{}

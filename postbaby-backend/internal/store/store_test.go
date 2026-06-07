@@ -3445,6 +3445,125 @@ func TestApplySyncMutationReplayAuthoritativeInternalRepeatedApplyIsIdempotent(t
 	assertReplayReceiptRowsEqual(t, beforeReceipts, afterReceipts)
 }
 
+func TestApplySyncMutationReplayAuthoritativeInternalConcurrentApplyCommitsAtMostOnce(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	before := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-create", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","position":{"top":"10px","left":"20px"}}`),
+	)
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+	beforeObservation := loadReplayDryRunObservationForTest(t, docStore, observation.ID)
+	beforeObservationCount := countReplayDryRunObservationsForTest(t, docStore, "owner", "postbaby-web")
+	beforeReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	dryRun, err := docStore.ReplaySyncMutationReceiptsDryRun(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("build dry-run preview before concurrent apply: %v", err)
+	}
+
+	secondStore, err := Open(docStore.dbPath)
+	if err != nil {
+		t.Fatalf("open second store for concurrent apply: %v", err)
+	}
+	defer func() {
+		if err := secondStore.Close(); err != nil {
+			t.Fatalf("close second store: %v", err)
+		}
+	}()
+
+	type applyAttempt struct {
+		result SyncMutationReplayAuthoritativeApplyResult
+		err    error
+	}
+
+	start := make(chan struct{})
+	results := make(chan applyAttempt, 2)
+	runConcurrentApply := func(testStore *Store) {
+		<-start
+		result, err := testStore.ApplySyncMutationReplayAuthoritativeInternal(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+			AllowInternalAuthoritativeReplay: true,
+		})
+		results <- applyAttempt{result: result, err: err}
+	}
+
+	go runConcurrentApply(docStore)
+	go runConcurrentApply(secondStore)
+	close(start)
+
+	firstAttempt := <-results
+	secondAttempt := <-results
+
+	appliedCount := 0
+	busyLoserCount := 0
+	for _, attempt := range []applyAttempt{firstAttempt, secondAttempt} {
+		if attempt.err != nil {
+			if strings.Contains(attempt.err.Error(), "database is locked") {
+				busyLoserCount++
+				continue
+			}
+			t.Fatalf("concurrent authoritative apply returned unexpected error: %v", attempt.err)
+		}
+		switch attempt.result.Status {
+		case SyncMutationReplayAuthoritativeApplyStatusApplied:
+			appliedCount++
+		case SyncMutationReplayAuthoritativeApplyStatusIdempotentExitAlreadyApplied,
+			SyncMutationReplayAuthoritativeApplyStatusAbortedPreconditions:
+		default:
+			t.Fatalf("unexpected concurrent authoritative apply status: %+v", attempt.result)
+		}
+	}
+	if appliedCount != 1 {
+		t.Fatalf("expected exactly one concurrent authoritative apply commit, got results %+v and %+v", firstAttempt.result, secondAttempt.result)
+	}
+	if busyLoserCount > 1 {
+		t.Fatalf("expected at most one concurrent authoritative apply loser to hit SQLITE_BUSY, got %d", busyLoserCount)
+	}
+
+	after, err := docStore.GetDocument(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("load document after concurrent apply: %v", err)
+	}
+	if after.Version != before.Version+1 {
+		t.Fatalf("expected concurrent apply to advance version at most once from %d to %d, got %d", before.Version, before.Version+1, after.Version)
+	}
+	if string(after.Body) != string(dryRun.PreviewBody) {
+		t.Fatalf("expected concurrent apply body to equal committed preview, preview=%s actual=%s", dryRun.PreviewBody, after.Body)
+	}
+
+	applications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	if len(applications) != 1 {
+		t.Fatalf("expected one application row after concurrent apply, got %+v", applications)
+	}
+	application := findReplayApplicationByMutationID(t, applications, "mut-create")
+	if application.ApplicationStatus != SyncMutationReplayApplicationStatusApplied {
+		t.Fatalf("unexpected concurrent apply application row: %+v", application)
+	}
+
+	afterReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	assertReplayReceiptRowsEqual(t, beforeReceipts, afterReceipts)
+	if countReplayDryRunObservationsForTest(t, docStore, "owner", "postbaby-web") != beforeObservationCount {
+		t.Fatalf("expected concurrent apply to preserve observation row count")
+	}
+	afterObservation := loadReplayDryRunObservationForTest(t, docStore, observation.ID)
+	if afterObservation != beforeObservation {
+		t.Fatalf("expected concurrent apply to preserve observation row, before=%+v after=%+v", beforeObservation, afterObservation)
+	}
+}
+
 func TestApplySyncMutationReplayAuthoritativeInternalObservationMissingAbortsWithoutWrites(t *testing.T) {
 	t.Parallel()
 
