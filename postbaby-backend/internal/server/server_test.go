@@ -1634,7 +1634,7 @@ func newServerTestEnvWithOptions(t *testing.T, deploymentMode config.DeploymentM
 	authManager := auth.NewManager(docStore, auth.Options{})
 	entitlementManager := entitlement.NewManager(docStore)
 	billingService := billing.NewServiceWithProvider(docStore, options.billingProvider, options.publicBaseURL)
-	apiHandler := httpapi.NewHandler(docStore, authManager, entitlementManager, deploymentMode)
+	apiHandler := httpapi.NewHandler(docStore, authManager, entitlementManager, deploymentMode, false)
 	return &serverTestEnv{
 		handler:     NewHandler(apiHandler, authManager, entitlementManager, billingService, staticDir, deploymentMode),
 		store:       docStore,

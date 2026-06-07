@@ -3,18 +3,25 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"postbaby-backend/internal/auth"
 	"postbaby-backend/internal/config"
 	"postbaby-backend/internal/entitlement"
 	"postbaby-backend/internal/store"
+
+	_ "modernc.org/sqlite"
 )
 
 const testPassword = "correct-horse-battery"
@@ -897,6 +904,7 @@ type testEnv struct {
 	store       *store.Store
 	authManager *auth.Manager
 	cookie      *http.Cookie
+	dbPath      string
 }
 
 func TestDocumentRoutesReturnNotFoundWhenSyncDisabled(t *testing.T) {
@@ -914,7 +922,430 @@ func TestDocumentRoutesReturnNotFoundWhenSyncDisabled(t *testing.T) {
 	}
 }
 
+func TestSyncDeltaReturnsNotFoundWhenDisabledByDefault(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHosted)
+	req := httptest.NewRequest(http.MethodGet, "/api/sync/delta?appId=postbaby-web&sinceVersion=0", nil)
+	req.AddCookie(env.cookie)
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "not_found")
+	assertNoStore(t, rec)
+}
+
+func TestSyncDeltaReturnsNotFoundInCloudWhenEnabled(t *testing.T) {
+	t.Parallel()
+
+	env := newTestEnvWithOptions(t, config.DeploymentModeCloud, true)
+	req := httptest.NewRequest(http.MethodGet, "/api/sync/delta?appId=postbaby-web&sinceVersion=0", nil)
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "not_found")
+	assertNoStore(t, rec)
+}
+
+func TestSyncDeltaReturnsNotFoundInCloudMultiUserModeWhenEnabled(t *testing.T) {
+	t.Setenv("POSTBABY_DEPLOYMENT_MODE", "cloud_multi_user")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	env := newTestEnvWithOptions(t, cfg.DeploymentMode, true)
+	req := httptest.NewRequest(http.MethodGet, "/api/sync/delta?appId=postbaby-web&sinceVersion=0", nil)
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	assertErrorResponse(t, rec, http.StatusNotFound, "not_found")
+	assertNoStore(t, rec)
+}
+
+func TestSyncDeltaRequiresAuthenticationWhenEnabled(t *testing.T) {
+	t.Parallel()
+
+	env := newTestEnvWithOptions(t, config.DeploymentModeSelfHosted, true)
+	req := httptest.NewRequest(http.MethodGet, "/api/sync/delta?appId=postbaby-web&sinceVersion=0", nil)
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	assertErrorResponse(t, rec, http.StatusUnauthorized, "unauthorized")
+	assertNoStore(t, rec)
+}
+
+func TestSyncDeltaRequiresAppID(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthenticatedTestEnvWithOptions(t, config.DeploymentModeSelfHosted, true)
+	req := httptest.NewRequest(http.MethodGet, "/api/sync/delta?sinceVersion=0", nil)
+	req.AddCookie(env.cookie)
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid_request")
+	assertNoStore(t, rec)
+}
+
+func TestSyncDeltaRequiresSinceVersion(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthenticatedTestEnvWithOptions(t, config.DeploymentModeSelfHosted, true)
+	req := httptest.NewRequest(http.MethodGet, "/api/sync/delta?appId=postbaby-web", nil)
+	req.AddCookie(env.cookie)
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid_request")
+	assertNoStore(t, rec)
+}
+
+func TestSyncDeltaRejectsInvalidSinceVersion(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthenticatedTestEnvWithOptions(t, config.DeploymentModeSelfHosted, true)
+	req := httptest.NewRequest(http.MethodGet, "/api/sync/delta?appId=postbaby-web&sinceVersion=abc", nil)
+	req.AddCookie(env.cookie)
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid_request")
+	assertNoStore(t, rec)
+}
+
+func TestSyncDeltaRejectsNegativeSinceVersion(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthenticatedTestEnvWithOptions(t, config.DeploymentModeSelfHosted, true)
+	req := httptest.NewRequest(http.MethodGet, "/api/sync/delta?appId=postbaby-web&sinceVersion=-1", nil)
+	req.AddCookie(env.cookie)
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid_request")
+	assertNoStore(t, rec)
+}
+
+func TestSyncDeltaRejectsNegativeApplicationWatermark(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthenticatedTestEnvWithOptions(t, config.DeploymentModeSelfHosted, true)
+	req := httptest.NewRequest(http.MethodGet, "/api/sync/delta?appId=postbaby-web&sinceVersion=0&applicationWatermark=-1", nil)
+	req.AddCookie(env.cookie)
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid_request")
+	assertNoStore(t, rec)
+}
+
+func TestSyncDeltaRejectsInvalidIncludeApplications(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthenticatedTestEnvWithOptions(t, config.DeploymentModeSelfHosted, true)
+	req := httptest.NewRequest(http.MethodGet, "/api/sync/delta?appId=postbaby-web&sinceVersion=0&includeApplications=maybe", nil)
+	req.AddCookie(env.cookie)
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid_request")
+	assertNoStore(t, rec)
+}
+
+func TestSyncDeltaRejectsInvalidLimit(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthenticatedTestEnvWithOptions(t, config.DeploymentModeSelfHosted, true)
+	req := httptest.NewRequest(http.MethodGet, "/api/sync/delta?appId=postbaby-web&sinceVersion=0&limit=0", nil)
+	req.AddCookie(env.cookie)
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	assertErrorResponse(t, rec, http.StatusBadRequest, "invalid_request")
+	assertNoStore(t, rec)
+}
+
+func TestSyncDeltaReturnsClientVersionAheadReason(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthenticatedTestEnvWithOptions(t, config.DeploymentModeSelfHosted, true)
+	user := authenticatedUserFromCookie(t, env, env.cookie)
+	appID := "postbaby-web"
+	body := mustMarshalSyncDeltaSnapshotBody(t, snapshot("tab-1", "[]"))
+	doc, err := env.store.PutDocument(context.Background(), user.OwnerKey, appID, body, nil)
+	if err != nil {
+		t.Fatalf("seed document: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sync/delta?appId="+appID+"&sinceVersion=2", nil)
+	req.AddCookie(env.cookie)
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp syncDeltaResponse
+	decodeResponse(t, rec, &resp)
+
+	if !resp.OK || !resp.RequiresSnapshotRefresh || resp.Reason != store.SyncDeltaMetadataReasonSnapshotRequiredClientVersionAhead {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	if resp.CurrentDocumentVersion != doc.Version || resp.CurrentDocumentHash != hashSyncDeltaTestBody(body) {
+		t.Fatalf("unexpected current document metadata: %+v", resp)
+	}
+	if len(resp.Applications) != 0 {
+		t.Fatalf("expected no application metadata, got %+v", resp.Applications)
+	}
+	assertNoStore(t, rec)
+}
+
+func TestSyncDeltaReturnsUpToDateWhenEnabled(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthenticatedTestEnvWithOptions(t, config.DeploymentModeSelfHosted, true)
+	user := authenticatedUserFromCookie(t, env, env.cookie)
+	appID := "postbaby-web"
+	body := mustMarshalSyncDeltaSnapshotBody(t, snapshot("tab-1", "[]"))
+	doc, err := env.store.PutDocument(context.Background(), user.OwnerKey, appID, body, nil)
+	if err != nil {
+		t.Fatalf("seed document: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sync/delta?appId="+appID+"&sinceVersion=1", nil)
+	req.AddCookie(env.cookie)
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp syncDeltaResponse
+	decodeResponse(t, rec, &resp)
+
+	if !resp.OK || resp.RequiresSnapshotRefresh || resp.Reason != store.SyncDeltaMetadataReasonUpToDate {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	if resp.CurrentDocumentVersion != doc.Version || resp.ClientVersion != doc.Version || resp.CurrentDocumentHash != hashSyncDeltaTestBody(body) {
+		t.Fatalf("unexpected document metadata response: %+v", resp)
+	}
+	if len(resp.Applications) != 0 {
+		t.Fatalf("expected no applications, got %+v", resp.Applications)
+	}
+	assertNoStore(t, rec)
+}
+
+func TestSyncDeltaReturnsDocumentVersionChanged(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthenticatedTestEnvWithOptions(t, config.DeploymentModeSelfHosted, true)
+	user := authenticatedUserFromCookie(t, env, env.cookie)
+	appID := "postbaby-web"
+	bodyBefore := mustMarshalSyncDeltaSnapshotBody(t, snapshot("tab-1", "[]"))
+	docBefore, err := env.store.PutDocument(context.Background(), user.OwnerKey, appID, bodyBefore, nil)
+	if err != nil {
+		t.Fatalf("seed initial document: %v", err)
+	}
+	bodyAfter := mustMarshalSyncDeltaSnapshotBody(t, snapshot("tab-2", "[]"))
+	expectedVersion := docBefore.Version
+	docAfter, err := env.store.PutDocument(context.Background(), user.OwnerKey, appID, bodyAfter, &expectedVersion)
+	if err != nil {
+		t.Fatalf("update document: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sync/delta?appId="+appID+"&sinceVersion=1", nil)
+	req.AddCookie(env.cookie)
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp syncDeltaResponse
+	decodeResponse(t, rec, &resp)
+
+	if !resp.OK || resp.RequiresSnapshotRefresh || resp.Reason != store.SyncDeltaMetadataReasonDocumentVersionChanged {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	if resp.CurrentDocumentVersion != docAfter.Version || resp.ClientVersion != docBefore.Version || resp.CurrentDocumentHash != hashSyncDeltaTestBody(bodyAfter) {
+		t.Fatalf("unexpected document metadata response: %+v", resp)
+	}
+	assertNoStore(t, rec)
+}
+
+func TestSyncDeltaReturnsCommittedAppliedAndSkippedApplications(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthenticatedTestEnvWithOptions(t, config.DeploymentModeSelfHosted, true)
+	fixture := seedCommittedSyncDeltaMetadataFixture(t, env)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sync/delta?appId="+fixture.AppID+"&sinceVersion=1&includeApplications=true", nil)
+	req.AddCookie(env.cookie)
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp syncDeltaResponse
+	decodeResponse(t, rec, &resp)
+
+	if !resp.OK || resp.RequiresSnapshotRefresh || resp.Reason != store.SyncDeltaMetadataReasonApplicationsAvailable {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	if resp.CurrentDocumentVersion != fixture.CurrentDocument.Version || resp.CurrentDocumentHash != hashSyncDeltaTestBody(fixture.BodyAfter) {
+		t.Fatalf("unexpected current document metadata: %+v", resp)
+	}
+	if len(resp.Applications) != 2 {
+		t.Fatalf("expected 2 committed applications, got %+v", resp.Applications)
+	}
+	if resp.Applications[0].MutationID != fixture.AppliedMutationID || resp.Applications[0].ApplicationStatus != store.SyncMutationReplayApplicationStatusApplied {
+		t.Fatalf("unexpected applied application entry: %+v", resp.Applications[0])
+	}
+	if resp.Applications[1].MutationID != fixture.SkippedMutationID || resp.Applications[1].ApplicationStatus != store.SyncMutationReplayApplicationStatusSkipped {
+		t.Fatalf("unexpected skipped application entry: %+v", resp.Applications[1])
+	}
+	if resp.NextApplicationWatermark == nil || *resp.NextApplicationWatermark != fixture.SkippedApplication.ID {
+		t.Fatalf("unexpected next application watermark: %+v", resp)
+	}
+	if !containsSyncDeltaString(resp.Warnings, "document_version_advanced_without_body_change") {
+		t.Fatalf("expected version-advance warning, got %+v", resp.Warnings)
+	}
+	assertNoStore(t, rec)
+}
+
+func TestSyncDeltaOmitsApplicationsWhenIncludeFalse(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthenticatedTestEnvWithOptions(t, config.DeploymentModeSelfHosted, true)
+	fixture := seedCommittedSyncDeltaMetadataFixture(t, env)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sync/delta?appId="+fixture.AppID+"&sinceVersion=3&includeApplications=false", nil)
+	req.AddCookie(env.cookie)
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp syncDeltaResponse
+	decodeResponse(t, rec, &resp)
+
+	if !resp.OK || resp.RequiresSnapshotRefresh || resp.Reason != store.SyncDeltaMetadataReasonUpToDate {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	if len(resp.Applications) != 0 {
+		t.Fatalf("expected no application metadata when includeApplications=false, got %+v", resp.Applications)
+	}
+	assertNoStore(t, rec)
+}
+
+func TestSyncDeltaTooManyApplicationsRequiresSnapshotRefresh(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthenticatedTestEnvWithOptions(t, config.DeploymentModeSelfHosted, true)
+	fixture := seedCommittedSyncDeltaMetadataFixture(t, env)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sync/delta?appId="+fixture.AppID+"&sinceVersion=1&includeApplications=true&limit=1", nil)
+	req.AddCookie(env.cookie)
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp syncDeltaResponse
+	decodeResponse(t, rec, &resp)
+
+	if !resp.OK || !resp.RequiresSnapshotRefresh || resp.Reason != store.SyncDeltaMetadataReasonSnapshotRequiredTooManyApplications {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	if len(resp.Applications) != 0 {
+		t.Fatalf("expected no applications in snapshot refresh response, got %+v", resp.Applications)
+	}
+	if resp.NextApplicationWatermark == nil || *resp.NextApplicationWatermark != fixture.SkippedApplication.ID {
+		t.Fatalf("unexpected next application watermark: %+v", resp)
+	}
+	assertNoStore(t, rec)
+}
+
+func TestSyncDeltaResponseExcludesCanonicalBodyAndCameraState(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthenticatedTestEnvWithOptions(t, config.DeploymentModeSelfHosted, true)
+	fixture := seedCommittedSyncDeltaMetadataFixture(t, env)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sync/delta?appId="+fixture.AppID+"&sinceVersion=3&includeApplications=true", nil)
+	req.AddCookie(env.cookie)
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+
+	var raw map[string]json.RawMessage
+	decodeResponse(t, rec, &raw)
+	for _, forbiddenField := range []string{"data", "body", "cameraState"} {
+		if _, exists := raw[forbiddenField]; exists {
+			t.Fatalf("expected field %q to be absent from delta metadata response: %s", forbiddenField, rec.Body.String())
+		}
+	}
+	assertNoStore(t, rec)
+}
+
+func TestSyncDeltaIsReadOnlyAcrossDocumentReceiptsApplicationsAndObservations(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthenticatedTestEnvWithOptions(t, config.DeploymentModeSelfHosted, true)
+	fixture := seedCommittedSyncDeltaMetadataFixture(t, env)
+	beforeState := snapshotSyncDeltaAPIState(t, env, fixture.OwnerKey, fixture.AppID)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sync/delta?appId="+fixture.AppID+"&sinceVersion=3&includeApplications=true", nil)
+	req.AddCookie(env.cookie)
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+
+	afterState := snapshotSyncDeltaAPIState(t, env, fixture.OwnerKey, fixture.AppID)
+	assertSyncDeltaAPIStateEqual(t, beforeState, afterState)
+	assertNoStore(t, rec)
+}
+
 func newTestEnv(t *testing.T, deploymentMode config.DeploymentMode) *testEnv {
+	return newTestEnvWithOptions(t, deploymentMode, false)
+}
+
+func newTestEnvWithOptions(t *testing.T, deploymentMode config.DeploymentMode, enableSyncDeltaMetadata bool) *testEnv {
 	t.Helper()
 
 	dbPath := filepath.Join(t.TempDir(), "postbaby-api-test.db")
@@ -932,16 +1363,21 @@ func newTestEnv(t *testing.T, deploymentMode config.DeploymentMode) *testEnv {
 	authManager := auth.NewManager(docStore, auth.Options{})
 	entitlementManager := entitlement.NewManager(docStore)
 	return &testEnv{
-		handler:     NewHandler(docStore, authManager, entitlementManager, deploymentMode),
+		handler:     NewHandler(docStore, authManager, entitlementManager, deploymentMode, enableSyncDeltaMetadata),
 		store:       docStore,
 		authManager: authManager,
+		dbPath:      dbPath,
 	}
 }
 
 func newAuthenticatedTestEnv(t *testing.T, deploymentMode config.DeploymentMode) *testEnv {
+	return newAuthenticatedTestEnvWithOptions(t, deploymentMode, false)
+}
+
+func newAuthenticatedTestEnvWithOptions(t *testing.T, deploymentMode config.DeploymentMode, enableSyncDeltaMetadata bool) *testEnv {
 	t.Helper()
 
-	env := newTestEnv(t, deploymentMode)
+	env := newTestEnvWithOptions(t, deploymentMode, enableSyncDeltaMetadata)
 	user, err := env.authManager.CreateInitialUser(context.Background(), "owner", testPassword)
 	if err != nil {
 		t.Fatalf("create initial user: %v", err)
@@ -1170,4 +1606,409 @@ func buildSyncMutationEnvelope(mutationID, operationType string, payload any) ma
 		"operationType": operationType,
 		"payload":       payload,
 	}
+}
+
+type syncDeltaResponse struct {
+	OK                       bool                        `json:"ok"`
+	AppID                    string                      `json:"appId"`
+	CurrentDocumentVersion   int64                       `json:"currentDocumentVersion"`
+	CurrentDocumentHash      string                      `json:"currentDocumentHash"`
+	ClientVersion            int64                       `json:"clientVersion"`
+	RequiresSnapshotRefresh  bool                        `json:"requiresSnapshotRefresh"`
+	Reason                   string                      `json:"reason"`
+	ApplicationWatermark     *int64                      `json:"applicationWatermark"`
+	NextApplicationWatermark *int64                      `json:"nextApplicationWatermark"`
+	Applications             []syncDeltaApplicationEntry `json:"applications"`
+	Warnings                 []string                    `json:"warnings"`
+}
+
+type syncDeltaApplicationEntry struct {
+	MutationID                     string  `json:"mutationId"`
+	ApplicationStatus              string  `json:"applicationStatus"`
+	ApplicationReason              string  `json:"applicationReason"`
+	CanonicalDocumentVersionBefore int64   `json:"canonicalDocumentVersionBefore"`
+	CanonicalDocumentVersionAfter  *int64  `json:"canonicalDocumentVersionAfter"`
+	CanonicalDocumentHashBefore    string  `json:"canonicalDocumentHashBefore"`
+	CanonicalDocumentHashAfter     *string `json:"canonicalDocumentHashAfter"`
+	ReplayObservationID            *int64  `json:"replayObservationId"`
+	CreatedAt                      string  `json:"createdAt"`
+}
+
+type syncDeltaCommittedMetadataFixture struct {
+	OwnerKey           string
+	AppID              string
+	BodyBefore         json.RawMessage
+	BodyAfter          json.RawMessage
+	CurrentDocument    store.Document
+	Observation        store.SyncMutationReplayDryRunObservation
+	AppliedMutationID  string
+	SkippedMutationID  string
+	ConflictMutationID string
+	AppliedApplication store.SyncMutationReplayApplication
+	SkippedApplication store.SyncMutationReplayApplication
+}
+
+type syncDeltaAPIStateSnapshot struct {
+	Document     store.Document
+	Applications []store.SyncMutationReplayApplication
+	Receipts     []syncDeltaAPIReceiptRow
+	Observations []store.SyncMutationReplayDryRunObservation
+}
+
+type syncDeltaAPIReceiptRow struct {
+	ID            int64
+	OwnerKey      string
+	AppID         string
+	MutationID    string
+	ClientID      string
+	DeviceID      string
+	Protocol      string
+	EntityType    string
+	EntityID      string
+	OperationType string
+	PayloadJSON   string
+	BaseRevision  *int64
+	Status        string
+	CreatedAt     string
+	AcceptedAt    string
+}
+
+func mustMarshalSyncDeltaSnapshotBody(t *testing.T, value any) json.RawMessage {
+	t.Helper()
+
+	body, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal sync delta snapshot body: %v", err)
+	}
+	return json.RawMessage(body)
+}
+
+func hashSyncDeltaTestBody(body json.RawMessage) string {
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
+}
+
+func buildSyncDeltaReceiptInput(mutationID string) store.SyncMutationReceiptInput {
+	baseRevision := int64(6)
+	return store.SyncMutationReceiptInput{
+		MutationID:    mutationID,
+		ClientID:      "client-1",
+		DeviceID:      "device-1",
+		Protocol:      "PB-SYNC/1",
+		EntityType:    "Node",
+		EntityID:      "item-" + mutationID,
+		OperationType: "CreateNode",
+		Payload:       json.RawMessage(`{"tabId":"tab-1","name":"Seeded Node","position":{"top":"20px","left":"20px"}}`),
+		BaseRevision:  &baseRevision,
+	}
+}
+
+func seedCommittedSyncDeltaMetadataFixture(t *testing.T, env *testEnv) syncDeltaCommittedMetadataFixture {
+	t.Helper()
+
+	ctx := context.Background()
+	user := authenticatedUserFromCookie(t, env, env.cookie)
+	appID := "postbaby-web"
+	bodyBefore := mustMarshalSyncDeltaSnapshotBody(t, snapshot("tab-1", "[]"))
+	docBefore, err := env.store.PutDocument(ctx, user.OwnerKey, appID, bodyBefore, nil)
+	if err != nil {
+		t.Fatalf("seed initial document: %v", err)
+	}
+
+	bodyAfter := mustMarshalSyncDeltaSnapshotBody(t, snapshot("tab-2", "[]"))
+	expectedVersion := docBefore.Version
+	docAfter, err := env.store.PutDocument(ctx, user.OwnerKey, appID, bodyAfter, &expectedVersion)
+	if err != nil {
+		t.Fatalf("seed changed document: %v", err)
+	}
+
+	expectedUnchangedVersion := docAfter.Version
+	currentDoc, err := env.store.PutDocument(ctx, user.OwnerKey, appID, bodyAfter, &expectedUnchangedVersion)
+	if err != nil {
+		t.Fatalf("seed body-unchanged version bump: %v", err)
+	}
+
+	receiptInputs := []store.SyncMutationReceiptInput{
+		buildSyncDeltaReceiptInput("mut-applied"),
+		buildSyncDeltaReceiptInput("mut-skipped"),
+		buildSyncDeltaReceiptInput("mut-conflict"),
+	}
+	if _, err := env.store.AcceptSyncMutationReceipts(ctx, user.OwnerKey, appID, receiptInputs); err != nil {
+		t.Fatalf("seed sync mutation receipts: %v", err)
+	}
+
+	observation, err := env.store.RecordSyncMutationReplayDryRunObservation(ctx, user.OwnerKey, appID)
+	if err != nil {
+		t.Fatalf("record sync delta dry-run observation: %v", err)
+	}
+
+	hashBefore := hashSyncDeltaTestBody(bodyBefore)
+	hashAfter := hashSyncDeltaTestBody(bodyAfter)
+	observationID := observation.ID
+	docAfterVersion := docAfter.Version
+	currentDocVersion := currentDoc.Version
+
+	appliedResult, err := env.store.RecordSyncMutationReplayApplicationInert(ctx, user.OwnerKey, appID, store.SyncMutationReplayApplicationInput{
+		MutationID:                     "mut-applied",
+		ApplicationStatus:              store.SyncMutationReplayApplicationStatusApplied,
+		ApplicationReason:              "policy_allowed",
+		CanonicalDocumentVersionBefore: docBefore.Version,
+		CanonicalDocumentHashBefore:    hashBefore,
+		CanonicalDocumentVersionAfter:  &docAfterVersion,
+		CanonicalDocumentHashAfter:     stringPointer(hashAfter),
+		ReplayObservationID:            &observationID,
+	})
+	if err != nil {
+		t.Fatalf("record applied replay application: %v", err)
+	}
+
+	skippedResult, err := env.store.RecordSyncMutationReplayApplicationInert(ctx, user.OwnerKey, appID, store.SyncMutationReplayApplicationInput{
+		MutationID:                     "mut-skipped",
+		ApplicationStatus:              store.SyncMutationReplayApplicationStatusSkipped,
+		ApplicationReason:              "policy_skip_already_reflected",
+		CanonicalDocumentVersionBefore: docAfter.Version,
+		CanonicalDocumentHashBefore:    hashAfter,
+		CanonicalDocumentVersionAfter:  &currentDocVersion,
+		CanonicalDocumentHashAfter:     stringPointer(hashAfter),
+		ReplayObservationID:            &observationID,
+	})
+	if err != nil {
+		t.Fatalf("record skipped replay application: %v", err)
+	}
+
+	if _, err := env.store.RecordSyncMutationReplayApplicationInert(ctx, user.OwnerKey, appID, store.SyncMutationReplayApplicationInput{
+		MutationID:                     "mut-conflict",
+		ApplicationStatus:              store.SyncMutationReplayApplicationStatusConflict,
+		ApplicationReason:              "diagnostic_conflict_only",
+		CanonicalDocumentVersionBefore: currentDoc.Version,
+		CanonicalDocumentHashBefore:    hashAfter,
+		ReplayObservationID:            &observationID,
+	}); err != nil {
+		t.Fatalf("record diagnostic-only replay application: %v", err)
+	}
+
+	return syncDeltaCommittedMetadataFixture{
+		OwnerKey:           user.OwnerKey,
+		AppID:              appID,
+		BodyBefore:         bodyBefore,
+		BodyAfter:          bodyAfter,
+		CurrentDocument:    currentDoc,
+		Observation:        observation,
+		AppliedMutationID:  "mut-applied",
+		SkippedMutationID:  "mut-skipped",
+		ConflictMutationID: "mut-conflict",
+		AppliedApplication: appliedResult.Application,
+		SkippedApplication: skippedResult.Application,
+	}
+}
+
+func snapshotSyncDeltaAPIState(t *testing.T, env *testEnv, ownerKey, appID string) syncDeltaAPIStateSnapshot {
+	t.Helper()
+
+	document, err := env.store.GetDocument(context.Background(), ownerKey, appID)
+	if err != nil {
+		t.Fatalf("load sync delta API document snapshot: %v", err)
+	}
+	applications, err := env.store.ListSyncMutationReplayApplications(context.Background(), ownerKey, appID)
+	if err != nil {
+		t.Fatalf("list replay applications snapshot: %v", err)
+	}
+
+	return syncDeltaAPIStateSnapshot{
+		Document:     document,
+		Applications: applications,
+		Receipts:     loadSyncDeltaAPIReceiptRows(t, env.dbPath, ownerKey, appID),
+		Observations: loadSyncDeltaAPIObservationRows(t, env.dbPath, ownerKey, appID),
+	}
+}
+
+func assertSyncDeltaAPIStateEqual(t *testing.T, before, after syncDeltaAPIStateSnapshot) {
+	t.Helper()
+
+	if before.Document.ID != after.Document.ID ||
+		before.Document.OwnerKey != after.Document.OwnerKey ||
+		before.Document.AppID != after.Document.AppID ||
+		string(before.Document.Body) != string(after.Document.Body) ||
+		before.Document.Version != after.Document.Version ||
+		!before.Document.UpdatedAt.Equal(after.Document.UpdatedAt) {
+		t.Fatalf("document changed during sync delta API read\nbefore=%+v\nafter=%+v", before.Document, after.Document)
+	}
+	if !reflect.DeepEqual(before.Applications, after.Applications) {
+		t.Fatalf("replay application rows changed during sync delta API read\nbefore=%+v\nafter=%+v", before.Applications, after.Applications)
+	}
+	if !reflect.DeepEqual(before.Receipts, after.Receipts) {
+		t.Fatalf("receipt rows changed during sync delta API read\nbefore=%+v\nafter=%+v", before.Receipts, after.Receipts)
+	}
+	if !reflect.DeepEqual(before.Observations, after.Observations) {
+		t.Fatalf("observation rows changed during sync delta API read\nbefore=%+v\nafter=%+v", before.Observations, after.Observations)
+	}
+}
+
+func loadSyncDeltaAPIReceiptRows(t *testing.T, dbPath, ownerKey, appID string) []syncDeltaAPIReceiptRow {
+	t.Helper()
+
+	db := openSyncDeltaAPIRawDB(t, dbPath)
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("close sync delta API raw sqlite connection: %v", err)
+		}
+	}()
+
+	rows, err := db.Query(
+		`SELECT
+			id,
+			owner_key,
+			app_id,
+			mutation_id,
+			client_id,
+			device_id,
+			protocol,
+			entity_type,
+			entity_id,
+			operation_type,
+			payload_json,
+			base_revision,
+			status,
+			created_at,
+			accepted_at
+		FROM sync_mutation_receipts
+		WHERE owner_key = ? AND app_id = ?
+		ORDER BY id ASC`,
+		ownerKey,
+		appID,
+	)
+	if err != nil {
+		t.Fatalf("query sync delta API receipt rows: %v", err)
+	}
+	defer rows.Close()
+
+	result := make([]syncDeltaAPIReceiptRow, 0)
+	for rows.Next() {
+		var row syncDeltaAPIReceiptRow
+		var baseRevision sql.NullInt64
+		if err := rows.Scan(
+			&row.ID,
+			&row.OwnerKey,
+			&row.AppID,
+			&row.MutationID,
+			&row.ClientID,
+			&row.DeviceID,
+			&row.Protocol,
+			&row.EntityType,
+			&row.EntityID,
+			&row.OperationType,
+			&row.PayloadJSON,
+			&baseRevision,
+			&row.Status,
+			&row.CreatedAt,
+			&row.AcceptedAt,
+		); err != nil {
+			t.Fatalf("scan sync delta API receipt row: %v", err)
+		}
+		if baseRevision.Valid {
+			row.BaseRevision = &baseRevision.Int64
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate sync delta API receipt rows: %v", err)
+	}
+
+	return result
+}
+
+func loadSyncDeltaAPIObservationRows(t *testing.T, dbPath, ownerKey, appID string) []store.SyncMutationReplayDryRunObservation {
+	t.Helper()
+
+	db := openSyncDeltaAPIRawDB(t, dbPath)
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("close sync delta API raw sqlite connection: %v", err)
+		}
+	}()
+
+	rows, err := db.Query(
+		`SELECT
+			id,
+			owner_key,
+			app_id,
+			canonical_document_version_observed,
+			canonical_document_hash_observed,
+			receipt_count_considered,
+			first_ordered_mutation_id,
+			last_ordered_mutation_id,
+			ordered_receipt_high_watermark,
+			applied_count,
+			skipped_count,
+			warning_count,
+			preview_hash,
+			created_at
+		FROM sync_mutation_replay_dry_run_observations
+		WHERE owner_key = ? AND app_id = ?
+		ORDER BY id ASC`,
+		ownerKey,
+		appID,
+	)
+	if err != nil {
+		t.Fatalf("query sync delta API observation rows: %v", err)
+	}
+	defer rows.Close()
+
+	result := make([]store.SyncMutationReplayDryRunObservation, 0)
+	for rows.Next() {
+		var row store.SyncMutationReplayDryRunObservation
+		var createdAt string
+		if err := rows.Scan(
+			&row.ID,
+			&row.OwnerKey,
+			&row.AppID,
+			&row.CanonicalDocumentVersionObserved,
+			&row.CanonicalDocumentHashObserved,
+			&row.ReceiptCountConsidered,
+			&row.FirstOrderedMutationID,
+			&row.LastOrderedMutationID,
+			&row.OrderedReceiptHighWatermark,
+			&row.AppliedCount,
+			&row.SkippedCount,
+			&row.WarningCount,
+			&row.PreviewHash,
+			&createdAt,
+		); err != nil {
+			t.Fatalf("scan sync delta API observation row: %v", err)
+		}
+		parsedCreatedAt, err := time.Parse(time.RFC3339, createdAt)
+		if err != nil {
+			t.Fatalf("parse sync delta API observation created_at %q: %v", createdAt, err)
+		}
+		row.CreatedAt = parsedCreatedAt.UTC()
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate sync delta API observation rows: %v", err)
+	}
+
+	return result
+}
+
+func openSyncDeltaAPIRawDB(t *testing.T, dbPath string) *sql.DB {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sync delta API raw sqlite connection: %v", err)
+	}
+	return db
+}
+
+func stringPointer(value string) *string {
+	return &value
+}
+
+func containsSyncDeltaString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }

@@ -45,6 +45,7 @@ type DocumentStore interface {
 	Health(ctx context.Context) error
 	GetDocument(ctx context.Context, ownerKey, appID string) (Document, error)
 	GetDocumentMeta(ctx context.Context, ownerKey, appID string) (DocumentMeta, error)
+	GetSyncDeltaMetadata(ctx context.Context, ownerKey, appID string, options SyncDeltaMetadataOptions) (SyncDeltaMetadata, error)
 	PutDocument(ctx context.Context, ownerKey, appID string, body json.RawMessage, expectedVersion *int64) (Document, error)
 	AcceptSyncMutationReceipts(ctx context.Context, ownerKey, appID string, receipts []SyncMutationReceiptInput) ([]SyncMutationReceiptResult, error)
 }

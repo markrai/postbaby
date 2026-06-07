@@ -27,17 +27,18 @@ const (
 )
 
 type Config struct {
-	Addr                string
-	DBPath              string
-	StaticDir           string
-	CookieSecure        bool
-	SessionTTL          time.Duration
-	DeploymentMode      DeploymentMode
-	BillingProvider     string
-	PublicBaseURL       string
-	StripeSecretKey     string
-	StripeWebhookSecret string
-	StripePriceID       string
+	Addr                    string
+	DBPath                  string
+	StaticDir               string
+	CookieSecure            bool
+	SessionTTL              time.Duration
+	DeploymentMode          DeploymentMode
+	EnableSyncDeltaMetadata bool
+	BillingProvider         string
+	PublicBaseURL           string
+	StripeSecretKey         string
+	StripeWebhookSecret     string
+	StripePriceID           string
 }
 
 func Load() (Config, error) {
@@ -62,6 +63,10 @@ func Load() (Config, error) {
 	}
 
 	cookieSecure, err := parseBoolEnv("POSTBABY_COOKIE_SECURE", false)
+	if err != nil {
+		return Config{}, err
+	}
+	enableSyncDeltaMetadata, err := parseBoolEnv("POSTBABY_ENABLE_SYNC_DELTA_METADATA", false)
 	if err != nil {
 		return Config{}, err
 	}
@@ -113,17 +118,18 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		Addr:                addr,
-		DBPath:              dbPath,
-		StaticDir:           staticDir,
-		CookieSecure:        cookieSecure,
-		SessionTTL:          sessionTTL,
-		DeploymentMode:      deploymentMode,
-		BillingProvider:     billingProvider,
-		PublicBaseURL:       publicBaseURL,
-		StripeSecretKey:     stripeSecretKey,
-		StripeWebhookSecret: stripeWebhookSecret,
-		StripePriceID:       stripePriceID,
+		Addr:                    addr,
+		DBPath:                  dbPath,
+		StaticDir:               staticDir,
+		CookieSecure:            cookieSecure,
+		SessionTTL:              sessionTTL,
+		DeploymentMode:          deploymentMode,
+		EnableSyncDeltaMetadata: enableSyncDeltaMetadata,
+		BillingProvider:         billingProvider,
+		PublicBaseURL:           publicBaseURL,
+		StripeSecretKey:         stripeSecretKey,
+		StripeWebhookSecret:     stripeWebhookSecret,
+		StripePriceID:           stripePriceID,
 	}, nil
 }
 

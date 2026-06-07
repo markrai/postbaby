@@ -41,6 +41,32 @@ func TestLoadAcceptsCloudMode(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultsSyncDeltaMetadataToDisabled(t *testing.T) {
+	t.Setenv("POSTBABY_ENABLE_SYNC_DELTA_METADATA", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if cfg.EnableSyncDeltaMetadata {
+		t.Fatal("expected sync delta metadata to default to disabled")
+	}
+}
+
+func TestLoadAcceptsSyncDeltaMetadataEnabled(t *testing.T) {
+	t.Setenv("POSTBABY_ENABLE_SYNC_DELTA_METADATA", "1")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if !cfg.EnableSyncDeltaMetadata {
+		t.Fatal("expected sync delta metadata to be enabled")
+	}
+}
+
 func TestLoadAcceptsCloudMultiUserAlias(t *testing.T) {
 	t.Setenv("POSTBABY_DEPLOYMENT_MODE", cloudMultiUserAlias)
 
