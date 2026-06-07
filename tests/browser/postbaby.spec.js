@@ -2036,6 +2036,7 @@ async function enableMockedSync(page, options = {}) {
   const documentPayload = options.documentPayload || buildServerPayload('Server Snapshot', metaPayload.version || 1);
   const onSave = options.onSave || null;
   const onMutations = options.onMutations || null;
+  const onDelta = options.onDelta || null;
   const runtimeAccount = Object.assign({
     username: 'owner',
     displayName: 'owner',
@@ -2092,6 +2093,48 @@ async function enableMockedSync(page, options = {}) {
             }
           }
         };
+
+    await route.fulfill({
+      status: response.status || 200,
+      contentType: 'application/json; charset=utf-8',
+      headers: {
+        'Cache-Control': 'no-store'
+      },
+      body: JSON.stringify(response.body)
+    });
+  });
+
+  await page.route(/\/api\/sync\/delta(?:\?.*)?$/, async (route) => {
+    const request = route.request();
+    if (request.method() !== 'GET') {
+      await route.fulfill({
+        status: 405,
+        contentType: 'application/json; charset=utf-8',
+        headers: {
+          Allow: 'GET'
+        },
+        body: JSON.stringify({ ok: false })
+      });
+      return;
+    }
+
+    const response = onDelta
+      ? await onDelta(request)
+      : {
+          status: 404,
+          body: {
+            ok: false,
+            error: {
+              code: 'not_found',
+              message: 'not found'
+            }
+          }
+        };
+
+    if (response && response.abort) {
+      await route.abort(response.abort);
+      return;
+    }
 
     await route.fulfill({
       status: response.status || 200,
@@ -2172,6 +2215,9 @@ async function enableDynamicMockedSync(target, options = {}) {
   const onMutations = typeof options.onMutations === 'function'
     ? options.onMutations
     : null;
+  const onDelta = typeof options.onDelta === 'function'
+    ? options.onDelta
+    : null;
 
   await target.route('**/runtime-config.js', async (route) => {
     await route.fulfill({
@@ -2219,6 +2265,48 @@ async function enableDynamicMockedSync(target, options = {}) {
             }
           }
         };
+
+    await route.fulfill({
+      status: response.status || 200,
+      contentType: 'application/json; charset=utf-8',
+      headers: {
+        'Cache-Control': 'no-store'
+      },
+      body: JSON.stringify(response.body)
+    });
+  });
+
+  await target.route(/\/api\/sync\/delta(?:\?.*)?$/, async (route) => {
+    const request = route.request();
+    if (request.method() !== 'GET') {
+      await route.fulfill({
+        status: 405,
+        contentType: 'application/json; charset=utf-8',
+        headers: {
+          Allow: 'GET'
+        },
+        body: JSON.stringify({ ok: false })
+      });
+      return;
+    }
+
+    const response = onDelta
+      ? await onDelta(request)
+      : {
+          status: 404,
+          body: {
+            ok: false,
+            error: {
+              code: 'not_found',
+              message: 'not found'
+            }
+          }
+        };
+
+    if (response && response.abort) {
+      await route.abort(response.abort);
+      return;
+    }
 
     await route.fulfill({
       status: response.status || 200,
@@ -8397,6 +8485,200 @@ test.describe('Mocked sync startup reconciliation', () => {
     await page.goto('/index.html');
     await expectNoteVisible(page, 'Server Version 11');
     expect(dialogs).toEqual([]);
+  });
+
+  test('static mode does not call the delta metadata endpoint', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Static Delta Probe Note');
+    let deltaRequests = 0;
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.route(/\/api\/sync\/delta(?:\?.*)?$/, async (route) => {
+      deltaRequests += 1;
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json; charset=utf-8',
+        body: JSON.stringify({ ok: false })
+      });
+    });
+
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Static Delta Probe Note');
+    await page.waitForTimeout(200);
+
+    expect(deltaRequests).toBe(0);
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    expect(debugState.deltaMetadataAvailable).toBe(false);
+    expect(debugState.deltaMetadataLastCheckedAt).toBeNull();
+    expect(debugState.deltaMetadataUnavailableForSession).toBe(false);
+  });
+
+  test('self-hosted startup probe records debug state without mutating notes, outbox, camera, or applying replay metadata locally', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Probe Stable Note', { syncVersion: 6 });
+    const requestSequence = [];
+    let releaseDelta = null;
+    const deltaGate = new Promise((resolve) => {
+      releaseDelta = resolve;
+    });
+
+    page.on('request', (request) => {
+      const url = request.url();
+      if (url.includes('/api/document/meta')) {
+        requestSequence.push('meta');
+      } else if (url.includes('/api/sync/delta')) {
+        requestSequence.push('delta');
+      } else if (url.includes('/api/document?')) {
+        requestSequence.push('document');
+      }
+    });
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Probe Stable Note', 6),
+      onDelta: async () => {
+        await deltaGate;
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            appId: 'postbaby-web',
+            currentDocumentVersion: 6,
+            currentDocumentHash: 'server-hash-6',
+            clientVersion: 6,
+            requiresSnapshotRefresh: false,
+            reason: 'applications_available',
+            applicationWatermark: 41,
+            nextApplicationWatermark: 43,
+            applications: [
+              {
+                mutationId: 'mut-applied-1',
+                applicationStatus: 'authoritativeApplied',
+                applicationReason: 'policy_allowed',
+                canonicalDocumentVersionBefore: 5,
+                canonicalDocumentVersionAfter: 6,
+                canonicalDocumentHashBefore: 'hash-5',
+                canonicalDocumentHashAfter: 'hash-6',
+                replayObservationId: 11,
+                createdAt: TIMESTAMP
+              },
+              {
+                mutationId: 'mut-skipped-1',
+                applicationStatus: 'authoritativeSkipped',
+                applicationReason: 'already_reflected',
+                canonicalDocumentVersionBefore: 6,
+                canonicalDocumentVersionAfter: 6,
+                canonicalDocumentHashBefore: 'hash-6',
+                canonicalDocumentHashAfter: 'hash-6',
+                replayObservationId: 11,
+                createdAt: TIMESTAMP
+              }
+            ],
+            warnings: []
+          }
+        };
+      }
+    });
+
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Probe Stable Note');
+    await expect.poll(() => requestSequence.filter((entry) => entry === 'delta').length).toBe(1);
+
+    await setCamera(page, { x: 160, y: 90, zoom: 1.25 });
+    const tabsBefore = await readTabsSnapshot(page);
+    const outboxBefore = await readMutationOutbox(page);
+    const cameraBefore = await readCamera(page);
+
+    releaseDelta();
+
+    await expect.poll(async () => {
+      const state = await page.evaluate(() => window.postbabyDebugSync());
+      return Boolean(state.deltaMetadataLastCheckedAt);
+    }).toBe(true);
+
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    const tabsAfter = await readTabsSnapshot(page);
+    const outboxAfter = await readMutationOutbox(page);
+    const cameraAfter = await readCamera(page);
+
+    expect(requestSequence.indexOf('meta')).toBeGreaterThanOrEqual(0);
+    expect(requestSequence.indexOf('delta')).toBeGreaterThan(requestSequence.indexOf('meta'));
+    expect(debugState.deltaMetadataAvailable).toBe(true);
+    expect(debugState.deltaMetadataLastReason).toBe('applications_available');
+    expect(debugState.deltaMetadataLastError).toBe('');
+    expect(debugState.deltaMetadataUnavailableForSession).toBe(false);
+    expect(tabsAfter).toEqual(tabsBefore);
+    expect(outboxAfter).toEqual(outboxBefore);
+    expect(cameraAfter).toEqual(cameraBefore);
+    expect(JSON.stringify(tabsAfter)).not.toContain('mut-applied-1');
+    expect(JSON.stringify(tabsAfter)).not.toContain('mut-skipped-1');
+  });
+
+  test('delta capability probe treats 404 not_found as unavailable without failing startup sync', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Delta 404 Note', { syncVersion: 6 });
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Delta 404 Note', 6),
+      onDelta: async () => ({
+        status: 404,
+        body: {
+          ok: false,
+          error: {
+            code: 'not_found',
+            message: 'not found'
+          }
+        }
+      })
+    });
+
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Delta 404 Note');
+    await expect.poll(async () => {
+      const state = await page.evaluate(() => window.postbabyDebugSync());
+      return Boolean(state.deltaMetadataLastCheckedAt);
+    }).toBe(true);
+
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    expect(debugState.syncState).toBe('synced');
+    expect(debugState.deltaMetadataAvailable).toBe(false);
+    expect(debugState.deltaMetadataUnavailableForSession).toBe(true);
+    expect(debugState.deltaMetadataLastReason).toBe('not_found');
+    expect(debugState.deltaMetadataLastError).toBe('');
+  });
+
+  test('delta capability probe network failure is non-fatal', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Delta Network Failure Note', { syncVersion: 6 });
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Delta Network Failure Note', 6),
+      onDelta: async () => ({
+        abort: 'failed'
+      })
+    });
+
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Delta Network Failure Note');
+    await expect.poll(async () => {
+      const state = await page.evaluate(() => window.postbabyDebugSync());
+      return Boolean(state.deltaMetadataLastCheckedAt);
+    }).toBe(true);
+
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    expect(debugState.syncState).toBe('synced');
+    expect(debugState.deltaMetadataAvailable).toBe(false);
+    expect(debugState.deltaMetadataUnavailableForSession).toBe(false);
+    expect(debugState.deltaMetadataLastReason).toBe('network_error');
+    expect(debugState.deltaMetadataLastError).not.toBe('');
   });
 
   test('repairs durable pending upload after reload when server revision is unchanged', async ({ page }) => {
