@@ -604,12 +604,30 @@ type replayPreflightStateSnapshot struct {
 	DocumentVersion int64
 	DocumentBody    string
 	Applications    []store.SyncMutationReplayApplication
+	Observations    []replayObservationRow
 	Receipts        []replayReceiptStatusRow
 }
 
 type replayReceiptStatusRow struct {
 	MutationID string
 	Status     string
+}
+
+type replayObservationRow struct {
+	ID                               int64
+	OwnerKey                         string
+	AppID                            string
+	CanonicalDocumentVersionObserved int64
+	CanonicalDocumentHashObserved    string
+	ReceiptCountConsidered           int
+	FirstOrderedMutationID           string
+	LastOrderedMutationID            string
+	OrderedReceiptHighWatermark      string
+	AppliedCount                     int
+	SkippedCount                     int
+	WarningCount                     int
+	PreviewHash                      string
+	CreatedAt                        string
 }
 
 func createReplayPreflightFixture(t *testing.T, options replayPreflightFixtureOptions) replayPreflightFixture {
@@ -712,12 +730,14 @@ func snapshotReplayAdminState(t *testing.T, dbPath, ownerKey, appID string) repl
 	if err != nil {
 		t.Fatalf("list replay applications snapshot: %v", err)
 	}
+	observations := loadReplayObservationRowsForCommand(t, dbPath, ownerKey, appID)
 	receipts := loadReplayReceiptStatusRowsForCommand(t, dbPath, ownerKey, appID)
 
 	return replayPreflightStateSnapshot{
 		DocumentVersion: doc.Version,
 		DocumentBody:    string(doc.Body),
 		Applications:    applications,
+		Observations:    observations,
 		Receipts:        receipts,
 	}
 }
@@ -731,9 +751,82 @@ func assertReplayAdminStateEqual(t *testing.T, before, after replayPreflightStat
 	if !reflect.DeepEqual(before.Applications, after.Applications) {
 		t.Fatalf("application rows changed during preflight\nbefore=%+v\nafter=%+v", before.Applications, after.Applications)
 	}
+	if !reflect.DeepEqual(before.Observations, after.Observations) {
+		t.Fatalf("observation rows changed during preflight\nbefore=%+v\nafter=%+v", before.Observations, after.Observations)
+	}
 	if !reflect.DeepEqual(before.Receipts, after.Receipts) {
 		t.Fatalf("receipt rows changed during preflight\nbefore=%+v\nafter=%+v", before.Receipts, after.Receipts)
 	}
+}
+
+func loadReplayObservationRowsForCommand(t *testing.T, dbPath, ownerKey, appID string) []replayObservationRow {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw sqlite connection: %v", err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("close raw sqlite connection: %v", err)
+		}
+	}()
+
+	rows, err := db.Query(
+		`SELECT
+			id,
+			owner_key,
+			app_id,
+			canonical_document_version_observed,
+			canonical_document_hash_observed,
+			receipt_count_considered,
+			first_ordered_mutation_id,
+			last_ordered_mutation_id,
+			ordered_receipt_high_watermark,
+			applied_count,
+			skipped_count,
+			warning_count,
+			preview_hash,
+			strftime('%Y-%m-%dT%H:%M:%fZ', created_at)
+		FROM sync_mutation_replay_dry_run_observations
+		WHERE owner_key = ? AND app_id = ?
+		ORDER BY id ASC`,
+		ownerKey,
+		appID,
+	)
+	if err != nil {
+		t.Fatalf("query replay observation rows: %v", err)
+	}
+	defer rows.Close()
+
+	result := make([]replayObservationRow, 0)
+	for rows.Next() {
+		var row replayObservationRow
+		if err := rows.Scan(
+			&row.ID,
+			&row.OwnerKey,
+			&row.AppID,
+			&row.CanonicalDocumentVersionObserved,
+			&row.CanonicalDocumentHashObserved,
+			&row.ReceiptCountConsidered,
+			&row.FirstOrderedMutationID,
+			&row.LastOrderedMutationID,
+			&row.OrderedReceiptHighWatermark,
+			&row.AppliedCount,
+			&row.SkippedCount,
+			&row.WarningCount,
+			&row.PreviewHash,
+			&row.CreatedAt,
+		); err != nil {
+			t.Fatalf("scan replay observation row: %v", err)
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate replay observation rows: %v", err)
+	}
+
+	return result
 }
 
 func loadReplayReceiptStatusRowsForCommand(t *testing.T, dbPath, ownerKey, appID string) []replayReceiptStatusRow {
