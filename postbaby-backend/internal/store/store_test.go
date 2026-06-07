@@ -2857,7 +2857,7 @@ func TestEvaluateSyncMutationReplayRecoveryStateCanonicalStateWithoutApplication
 	assertReplayReadinessBlockers(t, recovery.Reasons, []string{"current_canonical_matches_observed_preview_without_application_rows"})
 }
 
-func TestApplySyncMutationReplayAuthoritativeForTestOnlyRefusesWithoutGate(t *testing.T) {
+func TestApplySyncMutationReplayAuthoritativeInternalRefusesWithoutGate(t *testing.T) {
 	t.Parallel()
 
 	docStore := openTestStore(t)
@@ -2886,7 +2886,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyRefusesWithoutGate(t *te
 		t.Fatalf("expected no replay applications before gate refusal, got %+v", beforeApplications)
 	}
 
-	result, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{})
+	result, err := docStore.ApplySyncMutationReplayAuthoritativeInternal(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{})
 	if err != nil {
 		t.Fatalf("apply authoritative replay with gate false: %v", err)
 	}
@@ -2906,7 +2906,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyRefusesWithoutGate(t *te
 	assertReplayApplicationsEqual(t, beforeApplications, afterApplications)
 }
 
-func TestApplySyncMutationReplayAuthoritativeForTestOnlySuccess(t *testing.T) {
+func TestApplySyncMutationReplayAuthoritativeInternalSuccess(t *testing.T) {
 	t.Parallel()
 
 	docStore := openTestStore(t)
@@ -2942,7 +2942,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlySuccess(t *testing.T) {
 		t.Fatalf("expected authoritative preview to stage successfully, got %+v", preview)
 	}
 
-	result, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+	result, err := docStore.ApplySyncMutationReplayAuthoritativeInternal(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
 		AllowInternalAuthoritativeReplay: true,
 	})
 	if err != nil {
@@ -3021,7 +3021,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlySuccess(t *testing.T) {
 	assertReplayReceiptRowsEqual(t, beforeReceipts, afterReceipts)
 }
 
-func TestApplySyncMutationReplayAuthoritativeForTestOnlyStaleCanonicalAbortsWithoutWrites(t *testing.T) {
+func TestApplySyncMutationReplayAuthoritativeInternalStaleCanonicalAbortsWithoutWrites(t *testing.T) {
 	t.Parallel()
 
 	docStore := openTestStore(t)
@@ -3065,7 +3065,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyStaleCanonicalAbortsWith
 	beforeReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
 	beforeApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
 
-	result, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+	result, err := docStore.ApplySyncMutationReplayAuthoritativeInternal(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
 		AllowInternalAuthoritativeReplay: true,
 	})
 	if err != nil {
@@ -3086,7 +3086,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyStaleCanonicalAbortsWith
 	assertReplayApplicationsEqual(t, beforeApplications, afterApplications)
 }
 
-func TestApplySyncMutationReplayAuthoritativeForTestOnlyStaleReceiptSetAbortsWithoutWrites(t *testing.T) {
+func TestApplySyncMutationReplayAuthoritativeInternalStaleReceiptSetAbortsWithoutWrites(t *testing.T) {
 	t.Parallel()
 
 	docStore := openTestStore(t)
@@ -3115,7 +3115,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyStaleReceiptSetAbortsWit
 	beforeReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
 	beforeApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
 
-	result, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+	result, err := docStore.ApplySyncMutationReplayAuthoritativeInternal(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
 		AllowInternalAuthoritativeReplay: true,
 	})
 	if err != nil {
@@ -3136,7 +3136,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyStaleReceiptSetAbortsWit
 	assertReplayApplicationsEqual(t, beforeApplications, afterApplications)
 }
 
-func TestApplySyncMutationReplayAuthoritativeForTestOnlyBlockedSnapshotAbortsWithoutWrites(t *testing.T) {
+func TestApplySyncMutationReplayAuthoritativeInternalBlockedSnapshotAbortsWithoutWrites(t *testing.T) {
 	t.Parallel()
 
 	for _, testCase := range []struct {
@@ -3198,7 +3198,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyBlockedSnapshotAbortsWit
 			}
 			assertReplayRecoveryStatus(t, beforeRecovery, SyncMutationReplayRecoveryStatusBlockedSnapshotRequiresCleanup)
 
-			result, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+			result, err := docStore.ApplySyncMutationReplayAuthoritativeInternal(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
 				AllowInternalAuthoritativeReplay: true,
 			})
 			if err != nil {
@@ -3223,7 +3223,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyBlockedSnapshotAbortsWit
 			}
 			assertReplayRecoveryStatus(t, afterRecovery, SyncMutationReplayRecoveryStatusBlockedSnapshotRequiresCleanup)
 
-			retryResult, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+			retryResult, err := docStore.ApplySyncMutationReplayAuthoritativeInternal(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
 				AllowInternalAuthoritativeReplay: true,
 			})
 			if err != nil {
@@ -3234,7 +3234,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyBlockedSnapshotAbortsWit
 	}
 }
 
-func TestApplySyncMutationReplayAuthoritativeForTestOnlyPolicyAbortDoesNotWrite(t *testing.T) {
+func TestApplySyncMutationReplayAuthoritativeInternalPolicyAbortDoesNotWrite(t *testing.T) {
 	t.Parallel()
 
 	docStore := openTestStore(t)
@@ -3260,7 +3260,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyPolicyAbortDoesNotWrite(
 	beforeReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
 	beforeApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
 
-	result, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+	result, err := docStore.ApplySyncMutationReplayAuthoritativeInternal(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
 		AllowInternalAuthoritativeReplay: true,
 	})
 	if err != nil {
@@ -3281,7 +3281,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyPolicyAbortDoesNotWrite(
 	assertReplayApplicationsEqual(t, beforeApplications, afterApplications)
 }
 
-func TestApplySyncMutationReplayAuthoritativeForTestOnlyFailpointRollsBackBeforeFirstApplicationInsert(t *testing.T) {
+func TestApplySyncMutationReplayAuthoritativeInternalFailpointRollsBackBeforeFirstApplicationInsert(t *testing.T) {
 	t.Parallel()
 
 	docStore := openTestStore(t)
@@ -3308,7 +3308,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyFailpointRollsBackBefore
 	beforeApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
 	failAfter := 0
 
-	_, err = docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+	_, err = docStore.ApplySyncMutationReplayAuthoritativeInternal(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
 		AllowInternalAuthoritativeReplay: true,
 		FailAfterApplicationRowInserts:   &failAfter,
 	})
@@ -3329,7 +3329,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyFailpointRollsBackBefore
 	assertReplayApplicationsEqual(t, beforeApplications, afterApplications)
 }
 
-func TestApplySyncMutationReplayAuthoritativeForTestOnlyFailpointRollsBackAfterFirstApplicationInsert(t *testing.T) {
+func TestApplySyncMutationReplayAuthoritativeInternalFailpointRollsBackAfterFirstApplicationInsert(t *testing.T) {
 	t.Parallel()
 
 	docStore := openTestStore(t)
@@ -3359,7 +3359,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyFailpointRollsBackAfterF
 	beforeApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
 	failAfter := 1
 
-	_, err = docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+	_, err = docStore.ApplySyncMutationReplayAuthoritativeInternal(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
 		AllowInternalAuthoritativeReplay: true,
 		FailAfterApplicationRowInserts:   &failAfter,
 	})
@@ -3380,7 +3380,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyFailpointRollsBackAfterF
 	assertReplayApplicationsEqual(t, beforeApplications, afterApplications)
 }
 
-func TestApplySyncMutationReplayAuthoritativeForTestOnlyRepeatedApplyIsIdempotent(t *testing.T) {
+func TestApplySyncMutationReplayAuthoritativeInternalRepeatedApplyIsIdempotent(t *testing.T) {
 	t.Parallel()
 
 	docStore := openTestStore(t)
@@ -3407,7 +3407,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyRepeatedApplyIsIdempoten
 	}
 
 	beforeReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
-	firstResult, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+	firstResult, err := docStore.ApplySyncMutationReplayAuthoritativeInternal(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
 		AllowInternalAuthoritativeReplay: true,
 	})
 	if err != nil {
@@ -3424,7 +3424,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyRepeatedApplyIsIdempoten
 		t.Fatalf("expected two application rows after first apply, got %+v", afterFirstApplications)
 	}
 
-	secondResult, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+	secondResult, err := docStore.ApplySyncMutationReplayAuthoritativeInternal(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
 		AllowInternalAuthoritativeReplay: true,
 	})
 	if err != nil {
@@ -3445,7 +3445,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyRepeatedApplyIsIdempoten
 	assertReplayReceiptRowsEqual(t, beforeReceipts, afterReceipts)
 }
 
-func TestApplySyncMutationReplayAuthoritativeForTestOnlyObservationMissingAbortsWithoutWrites(t *testing.T) {
+func TestApplySyncMutationReplayAuthoritativeInternalObservationMissingAbortsWithoutWrites(t *testing.T) {
 	t.Parallel()
 
 	docStore := openTestStore(t)
@@ -3463,7 +3463,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyObservationMissingAborts
 
 	beforeReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
 	beforeApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
-	result, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", 999999, SyncMutationReplayAuthoritativeApplyOptions{
+	result, err := docStore.ApplySyncMutationReplayAuthoritativeInternal(ctx, "owner", "postbaby-web", 999999, SyncMutationReplayAuthoritativeApplyOptions{
 		AllowInternalAuthoritativeReplay: true,
 	})
 	if err != nil {
@@ -3484,7 +3484,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyObservationMissingAborts
 	assertReplayApplicationsEqual(t, beforeApplications, afterApplications)
 }
 
-func TestApplySyncMutationReplayAuthoritativeForTestOnlyInvalidObservationScopeAbortsWithoutWrites(t *testing.T) {
+func TestApplySyncMutationReplayAuthoritativeInternalInvalidObservationScopeAbortsWithoutWrites(t *testing.T) {
 	t.Parallel()
 
 	docStore := openTestStore(t)
@@ -3506,7 +3506,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyInvalidObservationScopeA
 
 	beforeReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
 	beforeApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
-	result, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "other-owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+	result, err := docStore.ApplySyncMutationReplayAuthoritativeInternal(ctx, "other-owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
 		AllowInternalAuthoritativeReplay: true,
 	})
 	if err != nil {
@@ -3527,7 +3527,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyInvalidObservationScopeA
 	assertReplayApplicationsEqual(t, beforeApplications, afterApplications)
 }
 
-func TestApplySyncMutationReplayAuthoritativeForTestOnlyEmptyReceiptSetIdempotentExit(t *testing.T) {
+func TestApplySyncMutationReplayAuthoritativeInternalEmptyReceiptSetIdempotentExit(t *testing.T) {
 	t.Parallel()
 
 	docStore := openTestStore(t)
@@ -3549,7 +3549,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyEmptyReceiptSetIdempoten
 
 	beforeReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
 	beforeApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
-	result, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+	result, err := docStore.ApplySyncMutationReplayAuthoritativeInternal(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
 		AllowInternalAuthoritativeReplay: true,
 	})
 	if err != nil {
@@ -3573,7 +3573,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyEmptyReceiptSetIdempoten
 	assertReplayApplicationsEqual(t, beforeApplications, afterApplications)
 }
 
-func TestApplySyncMutationReplayAuthoritativeForTestOnlyAllSkippedReceiptsStillInsertSkippedRows(t *testing.T) {
+func TestApplySyncMutationReplayAuthoritativeInternalAllSkippedReceiptsStillInsertSkippedRows(t *testing.T) {
 	t.Parallel()
 
 	docStore := openTestStore(t)
@@ -3599,7 +3599,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyAllSkippedReceiptsStillI
 	}
 	beforeReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
 
-	result, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+	result, err := docStore.ApplySyncMutationReplayAuthoritativeInternal(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
 		AllowInternalAuthoritativeReplay: true,
 	})
 	if err != nil {
@@ -3638,7 +3638,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyAllSkippedReceiptsStillI
 	afterReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
 	assertReplayReceiptRowsEqual(t, beforeReceipts, afterReceipts)
 
-	secondResult, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+	secondResult, err := docStore.ApplySyncMutationReplayAuthoritativeInternal(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
 		AllowInternalAuthoritativeReplay: true,
 	})
 	if err != nil {
@@ -3657,7 +3657,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyAllSkippedReceiptsStillI
 	assertReplayApplicationsEqual(t, applications, afterSecondApplications)
 }
 
-func TestApplySyncMutationReplayAuthoritativeForTestOnlyRecoveryMismatchesAbortWithoutWrites(t *testing.T) {
+func TestApplySyncMutationReplayAuthoritativeInternalRecoveryMismatchesAbortWithoutWrites(t *testing.T) {
 	t.Parallel()
 
 	for _, testCase := range []struct {
@@ -3795,7 +3795,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyRecoveryMismatchesAbortW
 			}
 			beforeApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
 
-			result, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+			result, err := docStore.ApplySyncMutationReplayAuthoritativeInternal(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
 				AllowInternalAuthoritativeReplay: true,
 			})
 			if err != nil {
@@ -3818,7 +3818,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyRecoveryMismatchesAbortW
 	}
 }
 
-func TestApplySyncMutationReplayAuthoritativeForTestOnlyPolicyAbortVariantsDoNotWrite(t *testing.T) {
+func TestApplySyncMutationReplayAuthoritativeInternalPolicyAbortVariantsDoNotWrite(t *testing.T) {
 	t.Parallel()
 
 	for _, testCase := range []struct {
@@ -3899,7 +3899,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyPolicyAbortVariantsDoNot
 				t.Fatalf("evaluate recovery before policy abort apply: %v", err)
 			}
 			assertReplayRecoveryStatus(t, beforeRecovery, SyncMutationReplayRecoveryStatusSafeToAttemptTransaction)
-			result, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+			result, err := docStore.ApplySyncMutationReplayAuthoritativeInternal(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
 				AllowInternalAuthoritativeReplay: true,
 			})
 			if err != nil {
@@ -3931,7 +3931,7 @@ func TestApplySyncMutationReplayAuthoritativeForTestOnlyPolicyAbortVariantsDoNot
 			}
 			assertReplayRecoveryStatus(t, afterRecovery, SyncMutationReplayRecoveryStatusSafeToAttemptTransaction)
 
-			retryResult, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+			retryResult, err := docStore.ApplySyncMutationReplayAuthoritativeInternal(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
 				AllowInternalAuthoritativeReplay: true,
 			})
 			if err != nil {

@@ -908,7 +908,7 @@ func (s *Store) ListSyncMutationReplayApplications(ctx context.Context, ownerKey
 	return applications, nil
 }
 
-func (s *Store) ApplySyncMutationReplayAuthoritativeForTestOnly(ctx context.Context, ownerKey, appID string, observationID int64, options SyncMutationReplayAuthoritativeApplyOptions) (SyncMutationReplayAuthoritativeApplyResult, error) {
+func (s *Store) ApplySyncMutationReplayAuthoritativeInternal(ctx context.Context, ownerKey, appID string, observationID int64, options SyncMutationReplayAuthoritativeApplyOptions) (SyncMutationReplayAuthoritativeApplyResult, error) {
 	started := time.Now()
 	result := SyncMutationReplayAuthoritativeApplyResult{
 		Status:          SyncMutationReplayAuthoritativeApplyStatusRefusedInternalGate,
@@ -923,7 +923,7 @@ func (s *Store) ApplySyncMutationReplayAuthoritativeForTestOnly(ctx context.Cont
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("write_begin_sync_mutation_replay_authoritative_for_test_only", started, fmt.Errorf("begin sync mutation replay authoritative transaction: %w", err))
+		return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("write_begin_sync_mutation_replay_authoritative_internal", started, fmt.Errorf("begin sync mutation replay authoritative transaction: %w", err))
 	}
 	committed := false
 	defer func() {
@@ -934,7 +934,7 @@ func (s *Store) ApplySyncMutationReplayAuthoritativeForTestOnly(ctx context.Cont
 
 	observation, found, err := getSyncMutationReplayDryRunObservationByIDFromQuerier(ctx, tx, observationID)
 	if err != nil {
-		return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("read_sync_mutation_replay_authoritative_observation_for_test_only", started, fmt.Errorf("load sync mutation replay observation for authoritative apply: %w", err))
+		return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("read_sync_mutation_replay_authoritative_observation_internal", started, fmt.Errorf("load sync mutation replay observation for authoritative apply: %w", err))
 	}
 	if !found {
 		result.Status = SyncMutationReplayAuthoritativeApplyStatusAbortedPreconditions
@@ -947,15 +947,15 @@ func (s *Store) ApplySyncMutationReplayAuthoritativeForTestOnly(ctx context.Cont
 
 	doc, err := loadReplayDocumentFromQuerier(ctx, tx, ownerKey, appID)
 	if err != nil {
-		return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("read_sync_mutation_replay_authoritative_document_for_test_only", started, fmt.Errorf("load sync mutation replay document for authoritative apply: %w", err))
+		return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("read_sync_mutation_replay_authoritative_document_internal", started, fmt.Errorf("load sync mutation replay document for authoritative apply: %w", err))
 	}
 	receipts, err := listAcceptedSyncMutationReceiptsFromQuerier(ctx, tx, ownerKey, appID)
 	if err != nil {
-		return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("read_sync_mutation_replay_authoritative_receipts_for_test_only", started, fmt.Errorf("load sync mutation replay receipts for authoritative apply: %w", err))
+		return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("read_sync_mutation_replay_authoritative_receipts_internal", started, fmt.Errorf("load sync mutation replay receipts for authoritative apply: %w", err))
 	}
 	applications, err := listSyncMutationReplayApplicationsFromQuerier(ctx, tx, ownerKey, appID)
 	if err != nil {
-		return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("read_sync_mutation_replay_authoritative_applications_for_test_only", started, fmt.Errorf("load sync mutation replay applications for authoritative apply: %w", err))
+		return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("read_sync_mutation_replay_authoritative_applications_internal", started, fmt.Errorf("load sync mutation replay applications for authoritative apply: %w", err))
 	}
 
 	result.CanonicalDocumentVersionBefore = doc.Version
@@ -963,11 +963,11 @@ func (s *Store) ApplySyncMutationReplayAuthoritativeForTestOnly(ctx context.Cont
 
 	dryRunResult, err := buildSyncMutationDryRunResult(doc, receipts)
 	if err != nil {
-		return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("build_sync_mutation_replay_authoritative_dry_run_for_test_only", started, fmt.Errorf("build sync mutation replay dry-run result for authoritative apply: %w", err))
+		return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("build_sync_mutation_replay_authoritative_dry_run_internal", started, fmt.Errorf("build sync mutation replay dry-run result for authoritative apply: %w", err))
 	}
 	compareEvaluation, err := evaluateSyncMutationReplayCompareAndApplyAgainstState(observation, doc, receipts, dryRunResult, applications)
 	if err != nil {
-		return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("evaluate_sync_mutation_replay_authoritative_preconditions_for_test_only", started, fmt.Errorf("evaluate sync mutation replay authoritative preconditions: %w", err))
+		return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("evaluate_sync_mutation_replay_authoritative_preconditions_internal", started, fmt.Errorf("evaluate sync mutation replay authoritative preconditions: %w", err))
 	}
 	recoveryEvaluation := evaluateSyncMutationReplayRecoveryAgainstState(observation, doc, receipts, dryRunResult, applications, compareEvaluation)
 
@@ -1007,7 +1007,7 @@ func (s *Store) ApplySyncMutationReplayAuthoritativeForTestOnly(ctx context.Cont
 
 	preview, err := buildSyncMutationReplayAuthoritativeProgressivePreview(doc, receipts)
 	if err != nil {
-		return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("build_sync_mutation_replay_authoritative_preview_for_test_only", started, fmt.Errorf("build authoritative sync mutation replay preview: %w", err))
+		return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("build_sync_mutation_replay_authoritative_preview_internal", started, fmt.Errorf("build authoritative sync mutation replay preview: %w", err))
 	}
 	result.MutationResults = preview.MutationResults
 
@@ -1034,11 +1034,11 @@ func (s *Store) ApplySyncMutationReplayAuthoritativeForTestOnly(ctx context.Cont
 		doc.Version,
 	)
 	if err != nil {
-		return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("write_sync_mutation_replay_authoritative_document_for_test_only", started, fmt.Errorf("update canonical document during authoritative replay apply: %w", err))
+		return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("write_sync_mutation_replay_authoritative_document_internal", started, fmt.Errorf("update canonical document during authoritative replay apply: %w", err))
 	}
 	rowsAffected, err := updateResult.RowsAffected()
 	if err != nil {
-		return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("write_sync_mutation_replay_authoritative_document_rows_affected_for_test_only", started, fmt.Errorf("read canonical document rows affected during authoritative replay apply: %w", err))
+		return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("write_sync_mutation_replay_authoritative_document_rows_affected_internal", started, fmt.Errorf("read canonical document rows affected during authoritative replay apply: %w", err))
 	}
 	if rowsAffected != 1 {
 		result.Status = SyncMutationReplayAuthoritativeApplyStatusAbortedPreconditions
@@ -1079,7 +1079,7 @@ func (s *Store) ApplySyncMutationReplayAuthoritativeForTestOnly(ctx context.Cont
 			updatedAt,
 		)
 		if err != nil {
-			return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("write_sync_mutation_replay_authoritative_application_for_test_only", started, fmt.Errorf("insert authoritative replay application row: %w", err))
+			return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("write_sync_mutation_replay_authoritative_application_internal", started, fmt.Errorf("insert authoritative replay application row: %w", err))
 		}
 		insertedApplicationRowCount++
 		if options.FailAfterApplicationRowInserts != nil && insertedApplicationRowCount == *options.FailAfterApplicationRowInserts {
@@ -1088,10 +1088,10 @@ func (s *Store) ApplySyncMutationReplayAuthoritativeForTestOnly(ctx context.Cont
 	}
 
 	if err := tx.Commit(); err != nil {
-		return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("write_commit_sync_mutation_replay_authoritative_for_test_only", started, fmt.Errorf("commit authoritative sync mutation replay transaction: %w", err))
+		return SyncMutationReplayAuthoritativeApplyResult{}, s.wrapDBError("write_commit_sync_mutation_replay_authoritative_internal", started, fmt.Errorf("commit authoritative sync mutation replay transaction: %w", err))
 	}
 	committed = true
-	s.logDBOperation("write_apply_sync_mutation_replay_authoritative_for_test_only", started, nil)
+	s.logDBOperation("write_apply_sync_mutation_replay_authoritative_internal", started, nil)
 
 	result.Status = SyncMutationReplayAuthoritativeApplyStatusApplied
 	result.CanonicalDocumentVersionAfter = &versionAfter

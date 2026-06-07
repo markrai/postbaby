@@ -60,7 +60,7 @@ type replayAdminStore interface {
 	Close() error
 	EvaluateSyncMutationReplayCompareAndApplyPreconditions(ctx context.Context, ownerKey, appID string, observationID int64) (store.SyncMutationReplayCompareAndApplyEvaluation, error)
 	EvaluateSyncMutationReplayRecoveryState(ctx context.Context, ownerKey, appID string, observationID int64) (store.SyncMutationReplayRecoveryEvaluation, error)
-	ApplySyncMutationReplayAuthoritativeForTestOnly(ctx context.Context, ownerKey, appID string, observationID int64, options store.SyncMutationReplayAuthoritativeApplyOptions) (store.SyncMutationReplayAuthoritativeApplyResult, error)
+	ApplySyncMutationReplayAuthoritativeInternal(ctx context.Context, ownerKey, appID string, observationID int64, options store.SyncMutationReplayAuthoritativeApplyOptions) (store.SyncMutationReplayAuthoritativeApplyResult, error)
 }
 
 type commandDeps struct {
@@ -368,7 +368,7 @@ func runApplyWithDeps(deps commandDeps, args []string, stdout, stderr io.Writer)
 			return 1
 		}
 
-		storeResult, err := sqliteStore.ApplySyncMutationReplayAuthoritativeForTestOnly(
+		storeResult, err := sqliteStore.ApplySyncMutationReplayAuthoritativeInternal(
 			context.Background(),
 			opts.ownerKey,
 			opts.appID,

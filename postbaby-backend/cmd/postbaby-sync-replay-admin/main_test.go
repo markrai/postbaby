@@ -413,7 +413,7 @@ func TestRunApplyInternalErrorFailpointFailsClosed(t *testing.T) {
 		testStore.applyFunc = func(ctx context.Context, ownerKey, appID string, observationID int64, options store.SyncMutationReplayAuthoritativeApplyOptions) (store.SyncMutationReplayAuthoritativeApplyResult, error) {
 			failAfter := 0
 			options.FailAfterApplicationRowInserts = &failAfter
-			return testStore.inner.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, ownerKey, appID, observationID, options)
+			return testStore.inner.ApplySyncMutationReplayAuthoritativeInternal(ctx, ownerKey, appID, observationID, options)
 		}
 	}), buildApplyArgs(fixture), stdout, stderr)
 	if exitCode != 1 {
@@ -457,6 +457,399 @@ func TestRunApplyTextOutput(t *testing.T) {
 		!strings.Contains(text, "observation_id="+fixture.observationIDString) {
 		t.Fatalf("unexpected apply text output: %q", text)
 	}
+}
+
+func TestRunApplyUnsafePreflightStatusesDoNotReachApply(t *testing.T) {
+	t.Setenv(envEnableInternalSyncReplayCLI, "1")
+	t.Setenv(envEnableInternalSyncReplayApply, "1")
+	t.Setenv(envDeploymentMode, "selfhosted")
+
+	for _, testCase := range []struct {
+		name              string
+		fixtureOptions    replayPreflightFixtureOptions
+		mutateState       func(t *testing.T, sqliteStore *store.Store, fixture replayPreflightFixture)
+		argsForFixture    func(fixture replayPreflightFixture) []string
+		expectedStatus    string
+		expectedPreflight string
+	}{
+		{
+			name:              "stale_canonical_document",
+			fixtureOptions:    replayPreflightFixtureOptions{mutateCanonicalAfterObservation: true},
+			expectedStatus:    applyStatusStaleCanonical,
+			expectedPreflight: preflightStatusStaleCanonical,
+		},
+		{
+			name: "stale_receipt_set",
+			mutateState: func(t *testing.T, sqliteStore *store.Store, fixture replayPreflightFixture) {
+				t.Helper()
+				if _, err := sqliteStore.AcceptSyncMutationReceipts(context.Background(), fixture.ownerKey, fixture.appID, []store.SyncMutationReceiptInput{
+					buildReplayReceiptInputForCommand("mut-late-receipt", "Node", "item-9", "CreateNode", `{"tabId":"tab-1","name":"Late","position":{"top":"80px","left":"80px"}}`),
+				}); err != nil {
+					t.Fatalf("insert late accepted receipt: %v", err)
+				}
+			},
+			expectedStatus:    applyStatusStaleReceiptSet,
+			expectedPreflight: preflightStatusStaleReceiptSet,
+		},
+		{
+			name: "partial_application_rows",
+			fixtureOptions: replayPreflightFixtureOptions{
+				receiptCount:        2,
+				applicationScenario: replayApplicationScenarioPartial,
+			},
+			expectedStatus:    applyStatusPartialRows,
+			expectedPreflight: preflightStatusPartialRows,
+		},
+		{
+			name: "application_rows_without_matching_canonical_state",
+			fixtureOptions: replayPreflightFixtureOptions{
+				applicationScenario: replayApplicationScenarioMismatchedCanonical,
+			},
+			expectedStatus:    applyStatusRowsMismatch,
+			expectedPreflight: preflightStatusRowsMismatch,
+		},
+		{
+			name: "canonical_state_without_application_rows",
+			fixtureOptions: replayPreflightFixtureOptions{
+				mutateCanonicalToPreviewWithoutRows: true,
+			},
+			expectedStatus:    applyStatusCanonicalMismatch,
+			expectedPreflight: preflightStatusCanonicalMismatch,
+		},
+		{
+			name: "missing_observation",
+			argsForFixture: func(fixture replayPreflightFixture) []string {
+				missingObservationID := strconv.FormatInt(fixture.observationID+999999, 10)
+				args := buildApplyArgs(fixture)
+				args = replaceFlagValue(args, "--observation-id", missingObservationID)
+				args = replaceFlagValue(args, "--confirm-observation-id", missingObservationID)
+				return args
+			},
+			expectedStatus:    applyStatusMissingObservation,
+			expectedPreflight: preflightStatusMissingObservation,
+		},
+		{
+			name: "invalid_observation_scope",
+			argsForFixture: func(fixture replayPreflightFixture) []string {
+				args := buildApplyArgs(fixture)
+				args = replaceFlagValue(args, "--owner-key", "other-owner")
+				args = replaceFlagValue(args, "--confirm-owner-key", "other-owner")
+				return args
+			},
+			expectedStatus:    applyStatusInvalidScope,
+			expectedPreflight: preflightStatusInvalidScope,
+		},
+	} {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := createReplayPreflightFixture(t, testCase.fixtureOptions)
+			sqliteStore := openReplayAdminTestStore(t, fixture.dbPath)
+			if testCase.mutateState != nil {
+				testCase.mutateState(t, sqliteStore, fixture)
+			}
+			beforeState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+			spyHolder := &replayAdminStoreSpy{}
+			stdout := &bytes.Buffer{}
+			stderr := &bytes.Buffer{}
+
+			args := buildApplyArgs(fixture)
+			if testCase.argsForFixture != nil {
+				args = testCase.argsForFixture(fixture)
+			}
+
+			exitCode := runWithDeps(makeReplayAdminCommandDeps(t, spyHolder, nil), args, stdout, stderr)
+			if exitCode != 1 {
+				t.Fatalf("expected exit code 1, got %d stderr=%q", exitCode, stderr.String())
+			}
+
+			result := decodeApplyResult(t, stdout.String())
+			if result.Status != testCase.expectedStatus || result.PreflightStatus != testCase.expectedPreflight {
+				t.Fatalf("unexpected unsafe preflight result: %+v", result)
+			}
+			if result.CanonicalStateChanged || result.DocumentVersionAdvanced || result.ApplicationRowsInserted {
+				t.Fatalf("expected unsafe preflight result to report no committed mutation, got %+v", result)
+			}
+			if spyHolder.store == nil {
+				t.Fatalf("expected store to open for same-invocation preflight")
+			}
+			if spyHolder.store.applyCallCount != 0 {
+				t.Fatalf("expected unsafe preflight to block apply call, got %d", spyHolder.store.applyCallCount)
+			}
+
+			afterState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+			assertReplayAdminStateEqual(t, beforeState, afterState)
+		})
+	}
+}
+
+func TestRunApplyRaceCanonicalChangeAfterPreflightFailsClosed(t *testing.T) {
+	t.Setenv(envEnableInternalSyncReplayCLI, "1")
+	t.Setenv(envEnableInternalSyncReplayApply, "1")
+	t.Setenv(envDeploymentMode, "selfhosted")
+
+	fixture := createReplayPreflightFixture(t, replayPreflightFixtureOptions{})
+	spyHolder := &replayAdminStoreSpy{}
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	var expectedState replayPreflightStateSnapshot
+
+	exitCode := runWithDeps(makeReplayAdminCommandDeps(t, spyHolder, func(testStore *countingReplayAdminStore) {
+		testStore.applyFunc = func(ctx context.Context, ownerKey, appID string, observationID int64, options store.SyncMutationReplayAuthoritativeApplyOptions) (store.SyncMutationReplayAuthoritativeApplyResult, error) {
+			putReplayDocumentBodyForCommand(t, testStore.inner, ownerKey, appID, buildReplaySnapshotBodyForUpdatedCommand(t))
+			expectedState = snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+			return testStore.inner.ApplySyncMutationReplayAuthoritativeInternal(ctx, ownerKey, appID, observationID, options)
+		}
+	}), buildApplyArgs(fixture), stdout, stderr)
+	if exitCode != 1 {
+		t.Fatalf("expected exit code 1, got %d stderr=%q", exitCode, stderr.String())
+	}
+
+	result := decodeApplyResult(t, stdout.String())
+	if result.Status != applyStatusStaleCanonical || result.PreflightStatus != preflightStatusStaleCanonical {
+		t.Fatalf("unexpected stale canonical race result: %+v", result)
+	}
+	if result.CanonicalStateChanged || result.DocumentVersionAdvanced || result.ApplicationRowsInserted {
+		t.Fatalf("expected stale canonical race to report no committed mutation, got %+v", result)
+	}
+	if spyHolder.store == nil || spyHolder.store.applyCallCount != 1 {
+		t.Fatalf("expected exactly one apply call before stale canonical abort, got %+v", spyHolder.store)
+	}
+
+	afterState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	assertReplayAdminStateEqual(t, expectedState, afterState)
+}
+
+func TestRunApplyRaceReceiptSetChangeAfterPreflightFailsClosed(t *testing.T) {
+	t.Setenv(envEnableInternalSyncReplayCLI, "1")
+	t.Setenv(envEnableInternalSyncReplayApply, "1")
+	t.Setenv(envDeploymentMode, "selfhosted")
+
+	fixture := createReplayPreflightFixture(t, replayPreflightFixtureOptions{})
+	spyHolder := &replayAdminStoreSpy{}
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	var expectedState replayPreflightStateSnapshot
+
+	exitCode := runWithDeps(makeReplayAdminCommandDeps(t, spyHolder, func(testStore *countingReplayAdminStore) {
+		testStore.applyFunc = func(ctx context.Context, ownerKey, appID string, observationID int64, options store.SyncMutationReplayAuthoritativeApplyOptions) (store.SyncMutationReplayAuthoritativeApplyResult, error) {
+			if _, err := testStore.inner.AcceptSyncMutationReceipts(ctx, ownerKey, appID, []store.SyncMutationReceiptInput{
+				buildReplayReceiptInputForCommand("mut-race-late-receipt", "Node", "item-99", "CreateNode", `{"tabId":"tab-1","name":"Late","position":{"top":"90px","left":"90px"}}`),
+			}); err != nil {
+				t.Fatalf("insert late accepted receipt: %v", err)
+			}
+			expectedState = snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+			return testStore.inner.ApplySyncMutationReplayAuthoritativeInternal(ctx, ownerKey, appID, observationID, options)
+		}
+	}), buildApplyArgs(fixture), stdout, stderr)
+	if exitCode != 1 {
+		t.Fatalf("expected exit code 1, got %d stderr=%q", exitCode, stderr.String())
+	}
+
+	result := decodeApplyResult(t, stdout.String())
+	if result.Status != applyStatusStaleReceiptSet || result.PreflightStatus != preflightStatusStaleReceiptSet {
+		t.Fatalf("unexpected stale receipt set race result: %+v", result)
+	}
+	if result.CanonicalStateChanged || result.DocumentVersionAdvanced || result.ApplicationRowsInserted {
+		t.Fatalf("expected stale receipt set race to report no committed mutation, got %+v", result)
+	}
+	if spyHolder.store == nil || spyHolder.store.applyCallCount != 1 {
+		t.Fatalf("expected exactly one apply call before stale receipt abort, got %+v", spyHolder.store)
+	}
+
+	afterState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	assertReplayAdminStateEqual(t, expectedState, afterState)
+}
+
+func TestRunApplyRaceExternalPartialApplicationRowsAfterPreflightFailsClosed(t *testing.T) {
+	t.Setenv(envEnableInternalSyncReplayCLI, "1")
+	t.Setenv(envEnableInternalSyncReplayApply, "1")
+	t.Setenv(envDeploymentMode, "selfhosted")
+
+	fixture := createReplayPreflightFixture(t, replayPreflightFixtureOptions{receiptCount: 2})
+	spyHolder := &replayAdminStoreSpy{}
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	var expectedState replayPreflightStateSnapshot
+
+	exitCode := runWithDeps(makeReplayAdminCommandDeps(t, spyHolder, func(testStore *countingReplayAdminStore) {
+		testStore.applyFunc = func(ctx context.Context, ownerKey, appID string, observationID int64, options store.SyncMutationReplayAuthoritativeApplyOptions) (store.SyncMutationReplayAuthoritativeApplyResult, error) {
+			currentDoc, err := testStore.inner.GetDocument(ctx, ownerKey, appID)
+			if err != nil {
+				t.Fatalf("load current document for external application row seed: %v", err)
+			}
+			hashBefore := hashReplayBytesForCommand(currentDoc.Body)
+			if _, err := testStore.inner.RecordSyncMutationReplayApplicationInert(ctx, ownerKey, appID, SyncMutationReplayApplicationInputForCommand(fixture.mutationIDs[0], observationID, currentDoc.Version, hashBefore, nil, nil)); err != nil {
+				t.Fatalf("insert external partial application row: %v", err)
+			}
+			expectedState = snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+			return testStore.inner.ApplySyncMutationReplayAuthoritativeInternal(ctx, ownerKey, appID, observationID, options)
+		}
+	}), buildApplyArgs(fixture), stdout, stderr)
+	if exitCode != 1 {
+		t.Fatalf("expected exit code 1, got %d stderr=%q", exitCode, stderr.String())
+	}
+
+	result := decodeApplyResult(t, stdout.String())
+	if result.Status != applyStatusPartialRows || result.PreflightStatus != preflightStatusPartialRows {
+		t.Fatalf("unexpected partial rows race result: %+v", result)
+	}
+	if result.CanonicalStateChanged || result.DocumentVersionAdvanced || result.ApplicationRowsInserted {
+		t.Fatalf("expected partial rows race to report no committed mutation, got %+v", result)
+	}
+	if spyHolder.store == nil || spyHolder.store.applyCallCount != 1 {
+		t.Fatalf("expected exactly one apply call before partial rows abort, got %+v", spyHolder.store)
+	}
+
+	afterState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	assertReplayAdminStateEqual(t, expectedState, afterState)
+}
+
+func TestRunApplyRaceDuplicateItemBlockerAfterPreflightFailsClosed(t *testing.T) {
+	t.Setenv(envEnableInternalSyncReplayCLI, "1")
+	t.Setenv(envEnableInternalSyncReplayApply, "1")
+	t.Setenv(envDeploymentMode, "selfhosted")
+
+	fixture := createReplayPreflightFixture(t, replayPreflightFixtureOptions{})
+	spyHolder := &replayAdminStoreSpy{}
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	var expectedState replayPreflightStateSnapshot
+
+	exitCode := runWithDeps(makeReplayAdminCommandDeps(t, spyHolder, func(testStore *countingReplayAdminStore) {
+		testStore.applyFunc = func(ctx context.Context, ownerKey, appID string, observationID int64, options store.SyncMutationReplayAuthoritativeApplyOptions) (store.SyncMutationReplayAuthoritativeApplyResult, error) {
+			putReplayDocumentBodyForCommand(t, testStore.inner, ownerKey, appID, buildReplaySnapshotBodyForCommand(t, true))
+			expectedState = snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+			return testStore.inner.ApplySyncMutationReplayAuthoritativeInternal(ctx, ownerKey, appID, observationID, options)
+		}
+	}), buildApplyArgs(fixture), stdout, stderr)
+	if exitCode != 1 {
+		t.Fatalf("expected exit code 1, got %d stderr=%q", exitCode, stderr.String())
+	}
+
+	result := decodeApplyResult(t, stdout.String())
+	if result.Status != applyStatusBlockedSnapshot || result.PreflightStatus != preflightStatusBlockedSnapshot {
+		t.Fatalf("unexpected duplicate-item blocker race result: %+v", result)
+	}
+	if result.CanonicalStateChanged || result.DocumentVersionAdvanced || result.ApplicationRowsInserted {
+		t.Fatalf("expected duplicate-item blocker race to report no committed mutation, got %+v", result)
+	}
+	if spyHolder.store == nil || spyHolder.store.applyCallCount != 1 {
+		t.Fatalf("expected exactly one apply call before blocked snapshot abort, got %+v", spyHolder.store)
+	}
+
+	afterState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	assertReplayAdminStateEqual(t, expectedState, afterState)
+}
+
+func TestRunApplyRaceDuplicateEdgeBlockerAfterPreflightFailsClosed(t *testing.T) {
+	t.Setenv(envEnableInternalSyncReplayCLI, "1")
+	t.Setenv(envEnableInternalSyncReplayApply, "1")
+	t.Setenv(envDeploymentMode, "selfhosted")
+
+	fixture := createReplayPreflightFixture(t, replayPreflightFixtureOptions{})
+	spyHolder := &replayAdminStoreSpy{}
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	var expectedState replayPreflightStateSnapshot
+
+	exitCode := runWithDeps(makeReplayAdminCommandDeps(t, spyHolder, func(testStore *countingReplayAdminStore) {
+		testStore.applyFunc = func(ctx context.Context, ownerKey, appID string, observationID int64, options store.SyncMutationReplayAuthoritativeApplyOptions) (store.SyncMutationReplayAuthoritativeApplyResult, error) {
+			putReplayDocumentBodyForCommand(t, testStore.inner, ownerKey, appID, buildReplaySnapshotBodyWithDuplicateEdgeIDsForCommand(t))
+			expectedState = snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+			return testStore.inner.ApplySyncMutationReplayAuthoritativeInternal(ctx, ownerKey, appID, observationID, options)
+		}
+	}), buildApplyArgs(fixture), stdout, stderr)
+	if exitCode != 1 {
+		t.Fatalf("expected exit code 1, got %d stderr=%q", exitCode, stderr.String())
+	}
+
+	result := decodeApplyResult(t, stdout.String())
+	if result.Status != applyStatusBlockedSnapshot || result.PreflightStatus != preflightStatusBlockedSnapshot {
+		t.Fatalf("unexpected duplicate-edge blocker race result: %+v", result)
+	}
+	if result.CanonicalStateChanged || result.DocumentVersionAdvanced || result.ApplicationRowsInserted {
+		t.Fatalf("expected duplicate-edge blocker race to report no committed mutation, got %+v", result)
+	}
+	if spyHolder.store == nil || spyHolder.store.applyCallCount != 1 {
+		t.Fatalf("expected exactly one apply call before blocked snapshot abort, got %+v", spyHolder.store)
+	}
+
+	afterState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	assertReplayAdminStateEqual(t, expectedState, afterState)
+}
+
+func TestRunApplyAllSkippedAdvancesVersionWithoutChangingBodyAndIsIdempotent(t *testing.T) {
+	t.Setenv(envEnableInternalSyncReplayCLI, "1")
+	t.Setenv(envEnableInternalSyncReplayApply, "1")
+	t.Setenv(envDeploymentMode, "selfhosted")
+
+	fixture := createReplayPreflightFixture(t, replayPreflightFixtureOptions{
+		customReceiptInputs: []store.SyncMutationReceiptInput{
+			buildReplayReceiptInputForCommand("mut-delete-missing", "Node", "missing-item", "DeleteNode", `{"tabId":"tab-1"}`),
+		},
+	})
+	spyHolder := &replayAdminStoreSpy{}
+	beforeState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+
+	exitCode := runWithDeps(makeReplayAdminCommandDeps(t, spyHolder, nil), buildApplyArgs(fixture), stdout, stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d stderr=%q", exitCode, stderr.String())
+	}
+
+	result := decodeApplyResult(t, stdout.String())
+	if result.Status != applyStatusApplied || result.PreflightStatus != preflightStatusSafe {
+		t.Fatalf("unexpected all-skipped apply result: %+v", result)
+	}
+	if result.CanonicalStateChanged {
+		t.Fatalf("expected all-skipped apply to preserve canonical bytes, got %+v", result)
+	}
+	if !result.DocumentVersionAdvanced || !result.ApplicationRowsInserted {
+		t.Fatalf("expected all-skipped apply to advance version and insert rows, got %+v", result)
+	}
+	if result.InsertedApplicationRowCount != 1 {
+		t.Fatalf("expected one inserted skipped application row, got %+v", result)
+	}
+	if len(result.MutationResults) != 1 || result.MutationResults[0].ApplicationStatus != store.SyncMutationReplayApplicationStatusSkipped {
+		t.Fatalf("unexpected all-skipped mutation results: %+v", result.MutationResults)
+	}
+	if spyHolder.store == nil || spyHolder.store.applyCallCount != 1 {
+		t.Fatalf("expected exactly one apply call for all-skipped case, got %+v", spyHolder.store)
+	}
+
+	afterState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	if afterState.DocumentVersion != beforeState.DocumentVersion+1 {
+		t.Fatalf("expected all-skipped apply to advance version once from %d to %d, got %d", beforeState.DocumentVersion, beforeState.DocumentVersion+1, afterState.DocumentVersion)
+	}
+	if afterState.DocumentBody != beforeState.DocumentBody {
+		t.Fatalf("expected all-skipped apply to preserve body bytes\nbefore=%s\nafter=%s", beforeState.DocumentBody, afterState.DocumentBody)
+	}
+	if len(afterState.Applications) != 1 {
+		t.Fatalf("expected one skipped application row after apply, got %+v", afterState.Applications)
+	}
+	if afterState.Applications[0].ApplicationStatus != store.SyncMutationReplayApplicationStatusSkipped {
+		t.Fatalf("unexpected all-skipped application row: %+v", afterState.Applications[0])
+	}
+	assertReplayAdminReceiptsAndObservationsEqual(t, beforeState, afterState)
+
+	secondSpyHolder := &replayAdminStoreSpy{}
+	secondStdout := &bytes.Buffer{}
+	secondStderr := &bytes.Buffer{}
+	exitCode = runWithDeps(makeReplayAdminCommandDeps(t, secondSpyHolder, nil), buildApplyArgs(fixture), secondStdout, secondStderr)
+	if exitCode != 0 {
+		t.Fatalf("expected repeated all-skipped apply to exit 0, got %d stderr=%q", exitCode, secondStderr.String())
+	}
+	secondResult := decodeApplyResult(t, secondStdout.String())
+	if secondResult.Status != applyStatusIdempotent || secondResult.PreflightStatus != preflightStatusIdempotent {
+		t.Fatalf("unexpected repeated all-skipped apply result: %+v", secondResult)
+	}
+	if secondSpyHolder.store == nil || secondSpyHolder.store.applyCallCount != 0 {
+		t.Fatalf("expected repeated all-skipped apply to exit before store apply, got %+v", secondSpyHolder.store)
+	}
+
+	afterSecondState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	assertReplayAdminStateEqual(t, afterState, afterSecondState)
 }
 
 func TestRunPreflightRejectsUnsupportedOutputFormat(t *testing.T) {
@@ -976,6 +1369,7 @@ type replayPreflightFixtureOptions struct {
 	receiptCount                        int
 	applicationScenario                 replayApplicationScenario
 	customReceiptInputs                 []store.SyncMutationReceiptInput
+	customDocumentBody                  json.RawMessage
 }
 
 type replayPreflightFixture struct {
@@ -1049,13 +1443,13 @@ func (s *countingReplayAdminStore) EvaluateSyncMutationReplayRecoveryState(ctx c
 	return s.inner.EvaluateSyncMutationReplayRecoveryState(ctx, ownerKey, appID, observationID)
 }
 
-func (s *countingReplayAdminStore) ApplySyncMutationReplayAuthoritativeForTestOnly(ctx context.Context, ownerKey, appID string, observationID int64, options store.SyncMutationReplayAuthoritativeApplyOptions) (store.SyncMutationReplayAuthoritativeApplyResult, error) {
+func (s *countingReplayAdminStore) ApplySyncMutationReplayAuthoritativeInternal(ctx context.Context, ownerKey, appID string, observationID int64, options store.SyncMutationReplayAuthoritativeApplyOptions) (store.SyncMutationReplayAuthoritativeApplyResult, error) {
 	s.applyCallCount++
 	s.lastApplyOptions = options
 	if s.applyFunc != nil {
 		return s.applyFunc(ctx, ownerKey, appID, observationID, options)
 	}
-	return s.inner.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, ownerKey, appID, observationID, options)
+	return s.inner.ApplySyncMutationReplayAuthoritativeInternal(ctx, ownerKey, appID, observationID, options)
 }
 
 func makeReplayAdminCommandDeps(t *testing.T, holder *replayAdminStoreSpy, configure func(*countingReplayAdminStore)) commandDeps {
@@ -1099,7 +1493,10 @@ func createReplayPreflightFixture(t *testing.T, options replayPreflightFixtureOp
 	if receiptCount <= 0 {
 		receiptCount = 1
 	}
-	body := buildReplaySnapshotBodyForCommand(t, options.duplicateItemIDs)
+	body := options.customDocumentBody
+	if len(body) == 0 {
+		body = buildReplaySnapshotBodyForCommand(t, options.duplicateItemIDs)
+	}
 	before, err := sqliteStore.PutDocument(context.Background(), ownerKey, appID, body, nil)
 	if err != nil {
 		t.Fatalf("seed document: %v", err)
@@ -1349,6 +1746,12 @@ func buildReplaySnapshotBodyForCommand(t *testing.T, duplicateItemIDs bool) json
 		tabsJSON = `[{"id":"tab-1","name":"Main","items":[{"id":"dup-item","name":"First","position":{"top":"0px","left":"0px"}},{"id":"dup-item","name":"Second","position":{"top":"10px","left":"10px"}}],"colorIndex":0,"gridSetting":"none","edges":[]}]`
 	}
 
+	return buildReplaySnapshotBodyFromTabsJSONForCommand(t, tabsJSON)
+}
+
+func buildReplaySnapshotBodyFromTabsJSONForCommand(t *testing.T, tabsJSON string) json.RawMessage {
+	t.Helper()
+
 	body, err := json.Marshal(map[string]string{
 		"tabs":        tabsJSON,
 		"activeTabId": "tab-1",
@@ -1357,6 +1760,18 @@ func buildReplaySnapshotBodyForCommand(t *testing.T, duplicateItemIDs bool) json
 		t.Fatalf("marshal replay snapshot body: %v", err)
 	}
 	return json.RawMessage(body)
+}
+
+func buildReplaySnapshotBodyWithDuplicateEdgeIDsForCommand(t *testing.T) json.RawMessage {
+	t.Helper()
+
+	return buildReplaySnapshotBodyFromTabsJSONForCommand(t, `[{"id":"tab-1","name":"Legacy","items":[{"id":"item-1","name":"First","position":{"top":"0px","left":"0px"}},{"id":"item-2","name":"Second","position":{"top":"10px","left":"10px"}}],"colorIndex":0,"gridSetting":"none","edges":[{"id":"dup-edge","fromItemId":"item-1","toItemId":"item-2","kind":"line"},{"id":"dup-edge","fromItemId":"item-2","toItemId":"item-1","kind":"arrow"}]}]`)
+}
+
+func buildReplaySnapshotBodyWithExistingItemForCommand(t *testing.T, itemID string) json.RawMessage {
+	t.Helper()
+
+	return buildReplaySnapshotBodyFromTabsJSONForCommand(t, `[{"id":"tab-1","name":"Main","items":[{"id":"`+itemID+`","name":"Existing","position":{"top":"0px","left":"0px"}}],"colorIndex":0,"gridSetting":"none","edges":[]}]`)
 }
 
 func buildReplaySnapshotBodyForUpdatedCommand(t *testing.T) json.RawMessage {
@@ -1370,6 +1785,21 @@ func buildReplaySnapshotBodyForUpdatedCommand(t *testing.T) json.RawMessage {
 		t.Fatalf("marshal updated replay snapshot body: %v", err)
 	}
 	return json.RawMessage(body)
+}
+
+func putReplayDocumentBodyForCommand(t *testing.T, sqliteStore *store.Store, ownerKey, appID string, body json.RawMessage) store.Document {
+	t.Helper()
+
+	currentDoc, err := sqliteStore.GetDocument(context.Background(), ownerKey, appID)
+	if err != nil {
+		t.Fatalf("load current document before mutation: %v", err)
+	}
+	expectedVersion := currentDoc.Version
+	updatedDoc, err := sqliteStore.PutDocument(context.Background(), ownerKey, appID, body, &expectedVersion)
+	if err != nil {
+		t.Fatalf("mutate canonical document for command test: %v", err)
+	}
+	return updatedDoc
 }
 
 func buildReplayReceiptInputsForCommand(receiptCount int) ([]string, []store.SyncMutationReceiptInput) {
