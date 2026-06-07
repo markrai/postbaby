@@ -1763,6 +1763,207 @@ func TestReplaySyncMutationReceiptsDryRunDoesNotDeriveFixedRatioShapeHeight(t *t
 	}
 }
 
+func TestEvaluateSyncMutationReplayAuthoritativePolicyCreateNodeOverItemLimit(t *testing.T) {
+	t.Parallel()
+
+	tab := replayTab{
+		ID:          "tab-1",
+		Name:        "Main",
+		Items:       make([]replayItem, 0, 500),
+		ColorIndex:  0,
+		GridSetting: "none",
+		Edges:       []replayEdge{},
+	}
+	for index := 0; index < 500; index += 1 {
+		tab.Items = append(tab.Items, replayItem{
+			ID:       fmt.Sprintf("seed-item-%d", index),
+			Name:     fmt.Sprintf("Seed %d", index),
+			Color:    "yellow",
+			Position: replayPosition{Top: fmt.Sprintf("%dpx", index), Left: fmt.Sprintf("%dpx", index)},
+		})
+	}
+
+	body := buildReplaySnapshotBody(t, []replayTab{tab})
+	evaluation, err := EvaluateSyncMutationReplayAuthoritativePolicy(body, SyncMutationReceipt{
+		EntityID:      "item-over-limit",
+		OperationType: "CreateNode",
+		Payload:       json.RawMessage(`{"tabId":"tab-1","name":"Over Limit","position":{"top":"10px","left":"20px"}}`),
+	})
+	if err != nil {
+		t.Fatalf("evaluate authoritative policy: %v", err)
+	}
+	assertReplayPolicyStatus(t, evaluation, replayAuthoritativePolicyStatusSkip)
+	assertReplayPolicyReasons(t, evaluation.Reasons, []string{"item_limit_exceeded"})
+}
+
+func TestEvaluateSyncMutationReplayAuthoritativePolicyCreateEdgeOverEdgeLimit(t *testing.T) {
+	t.Parallel()
+
+	body := buildReplaySnapshotBody(t, []replayTab{buildReplayTabWithEdgeLimitState()})
+	evaluation, err := EvaluateSyncMutationReplayAuthoritativePolicy(body, SyncMutationReceipt{
+		EntityID:      "edge-over-limit",
+		OperationType: "CreateEdge",
+		Payload:       json.RawMessage(`{"tabId":"tab-1","fromItemId":"seed-item-2000","toItemId":"seed-item-2001","kind":"line"}`),
+	})
+	if err != nil {
+		t.Fatalf("evaluate authoritative policy: %v", err)
+	}
+	assertReplayPolicyStatus(t, evaluation, replayAuthoritativePolicyStatusSkip)
+	assertReplayPolicyReasons(t, evaluation.Reasons, []string{"edge_limit_exceeded"})
+}
+
+func TestEvaluateSyncMutationReplayAuthoritativePolicyOversizeText(t *testing.T) {
+	t.Parallel()
+
+	body := buildReplaySnapshotBody(t, []replayTab{
+		{
+			ID:   "tab-1",
+			Name: "Main",
+			Items: []replayItem{
+				{ID: "item-1", Name: "First", Color: "yellow", Position: replayPosition{Top: "0px", Left: "0px"}},
+			},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	oversizeText := strings.Repeat("x", 4001)
+	evaluation, err := EvaluateSyncMutationReplayAuthoritativePolicy(body, SyncMutationReceipt{
+		EntityID:      "item-1",
+		OperationType: "UpdateNode",
+		Payload:       json.RawMessage(`{"tabId":"tab-1","changes":{"name":"` + oversizeText + `"}}`),
+	})
+	if err != nil {
+		t.Fatalf("evaluate authoritative policy: %v", err)
+	}
+	assertReplayPolicyStatus(t, evaluation, replayAuthoritativePolicyStatusSkip)
+	assertReplayPolicyReasons(t, evaluation.Reasons, []string{"text_limit_exceeded"})
+}
+
+func TestEvaluateSyncMutationReplayAuthoritativePolicyFixedRatioWidthOnlyUpdate(t *testing.T) {
+	t.Parallel()
+
+	initialWidth := 170.0
+	initialHeight := 170.0
+	body := buildReplaySnapshotBody(t, []replayTab{
+		{
+			ID:   "tab-1",
+			Name: "Main",
+			Items: []replayItem{
+				{
+					ID:       "item-1",
+					Name:     "Circle",
+					Color:    "yellow",
+					Position: replayPosition{Top: "0px", Left: "0px"},
+					Shape:    "circle",
+					Width:    &initialWidth,
+					Height:   &initialHeight,
+				},
+			},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	evaluation, err := EvaluateSyncMutationReplayAuthoritativePolicy(body, SyncMutationReceipt{
+		EntityID:      "item-1",
+		OperationType: "UpdateNode",
+		Payload:       json.RawMessage(`{"tabId":"tab-1","changes":{"width":220}}`),
+	})
+	if err != nil {
+		t.Fatalf("evaluate authoritative policy: %v", err)
+	}
+	assertReplayPolicyStatus(t, evaluation, replayAuthoritativePolicyStatusAllowed)
+	assertReplayWarnings(t, evaluation.Warnings, []string{"preserve_literal_fixed_ratio_dimensions"})
+}
+
+func TestEvaluateSyncMutationReplayAuthoritativePolicyPreservesMalformedLegacyWarnings(t *testing.T) {
+	t.Parallel()
+
+	body := buildReplayRawSnapshotBody(t, `[
+		{
+			"id":"tab-1",
+			"name":"Legacy",
+			"items":[
+				{"id":"item-1","name":"Odd","position":{"top":"bad","left":"20px"},"shape":"blob"},
+				{"id":"item-2","name":"Second","position":{"top":"0px","left":"0px"}}
+			],
+			"edges":[
+				{"id":"edge-orphan","fromItemId":"item-1","toItemId":"ghost","kind":"line"}
+			]
+		}
+	]`)
+	evaluation, err := EvaluateSyncMutationReplayAuthoritativePolicy(body, SyncMutationReceipt{
+		EntityID:      "item-2",
+		OperationType: "MoveNode",
+		Payload:       json.RawMessage(`{"tabId":"tab-1","position":{"top":"10px","left":"20px"}}`),
+	})
+	if err != nil {
+		t.Fatalf("evaluate authoritative policy: %v", err)
+	}
+	assertReplayPolicyStatus(t, evaluation, replayAuthoritativePolicyStatusAllowed)
+	assertReplayWarnings(t, evaluation.Warnings, []string{
+		"preserve_malformed_legacy_positions",
+		"preserve_unknown_legacy_shapes",
+		"preserve_malformed_legacy_edges",
+	})
+}
+
+func TestEvaluateSyncMutationReplayAuthoritativePolicyBlocksDuplicateItemIDs(t *testing.T) {
+	t.Parallel()
+
+	body := buildReplayRawSnapshotBody(t, `[
+		{
+			"id":"tab-1",
+			"name":"Legacy",
+			"items":[
+				{"id":"dup-item","name":"First","position":{"top":"0px","left":"0px"}},
+				{"id":"dup-item","name":"Second","position":{"top":"10px","left":"10px"}}
+			],
+			"edges":[]
+		}
+	]`)
+	evaluation, err := EvaluateSyncMutationReplayAuthoritativePolicy(body, SyncMutationReceipt{
+		EntityID:      "item-1",
+		OperationType: "CreateNode",
+		Payload:       json.RawMessage(`{"tabId":"tab-1","name":"First","position":{"top":"10px","left":"20px"}}`),
+	})
+	if err != nil {
+		t.Fatalf("evaluate authoritative policy: %v", err)
+	}
+	assertReplayPolicyStatus(t, evaluation, replayAuthoritativePolicyStatusBlocked)
+	assertReplayPolicyReasons(t, evaluation.Reasons, []string{"snapshot_contains_duplicate_item_ids"})
+}
+
+func TestEvaluateSyncMutationReplayAuthoritativePolicyBlocksDuplicateEdgeIDs(t *testing.T) {
+	t.Parallel()
+
+	body := buildReplayRawSnapshotBody(t, `[
+		{
+			"id":"tab-1",
+			"name":"Legacy",
+			"items":[
+				{"id":"item-1","name":"First","position":{"top":"0px","left":"0px"}},
+				{"id":"item-2","name":"Second","position":{"top":"10px","left":"10px"}}
+			],
+			"edges":[
+				{"id":"dup-edge","fromItemId":"item-1","toItemId":"item-2","kind":"line"},
+				{"id":"dup-edge","fromItemId":"item-2","toItemId":"item-1","kind":"line"}
+			]
+		}
+	]`)
+	evaluation, err := EvaluateSyncMutationReplayAuthoritativePolicy(body, SyncMutationReceipt{
+		EntityID:      "edge-1",
+		OperationType: "DeleteEdge",
+		Payload:       json.RawMessage(`{"tabId":"tab-1"}`),
+	})
+	if err != nil {
+		t.Fatalf("evaluate authoritative policy: %v", err)
+	}
+	assertReplayPolicyStatus(t, evaluation, replayAuthoritativePolicyStatusBlocked)
+	assertReplayPolicyReasons(t, evaluation.Reasons, []string{"snapshot_contains_duplicate_edge_ids"})
+}
+
 func TestEvaluateSyncMutationReplayAuthoritativeReadinessBlockedByContractGaps(t *testing.T) {
 	t.Parallel()
 
@@ -1807,20 +2008,18 @@ func TestEvaluateSyncMutationReplayAuthoritativeReadinessBlockedByContractGaps(t
 		"replay_progress_state",
 		"rollback_behavior",
 		"conflict_behavior",
-		"malformed_legacy_snapshot_policy",
-		"duplicate_item_id_policy",
-		"duplicate_edge_id_policy",
-		"per_tab_item_limit",
-		"per_tab_edge_limit",
-		"item_width_height_semantics",
-		"shape_specific_sizing_behavior",
-		"text_length_limit_behavior",
-		"server_side_validation_requirements",
 		"applied_receipt_tracking",
 	})
 	assertReplayAreaStatus(t, readiness.Areas, "duplicate_endpoint_edge_policy", replayAuthoritativeStatusReady)
 	assertReplayAreaStatus(t, readiness.Areas, "missing_tab_policy", replayAuthoritativeStatusReady)
 	assertReplayAreaStatus(t, readiness.Areas, "replay_ordering", replayAuthoritativeStatusPartiallyReady)
+	assertReplayAreaStatus(t, readiness.Areas, "per_tab_item_limit", replayAuthoritativeStatusPartiallyReady)
+	assertReplayAreaStatus(t, readiness.Areas, "per_tab_edge_limit", replayAuthoritativeStatusPartiallyReady)
+	assertReplayAreaStatus(t, readiness.Areas, "text_length_limit_behavior", replayAuthoritativeStatusPartiallyReady)
+	assertReplayAreaStatus(t, readiness.Areas, "shape_specific_sizing_behavior", replayAuthoritativeStatusPartiallyReady)
+	assertReplayAreaStatus(t, readiness.Areas, "duplicate_item_id_policy", replayAuthoritativeStatusPartiallyReady)
+	assertReplayAreaStatus(t, readiness.Areas, "duplicate_edge_id_policy", replayAuthoritativeStatusPartiallyReady)
+	assertReplayAreaStatus(t, readiness.Areas, "server_side_validation_requirements", replayAuthoritativeStatusPartiallyReady)
 	assertReplayAreaStatus(t, readiness.Areas, "delta_pull", replayAuthoritativeStatusIntentionallyDeferred)
 }
 
@@ -1908,11 +2107,11 @@ func TestEvaluateSyncMutationReplayAuthoritativeReadinessWarnsOnMalformedLegacyA
 	if err != nil {
 		t.Fatalf("evaluate readiness: %v", err)
 	}
-	assertReplayWarnings(t, readiness.Warnings, []string{
+	assertReplayReadinessBlockers(t, readiness.Blockers, []string{
 		"snapshot_contains_duplicate_item_ids",
 		"snapshot_contains_duplicate_edge_ids",
-		"snapshot_contains_malformed_legacy_edges",
 	})
+	assertReplayWarnings(t, readiness.Warnings, []string{"preserve_malformed_legacy_edges"})
 }
 
 func TestCreateInitialUserAndLookup(t *testing.T) {
@@ -2588,6 +2787,35 @@ func assertReplayReadinessBlockers(t *testing.T, actual, expected []string) {
 		}
 		if !found {
 			t.Fatalf("expected blocker %q in %+v", blocker, actual)
+		}
+	}
+}
+
+func assertReplayPolicyStatus(t *testing.T, evaluation SyncMutationReplayAuthoritativePolicyEvaluation, expectedStatus string) {
+	t.Helper()
+
+	if evaluation.Status != expectedStatus {
+		t.Fatalf("expected policy status %q, got %+v", expectedStatus, evaluation)
+	}
+}
+
+func assertReplayPolicyReasons(t *testing.T, actual, expected []string) {
+	t.Helper()
+
+	if len(actual) != len(expected) {
+		t.Fatalf("expected %d policy reasons, got %d: %+v", len(expected), len(actual), actual)
+	}
+
+	remaining := make(map[string]int, len(expected))
+	for _, reason := range expected {
+		remaining[reason]++
+	}
+	for _, reason := range actual {
+		remaining[reason]--
+	}
+	for reason, count := range remaining {
+		if count != 0 {
+			t.Fatalf("expected policy reasons %v, got mismatch for %q in %+v", expected, reason, actual)
 		}
 	}
 }

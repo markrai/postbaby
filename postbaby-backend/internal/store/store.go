@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	_ "modernc.org/sqlite"
 )
@@ -30,6 +31,9 @@ const (
 	replayTabsSnapshotKey             = "tabs"
 	replayCoordMin                    = -100000
 	replayCoordMax                    = 100000
+	replayItemsPerTabMax              = 500
+	replayEdgesPerTabMax              = 2000
+	replayItemTextCharsMax            = 4000
 	replayItemWidthMin                = 120
 	replayItemWidthMax                = 600
 	replayItemHeightMin               = 80
@@ -56,6 +60,15 @@ var replayItemShapeSet = map[string]struct{}{
 	"upsideDownTriangle": {},
 	"hexagon":            {},
 	"oval":               {},
+}
+
+var replayFixedRatioShapeSet = map[string]struct{}{
+	"circle":             {},
+	"square":             {},
+	"triangle":           {},
+	"diamond":            {},
+	"upsideDownTriangle": {},
+	"hexagon":            {},
 }
 
 type VersionConflictError struct {
@@ -145,6 +158,20 @@ type SyncMutationReplayAuthoritativeAreaReadiness struct {
 	Detail string
 }
 
+type SyncMutationReplayAuthoritativePolicyEvaluation struct {
+	Status   string
+	Reasons  []string
+	Warnings []string
+}
+
+type replaySnapshotPolicyAnalysis struct {
+	DuplicateItemIDs         bool
+	DuplicateEdgeIDs         bool
+	MalformedLegacyEdges     bool
+	UnknownLegacyShapes      bool
+	MalformedLegacyPositions bool
+}
+
 type replaySnapshot map[string]string
 
 type replayTab struct {
@@ -183,6 +210,11 @@ const (
 	replayAuthoritativeStatusPartiallyReady        = "partially_ready"
 	replayAuthoritativeStatusBlocked               = "blocked"
 	replayAuthoritativeStatusIntentionallyDeferred = "intentionally_deferred"
+	replayAuthoritativePolicyStatusAllowed         = "allowed"
+	replayAuthoritativePolicyStatusSkip            = "skip"
+	replayAuthoritativePolicyStatusConflict        = "conflict"
+	replayAuthoritativePolicyStatusBlocked         = "blocked"
+	replayAuthoritativePolicyStatusFatal           = "fatal"
 )
 
 func Open(dbPath string) (*Store, error) {
@@ -738,6 +770,20 @@ func buildSyncMutationReplayDryRunObservation(doc Document, receipts []SyncMutat
 	}
 }
 
+func EvaluateSyncMutationReplayAuthoritativePolicy(body json.RawMessage, receipt SyncMutationReceipt) (SyncMutationReplayAuthoritativePolicyEvaluation, error) {
+	snapshot, err := decodeReplaySnapshot(body)
+	if err != nil {
+		return SyncMutationReplayAuthoritativePolicyEvaluation{}, err
+	}
+
+	tabs, err := decodeReplayTabs(snapshot[replayTabsSnapshotKey])
+	if err != nil {
+		return SyncMutationReplayAuthoritativePolicyEvaluation{}, err
+	}
+
+	return evaluateSyncMutationReplayAuthoritativePolicyAgainstTabs(tabs, receipt), nil
+}
+
 func EvaluateSyncMutationReplayAuthoritativeReadiness(observation SyncMutationReplayDryRunObservation, currentDoc Document, currentReceipts []SyncMutationReceipt) (SyncMutationReplayAuthoritativeReadiness, error) {
 	snapshot, err := decodeReplaySnapshot(currentDoc.Body)
 	if err != nil {
@@ -752,6 +798,7 @@ func EvaluateSyncMutationReplayAuthoritativeReadiness(observation SyncMutationRe
 	readiness := SyncMutationReplayAuthoritativeReadiness{
 		Areas: make([]SyncMutationReplayAuthoritativeAreaReadiness, 0, 24),
 	}
+	snapshotAnalysis := analyzeReplaySnapshotForAuthoritativePolicy(tabs)
 
 	appendReplayAuthoritativeArea(&readiness, "document_version_gating", replayAuthoritativeStatusBlocked, "No compare-and-apply gate exists to prove the canonical snapshot stayed unchanged between dry-run observation and any future authoritative write.")
 	appendReplayAuthoritativeArea(&readiness, "receipt_selection", replayAuthoritativeStatusPartiallyReady, "Accepted receipts are scoped by owner and app, but there is no authoritative applied-receipt boundary yet.")
@@ -763,21 +810,21 @@ func EvaluateSyncMutationReplayAuthoritativeReadiness(observation SyncMutationRe
 	appendReplayAuthoritativeArea(&readiness, "rollback_behavior", replayAuthoritativeStatusBlocked, "Failure recovery for a future canonical replay transaction is not yet defined.")
 	appendReplayAuthoritativeArea(&readiness, "idempotency", replayAuthoritativeStatusPartiallyReady, "Receipt acceptance is idempotent, but authoritative application idempotency is not implemented.")
 	appendReplayAuthoritativeArea(&readiness, "conflict_behavior", replayAuthoritativeStatusBlocked, "The server does not yet define how to abort or retry when the canonical snapshot or accepted receipt set changes after observation.")
-	appendReplayAuthoritativeArea(&readiness, "malformed_legacy_snapshot_policy", replayAuthoritativeStatusBlocked, "Dry-run preserves malformed legacy data deterministically, but authoritative scrub-or-preserve policy is unresolved.")
-	appendReplayAuthoritativeArea(&readiness, "duplicate_item_id_policy", replayAuthoritativeStatusBlocked, "Dry-run uses deterministic first-match behavior, but authoritative duplicate item-id handling is unresolved.")
-	appendReplayAuthoritativeArea(&readiness, "duplicate_edge_id_policy", replayAuthoritativeStatusBlocked, "Dry-run uses deterministic first-match behavior, but authoritative duplicate edge-id handling is unresolved.")
+	appendReplayAuthoritativeArea(&readiness, "malformed_legacy_snapshot_policy", replayAuthoritativeStatusPartiallyReady, "Policy is defined to preserve unrelated malformed legacy data during replay admission, but no canonical write path applies that policy yet.")
+	appendReplayAuthoritativeArea(&readiness, "duplicate_item_id_policy", replayAuthoritativeStatusPartiallyReady, "Policy is defined to block authoritative replay when the snapshot contains duplicate item ids.")
+	appendReplayAuthoritativeArea(&readiness, "duplicate_edge_id_policy", replayAuthoritativeStatusPartiallyReady, "Policy is defined to block authoritative replay when the snapshot contains duplicate edge ids.")
 	appendReplayAuthoritativeArea(&readiness, "duplicate_endpoint_edge_policy", replayAuthoritativeStatusReady, "Dry-run matches the frontend rule that duplicate endpoint pairs are rejected in either direction regardless of edge kind.")
-	appendReplayAuthoritativeArea(&readiness, "self_edge_policy", replayAuthoritativeStatusPartiallyReady, "Replay rejects new self-edges, but legacy self-edge cleanup policy is unresolved.")
-	appendReplayAuthoritativeArea(&readiness, "missing_endpoint_policy", replayAuthoritativeStatusPartiallyReady, "Replay rejects new edges with missing endpoints, but malformed stored edge cleanup policy is unresolved.")
+	appendReplayAuthoritativeArea(&readiness, "self_edge_policy", replayAuthoritativeStatusPartiallyReady, "Policy is defined to skip new self-edge mutations while preserving unrelated legacy self-edges until a future cleanup policy exists.")
+	appendReplayAuthoritativeArea(&readiness, "missing_endpoint_policy", replayAuthoritativeStatusPartiallyReady, "Policy is defined to preserve unrelated malformed legacy edges while rejecting new missing-endpoint mutations.")
 	appendReplayAuthoritativeArea(&readiness, "missing_tab_policy", replayAuthoritativeStatusReady, "Replay never creates tabs implicitly and reports missing_tab deterministically.")
-	appendReplayAuthoritativeArea(&readiness, "per_tab_item_limit", replayAuthoritativeStatusBlocked, "Dry-run does not enforce the frontend item limit server-side.")
-	appendReplayAuthoritativeArea(&readiness, "per_tab_edge_limit", replayAuthoritativeStatusBlocked, "Dry-run does not enforce the frontend edge limit server-side.")
-	appendReplayAuthoritativeArea(&readiness, "item_width_height_semantics", replayAuthoritativeStatusBlocked, "Dry-run clamps numeric width and height values but does not settle authoritative size semantics across shapes.")
-	appendReplayAuthoritativeArea(&readiness, "shape_specific_sizing_behavior", replayAuthoritativeStatusBlocked, "Frontend width-reference sizing for fixed-ratio shapes is not fully mirrored by Go replay.")
-	appendReplayAuthoritativeArea(&readiness, "text_length_limit_behavior", replayAuthoritativeStatusBlocked, "Dry-run does not enforce the frontend text length limit.")
-	appendReplayAuthoritativeArea(&readiness, "unknown_fields", replayAuthoritativeStatusPartiallyReady, "Dry-run skips unknown update fields deterministically, but the authoritative validation contract is not finalized.")
-	appendReplayAuthoritativeArea(&readiness, "unknown_operations", replayAuthoritativeStatusPartiallyReady, "Receipt acceptance already rejects unsupported operations, but authoritative validation and recovery behavior are not finalized.")
-	appendReplayAuthoritativeArea(&readiness, "server_side_validation_requirements", replayAuthoritativeStatusBlocked, "Authoritative replay validation requirements are not yet locked down.")
+	appendReplayAuthoritativeArea(&readiness, "per_tab_item_limit", replayAuthoritativeStatusPartiallyReady, "Policy is defined to skip CreateNode mutations that would exceed the per-tab item limit.")
+	appendReplayAuthoritativeArea(&readiness, "per_tab_edge_limit", replayAuthoritativeStatusPartiallyReady, "Policy is defined to skip CreateEdge mutations that would exceed the per-tab edge limit.")
+	appendReplayAuthoritativeArea(&readiness, "item_width_height_semantics", replayAuthoritativeStatusPartiallyReady, "Policy is defined to preserve literal stored width and height values and to reject invalid dimensions instead of silently deriving them.")
+	appendReplayAuthoritativeArea(&readiness, "shape_specific_sizing_behavior", replayAuthoritativeStatusPartiallyReady, "Policy is defined to preserve literal dimensions for fixed-ratio shapes even though the frontend derives some visual heights from width.")
+	appendReplayAuthoritativeArea(&readiness, "text_length_limit_behavior", replayAuthoritativeStatusPartiallyReady, "Policy is defined to skip oversize text mutations instead of preserving or truncating them silently.")
+	appendReplayAuthoritativeArea(&readiness, "unknown_fields", replayAuthoritativeStatusPartiallyReady, "Policy is defined to skip unknown update fields deterministically.")
+	appendReplayAuthoritativeArea(&readiness, "unknown_operations", replayAuthoritativeStatusPartiallyReady, "Receipt acceptance already rejects unsupported operations, and policy evaluation treats unknown operations as fatal.")
+	appendReplayAuthoritativeArea(&readiness, "server_side_validation_requirements", replayAuthoritativeStatusPartiallyReady, "Pure validation policy evaluation now exists, but it is not yet wired into a compare-and-apply transaction.")
 	appendReplayAuthoritativeArea(&readiness, "applied_receipt_tracking", replayAuthoritativeStatusBlocked, "There is no authoritative applied-receipt tracking separate from dry-run observations.")
 	appendReplayAuthoritativeArea(&readiness, "delta_pull", replayAuthoritativeStatusIntentionallyDeferred, "Revisioned delta pull remains out of scope until authoritative replay and applied-state tracking exist.")
 
@@ -789,10 +836,251 @@ func EvaluateSyncMutationReplayAuthoritativeReadiness(observation SyncMutationRe
 	addReplayAuthoritativeBlockerIf(&readiness, firstMutationID != observation.FirstOrderedMutationID, "receipt_set_changed_since_observation")
 	addReplayAuthoritativeBlockerIf(&readiness, lastMutationID != observation.LastOrderedMutationID, "receipt_set_changed_since_observation")
 	addReplayAuthoritativeBlockerIf(&readiness, highWatermark != observation.OrderedReceiptHighWatermark, "receipt_set_changed_since_observation")
+	addReplayAuthoritativeBlockerIf(&readiness, snapshotAnalysis.DuplicateItemIDs, "snapshot_contains_duplicate_item_ids")
+	addReplayAuthoritativeBlockerIf(&readiness, snapshotAnalysis.DuplicateEdgeIDs, "snapshot_contains_duplicate_edge_ids")
 
-	readiness.Warnings = collectReplayAuthoritativeSnapshotWarnings(tabs)
+	readiness.Warnings = snapshotAnalysis.warnings()
 	readiness.Ready = len(readiness.Blockers) == 0
 	return readiness, nil
+}
+
+func evaluateSyncMutationReplayAuthoritativePolicyAgainstTabs(tabs []replayTab, receipt SyncMutationReceipt) SyncMutationReplayAuthoritativePolicyEvaluation {
+	analysis := analyzeReplaySnapshotForAuthoritativePolicy(tabs)
+	warnings := analysis.warnings()
+	reasons := make([]string, 0, 2)
+	if analysis.DuplicateItemIDs {
+		reasons = append(reasons, "snapshot_contains_duplicate_item_ids")
+	}
+	if analysis.DuplicateEdgeIDs {
+		reasons = append(reasons, "snapshot_contains_duplicate_edge_ids")
+	}
+	if len(reasons) > 0 {
+		return SyncMutationReplayAuthoritativePolicyEvaluation{
+			Status:   replayAuthoritativePolicyStatusBlocked,
+			Reasons:  reasons,
+			Warnings: warnings,
+		}
+	}
+
+	entityID := normalizeReplayIdentifier(receipt.EntityID)
+	if entityID == "" {
+		return replayAuthoritativeFatalPolicyEvaluation(warnings, "missing_entity_id")
+	}
+
+	switch receipt.OperationType {
+	case "CreateNode":
+		return evaluateReplayAuthoritativeCreateNodePolicy(tabs, receipt, entityID, warnings)
+	case "UpdateNode":
+		return evaluateReplayAuthoritativeUpdateNodePolicy(tabs, receipt, entityID, warnings)
+	case "MoveNode":
+		return evaluateReplayAuthoritativeMoveNodePolicy(tabs, receipt, entityID, warnings)
+	case "DeleteNode":
+		return evaluateReplayAuthoritativeDeleteNodePolicy(tabs, receipt, entityID, warnings)
+	case "CreateEdge":
+		return evaluateReplayAuthoritativeCreateEdgePolicy(tabs, receipt, entityID, warnings)
+	case "DeleteEdge":
+		return evaluateReplayAuthoritativeDeleteEdgePolicy(tabs, receipt, entityID, warnings)
+	default:
+		return replayAuthoritativeFatalPolicyEvaluation(warnings, "unknown_operation")
+	}
+}
+
+func evaluateReplayAuthoritativeCreateNodePolicy(tabs []replayTab, receipt SyncMutationReceipt, entityID string, warnings []string) SyncMutationReplayAuthoritativePolicyEvaluation {
+	var payload struct {
+		TabID    string         `json:"tabId"`
+		Name     string         `json:"name"`
+		Position replayPosition `json:"position"`
+		Shape    string         `json:"shape"`
+		Width    *float64       `json:"width"`
+		Height   *float64       `json:"height"`
+	}
+	if err := json.Unmarshal(receipt.Payload, &payload); err != nil {
+		return replayAuthoritativeFatalPolicyEvaluation(warnings, "invalid_payload")
+	}
+
+	tab := findReplayTab(tabs, normalizeReplayIdentifier(payload.TabID))
+	if tab == nil {
+		return replayAuthoritativeConflictPolicyEvaluation(warnings, "missing_tab")
+	}
+	if findReplayItemAcrossTabs(tabs, entityID) != nil {
+		return replayAuthoritativeSkipPolicyEvaluation(warnings, "duplicate_item_id_existing")
+	}
+	if len(tab.Items) >= replayItemsPerTabMax {
+		return replayAuthoritativeSkipPolicyEvaluation(warnings, "item_limit_exceeded")
+	}
+	if countReplayAuthoritativeTextUnits(payload.Name) > replayItemTextCharsMax {
+		return replayAuthoritativeSkipPolicyEvaluation(warnings, "text_limit_exceeded")
+	}
+	if _, ok := normalizeReplayPosition(payload.Position); !ok {
+		return replayAuthoritativeSkipPolicyEvaluation(warnings, "invalid_position")
+	}
+	if !replayAuthoritativeDimensionsAllowed(payload.Width, payload.Height) {
+		return replayAuthoritativeSkipPolicyEvaluation(warnings, "invalid_dimensions")
+	}
+	return replayAuthoritativeAllowedPolicyEvaluation(warnings)
+}
+
+func evaluateReplayAuthoritativeUpdateNodePolicy(tabs []replayTab, receipt SyncMutationReceipt, entityID string, warnings []string) SyncMutationReplayAuthoritativePolicyEvaluation {
+	var payload struct {
+		TabID   string                     `json:"tabId"`
+		Changes map[string]json.RawMessage `json:"changes"`
+	}
+	if err := json.Unmarshal(receipt.Payload, &payload); err != nil {
+		return replayAuthoritativeFatalPolicyEvaluation(warnings, "invalid_payload")
+	}
+
+	tab := findReplayTab(tabs, normalizeReplayIdentifier(payload.TabID))
+	if tab == nil {
+		return replayAuthoritativeConflictPolicyEvaluation(warnings, "missing_tab")
+	}
+	item := findReplayItem(tab, entityID)
+	if item == nil {
+		return replayAuthoritativeConflictPolicyEvaluation(warnings, "missing_node")
+	}
+
+	resultWarnings := cloneReplayWarnings(warnings)
+	targetShape := normalizeReplayShape(item.Shape)
+	widthPresent := false
+	heightPresent := false
+
+	for field, rawValue := range payload.Changes {
+		switch field {
+		case "name", "text":
+			var value string
+			if err := json.Unmarshal(rawValue, &value); err != nil {
+				return replayAuthoritativeFatalPolicyEvaluation(resultWarnings, "invalid_payload")
+			}
+			if countReplayAuthoritativeTextUnits(value) > replayItemTextCharsMax {
+				return replayAuthoritativeSkipPolicyEvaluation(resultWarnings, "text_limit_exceeded")
+			}
+		case "color":
+			var value string
+			if err := json.Unmarshal(rawValue, &value); err != nil {
+				return replayAuthoritativeFatalPolicyEvaluation(resultWarnings, "invalid_payload")
+			}
+		case "shape":
+			var value string
+			if err := json.Unmarshal(rawValue, &value); err != nil {
+				return replayAuthoritativeFatalPolicyEvaluation(resultWarnings, "invalid_payload")
+			}
+			targetShape = normalizeReplayShape(value)
+		case "width":
+			value, ok := decodeReplayNumber(rawValue)
+			if !ok || !replayAuthoritativeDimensionWithinBounds(value, replayItemWidthMin, replayItemWidthMax) {
+				return replayAuthoritativeSkipPolicyEvaluation(resultWarnings, "invalid_dimensions")
+			}
+			widthPresent = true
+		case "height":
+			value, ok := decodeReplayNumber(rawValue)
+			if !ok || !replayAuthoritativeDimensionWithinBounds(value, replayItemHeightMin, replayItemHeightMax) {
+				return replayAuthoritativeSkipPolicyEvaluation(resultWarnings, "invalid_dimensions")
+			}
+			heightPresent = true
+		default:
+			return replayAuthoritativeSkipPolicyEvaluation(resultWarnings, "unknown_update_field")
+		}
+	}
+
+	if replayShapeUsesFixedRatio(targetShape) && (widthPresent != heightPresent) {
+		resultWarnings = appendReplayWarningIfMissing(resultWarnings, "preserve_literal_fixed_ratio_dimensions")
+	}
+	return replayAuthoritativeAllowedPolicyEvaluation(resultWarnings)
+}
+
+func evaluateReplayAuthoritativeMoveNodePolicy(tabs []replayTab, receipt SyncMutationReceipt, entityID string, warnings []string) SyncMutationReplayAuthoritativePolicyEvaluation {
+	var payload struct {
+		TabID    string         `json:"tabId"`
+		Position replayPosition `json:"position"`
+	}
+	if err := json.Unmarshal(receipt.Payload, &payload); err != nil {
+		return replayAuthoritativeFatalPolicyEvaluation(warnings, "invalid_payload")
+	}
+
+	tab := findReplayTab(tabs, normalizeReplayIdentifier(payload.TabID))
+	if tab == nil {
+		return replayAuthoritativeConflictPolicyEvaluation(warnings, "missing_tab")
+	}
+	if findReplayItem(tab, entityID) == nil {
+		return replayAuthoritativeConflictPolicyEvaluation(warnings, "missing_node")
+	}
+	if _, ok := normalizeReplayPosition(payload.Position); !ok {
+		return replayAuthoritativeSkipPolicyEvaluation(warnings, "invalid_position")
+	}
+	return replayAuthoritativeAllowedPolicyEvaluation(warnings)
+}
+
+func evaluateReplayAuthoritativeDeleteNodePolicy(tabs []replayTab, receipt SyncMutationReceipt, entityID string, warnings []string) SyncMutationReplayAuthoritativePolicyEvaluation {
+	var payload struct {
+		TabID string `json:"tabId"`
+	}
+	if err := json.Unmarshal(receipt.Payload, &payload); err != nil {
+		return replayAuthoritativeFatalPolicyEvaluation(warnings, "invalid_payload")
+	}
+
+	tab := findReplayTab(tabs, normalizeReplayIdentifier(payload.TabID))
+	if tab == nil {
+		return replayAuthoritativeConflictPolicyEvaluation(warnings, "missing_tab")
+	}
+	if findReplayItem(tab, entityID) == nil {
+		return replayAuthoritativeSkipPolicyEvaluation(warnings, "missing_node")
+	}
+	return replayAuthoritativeAllowedPolicyEvaluation(warnings)
+}
+
+func evaluateReplayAuthoritativeCreateEdgePolicy(tabs []replayTab, receipt SyncMutationReceipt, entityID string, warnings []string) SyncMutationReplayAuthoritativePolicyEvaluation {
+	var payload struct {
+		TabID      string `json:"tabId"`
+		FromItemID string `json:"fromItemId"`
+		ToItemID   string `json:"toItemId"`
+	}
+	if err := json.Unmarshal(receipt.Payload, &payload); err != nil {
+		return replayAuthoritativeFatalPolicyEvaluation(warnings, "invalid_payload")
+	}
+
+	tab := findReplayTab(tabs, normalizeReplayIdentifier(payload.TabID))
+	if tab == nil {
+		return replayAuthoritativeConflictPolicyEvaluation(warnings, "missing_tab")
+	}
+	if findReplayEdgeAcrossTabs(tabs, entityID) != nil {
+		return replayAuthoritativeSkipPolicyEvaluation(warnings, "duplicate_edge_id_existing")
+	}
+
+	fromItemID := normalizeReplayIdentifier(payload.FromItemID)
+	toItemID := normalizeReplayIdentifier(payload.ToItemID)
+	if fromItemID == "" || toItemID == "" {
+		return replayAuthoritativeConflictPolicyEvaluation(warnings, "missing_endpoint")
+	}
+	if fromItemID == toItemID {
+		return replayAuthoritativeSkipPolicyEvaluation(warnings, "self_edge")
+	}
+	if findReplayEdgeByEndpoints(tab, fromItemID, toItemID) != nil {
+		return replayAuthoritativeSkipPolicyEvaluation(warnings, "duplicate_endpoint_edge")
+	}
+	if findReplayItem(tab, fromItemID) == nil || findReplayItem(tab, toItemID) == nil {
+		return replayAuthoritativeConflictPolicyEvaluation(warnings, "missing_endpoint")
+	}
+	if len(tab.Edges) >= replayEdgesPerTabMax {
+		return replayAuthoritativeSkipPolicyEvaluation(warnings, "edge_limit_exceeded")
+	}
+	return replayAuthoritativeAllowedPolicyEvaluation(warnings)
+}
+
+func evaluateReplayAuthoritativeDeleteEdgePolicy(tabs []replayTab, receipt SyncMutationReceipt, entityID string, warnings []string) SyncMutationReplayAuthoritativePolicyEvaluation {
+	var payload struct {
+		TabID string `json:"tabId"`
+	}
+	if err := json.Unmarshal(receipt.Payload, &payload); err != nil {
+		return replayAuthoritativeFatalPolicyEvaluation(warnings, "invalid_payload")
+	}
+
+	tab := findReplayTab(tabs, normalizeReplayIdentifier(payload.TabID))
+	if tab == nil {
+		return replayAuthoritativeConflictPolicyEvaluation(warnings, "missing_tab")
+	}
+	if findReplayEdgeIndex(tab, entityID) < 0 {
+		return replayAuthoritativeSkipPolicyEvaluation(warnings, "missing_edge")
+	}
+	return replayAuthoritativeAllowedPolicyEvaluation(warnings)
 }
 
 func (s *Store) listAcceptedSyncMutationReceipts(ctx context.Context, ownerKey, appID string) ([]SyncMutationReceipt, error) {
@@ -1347,6 +1635,82 @@ func hashReplayObservationBytes(value []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func replayAuthoritativeAllowedPolicyEvaluation(warnings []string) SyncMutationReplayAuthoritativePolicyEvaluation {
+	return SyncMutationReplayAuthoritativePolicyEvaluation{
+		Status:   replayAuthoritativePolicyStatusAllowed,
+		Reasons:  []string{},
+		Warnings: cloneReplayWarnings(warnings),
+	}
+}
+
+func replayAuthoritativeSkipPolicyEvaluation(warnings []string, reasons ...string) SyncMutationReplayAuthoritativePolicyEvaluation {
+	return SyncMutationReplayAuthoritativePolicyEvaluation{
+		Status:   replayAuthoritativePolicyStatusSkip,
+		Reasons:  append([]string{}, reasons...),
+		Warnings: cloneReplayWarnings(warnings),
+	}
+}
+
+func replayAuthoritativeConflictPolicyEvaluation(warnings []string, reasons ...string) SyncMutationReplayAuthoritativePolicyEvaluation {
+	return SyncMutationReplayAuthoritativePolicyEvaluation{
+		Status:   replayAuthoritativePolicyStatusConflict,
+		Reasons:  append([]string{}, reasons...),
+		Warnings: cloneReplayWarnings(warnings),
+	}
+}
+
+func replayAuthoritativeFatalPolicyEvaluation(warnings []string, reasons ...string) SyncMutationReplayAuthoritativePolicyEvaluation {
+	return SyncMutationReplayAuthoritativePolicyEvaluation{
+		Status:   replayAuthoritativePolicyStatusFatal,
+		Reasons:  append([]string{}, reasons...),
+		Warnings: cloneReplayWarnings(warnings),
+	}
+}
+
+func cloneReplayWarnings(warnings []string) []string {
+	if len(warnings) == 0 {
+		return []string{}
+	}
+	return append([]string{}, warnings...)
+}
+
+func appendReplayWarningIfMissing(warnings []string, warning string) []string {
+	for _, existing := range warnings {
+		if existing == warning {
+			return warnings
+		}
+	}
+	return append(warnings, warning)
+}
+
+func replayAuthoritativeDimensionsAllowed(width, height *float64) bool {
+	if width != nil && !replayAuthoritativeDimensionWithinBounds(*width, replayItemWidthMin, replayItemWidthMax) {
+		return false
+	}
+	if height != nil && !replayAuthoritativeDimensionWithinBounds(*height, replayItemHeightMin, replayItemHeightMax) {
+		return false
+	}
+	return true
+}
+
+func replayAuthoritativeDimensionWithinBounds(value float64, minValue, maxValue int) bool {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return false
+	}
+	rounded := int(math.Round(value))
+	return rounded >= minValue && rounded <= maxValue
+}
+
+func countReplayAuthoritativeTextUnits(value string) int {
+	return len(utf16.Encode([]rune(value)))
+}
+
+func replayShapeUsesFixedRatio(value string) bool {
+	normalized := normalizeReplayShape(value)
+	_, ok := replayFixedRatioShapeSet[normalized]
+	return ok
+}
+
 func appendReplayAuthoritativeArea(readiness *SyncMutationReplayAuthoritativeReadiness, area, status, detail string) {
 	readiness.Areas = append(readiness.Areas, SyncMutationReplayAuthoritativeAreaReadiness{
 		Area:   area,
@@ -1373,25 +1737,34 @@ func addReplayAuthoritativeBlocker(readiness *SyncMutationReplayAuthoritativeRea
 	readiness.Blockers = append(readiness.Blockers, blocker)
 }
 
-func collectReplayAuthoritativeSnapshotWarnings(tabs []replayTab) []string {
-	duplicateItemIDs := false
-	duplicateEdgeIDs := false
-	malformedLegacyEdges := false
+func analyzeReplaySnapshotForAuthoritativePolicy(tabs []replayTab) replaySnapshotPolicyAnalysis {
+	analysis := replaySnapshotPolicyAnalysis{}
+	seenItemIDs := make(map[string]struct{})
+	seenEdgeIDs := make(map[string]struct{})
 
-	for _, tab := range tabs {
-		seenItemIDs := make(map[string]struct{}, len(tab.Items))
-		for _, item := range tab.Items {
+	for index := range tabs {
+		tab := &tabs[index]
+		for itemIndex := range tab.Items {
+			item := &tab.Items[itemIndex]
 			if _, exists := seenItemIDs[item.ID]; exists {
-				duplicateItemIDs = true
+				analysis.DuplicateItemIDs = true
 			} else {
 				seenItemIDs[item.ID] = struct{}{}
 			}
+
+			if _, ok := normalizeReplayPosition(item.Position); !ok {
+				analysis.MalformedLegacyPositions = true
+			}
+			normalizedShape := normalizeReplayIdentifier(item.Shape)
+			if normalizedShape != "" && normalizeReplayShape(normalizedShape) != normalizedShape {
+				analysis.UnknownLegacyShapes = true
+			}
 		}
 
-		seenEdgeIDs := make(map[string]struct{}, len(tab.Edges))
-		for _, edge := range tab.Edges {
+		for edgeIndex := range tab.Edges {
+			edge := &tab.Edges[edgeIndex]
 			if _, exists := seenEdgeIDs[edge.ID]; exists {
-				duplicateEdgeIDs = true
+				analysis.DuplicateEdgeIDs = true
 			} else {
 				seenEdgeIDs[edge.ID] = struct{}{}
 			}
@@ -1400,22 +1773,26 @@ func collectReplayAuthoritativeSnapshotWarnings(tabs []replayTab) []string {
 				strings.TrimSpace(edge.FromItemID) == "" ||
 				strings.TrimSpace(edge.ToItemID) == "" ||
 				edge.FromItemID == edge.ToItemID ||
-				findReplayItem(&tab, edge.FromItemID) == nil ||
-				findReplayItem(&tab, edge.ToItemID) == nil {
-				malformedLegacyEdges = true
+				findReplayItem(tab, edge.FromItemID) == nil ||
+				findReplayItem(tab, edge.ToItemID) == nil {
+				analysis.MalformedLegacyEdges = true
 			}
 		}
 	}
 
+	return analysis
+}
+
+func (analysis replaySnapshotPolicyAnalysis) warnings() []string {
 	warnings := make([]string, 0, 3)
-	if duplicateItemIDs {
-		warnings = append(warnings, "snapshot_contains_duplicate_item_ids")
+	if analysis.MalformedLegacyPositions {
+		warnings = append(warnings, "preserve_malformed_legacy_positions")
 	}
-	if duplicateEdgeIDs {
-		warnings = append(warnings, "snapshot_contains_duplicate_edge_ids")
+	if analysis.UnknownLegacyShapes {
+		warnings = append(warnings, "preserve_unknown_legacy_shapes")
 	}
-	if malformedLegacyEdges {
-		warnings = append(warnings, "snapshot_contains_malformed_legacy_edges")
+	if analysis.MalformedLegacyEdges {
+		warnings = append(warnings, "preserve_malformed_legacy_edges")
 	}
 	return warnings
 }
