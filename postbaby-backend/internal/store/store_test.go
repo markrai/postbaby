@@ -2002,12 +2002,13 @@ func TestEvaluateSyncMutationReplayAuthoritativeReadinessBlockedByContractGaps(t
 		t.Fatalf("expected authoritative replay readiness to stay blocked, got %+v", readiness)
 	}
 	assertReplayReadinessBlockers(t, readiness.Blockers, []string{
-		"transaction_boundary",
+		"authoritative_replay_not_live",
 	})
 	assertReplayAreaStatus(t, readiness.Areas, "duplicate_endpoint_edge_policy", replayAuthoritativeStatusReady)
 	assertReplayAreaStatus(t, readiness.Areas, "missing_tab_policy", replayAuthoritativeStatusReady)
 	assertReplayAreaStatus(t, readiness.Areas, "document_version_gating", replayAuthoritativeStatusPartiallyReady)
 	assertReplayAreaStatus(t, readiness.Areas, "replay_ordering", replayAuthoritativeStatusPartiallyReady)
+	assertReplayAreaStatus(t, readiness.Areas, "transaction_boundary", replayAuthoritativeStatusPartiallyReady)
 	assertReplayAreaStatus(t, readiness.Areas, "replay_progress_state", replayAuthoritativeStatusPartiallyReady)
 	assertReplayAreaStatus(t, readiness.Areas, "rollback_behavior", replayAuthoritativeStatusPartiallyReady)
 	assertReplayAreaStatus(t, readiness.Areas, "per_tab_item_limit", replayAuthoritativeStatusPartiallyReady)
@@ -2854,6 +2855,576 @@ func TestEvaluateSyncMutationReplayRecoveryStateCanonicalStateWithoutApplication
 	}
 	assertReplayRecoveryStatus(t, recovery, SyncMutationReplayRecoveryStatusCanonicalStateWithoutApplicationRows)
 	assertReplayReadinessBlockers(t, recovery.Reasons, []string{"current_canonical_matches_observed_preview_without_application_rows"})
+}
+
+func TestApplySyncMutationReplayAuthoritativeForTestOnlyRefusesWithoutGate(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	before := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-create", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","position":{"top":"10px","left":"20px"}}`),
+	)
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+
+	beforeReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	beforeApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	if len(beforeApplications) != 0 {
+		t.Fatalf("expected no replay applications before gate refusal, got %+v", beforeApplications)
+	}
+
+	result, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{})
+	if err != nil {
+		t.Fatalf("apply authoritative replay with gate false: %v", err)
+	}
+	assertReplayAuthoritativeApplyStatus(t, result, SyncMutationReplayAuthoritativeApplyStatusRefusedInternalGate)
+
+	after, err := docStore.GetDocument(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("load document after gate refusal: %v", err)
+	}
+	if after.Version != before.Version || string(after.Body) != string(before.Body) {
+		t.Fatalf("expected gate refusal to preserve canonical document, before=%+v after=%+v", before, after)
+	}
+
+	afterReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	assertReplayReceiptRowsEqual(t, beforeReceipts, afterReceipts)
+	afterApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	assertReplayApplicationsEqual(t, beforeApplications, afterApplications)
+}
+
+func TestApplySyncMutationReplayAuthoritativeForTestOnlySuccess(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	before := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-create", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","position":{"top":"10px","left":"20px"}}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:01Z", "2026-06-01T12:00:01Z",
+		buildReplayReceiptInput("mut-create-duplicate", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"Duplicate","position":{"top":"30px","left":"40px"}}`),
+	)
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+
+	beforeReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	acceptedReceipts := loadAcceptedReplayReceiptsForTest(t, docStore, "owner", "postbaby-web")
+	preview, err := buildSyncMutationReplayAuthoritativeProgressivePreview(before, acceptedReceipts)
+	if err != nil {
+		t.Fatalf("build authoritative preview: %v", err)
+	}
+	if preview.PolicyAbort {
+		t.Fatalf("expected authoritative preview to stage successfully, got %+v", preview)
+	}
+
+	result, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+		AllowInternalAuthoritativeReplay: true,
+	})
+	if err != nil {
+		t.Fatalf("apply authoritative replay: %v", err)
+	}
+	assertReplayAuthoritativeApplyStatus(t, result, SyncMutationReplayAuthoritativeApplyStatusApplied)
+	if result.CanonicalDocumentVersionBefore != before.Version {
+		t.Fatalf("expected canonical version before %d, got %+v", before.Version, result)
+	}
+	if result.CanonicalDocumentVersionAfter == nil || *result.CanonicalDocumentVersionAfter != before.Version+1 {
+		t.Fatalf("expected canonical version after %d, got %+v", before.Version+1, result)
+	}
+	if result.CanonicalDocumentHashBefore != hashReplayObservationBytes(before.Body) {
+		t.Fatalf("expected canonical hash before %q, got %+v", hashReplayObservationBytes(before.Body), result)
+	}
+	if result.CanonicalDocumentHashAfter == nil || *result.CanonicalDocumentHashAfter != hashReplayObservationBytes(preview.PreviewBody) {
+		t.Fatalf("expected canonical hash after %q, got %+v", hashReplayObservationBytes(preview.PreviewBody), result)
+	}
+	if result.InsertedApplicationRowCount != 2 {
+		t.Fatalf("expected two inserted application rows, got %+v", result)
+	}
+
+	after, err := docStore.GetDocument(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("load document after authoritative replay: %v", err)
+	}
+	if after.Version != before.Version+1 {
+		t.Fatalf("expected canonical version to advance once from %d to %d, got %d", before.Version, before.Version+1, after.Version)
+	}
+	if string(after.Body) != string(preview.PreviewBody) {
+		t.Fatalf("expected canonical body to match authoritative preview, preview=%s actual=%s", preview.PreviewBody, after.Body)
+	}
+
+	applications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	if len(applications) != 2 {
+		t.Fatalf("expected two application rows, got %+v", applications)
+	}
+	createApplication := findReplayApplicationByMutationID(t, applications, "mut-create")
+	if createApplication.ApplicationStatus != SyncMutationReplayApplicationStatusApplied || createApplication.ApplicationReason != "policy_allowed" {
+		t.Fatalf("unexpected create application row: %+v", createApplication)
+	}
+	if createApplication.CanonicalDocumentVersionBefore != before.Version || createApplication.CanonicalDocumentVersionAfter == nil || *createApplication.CanonicalDocumentVersionAfter != after.Version {
+		t.Fatalf("unexpected create application version metadata: %+v", createApplication)
+	}
+	if createApplication.CanonicalDocumentHashBefore != hashReplayObservationBytes(before.Body) || createApplication.CanonicalDocumentHashAfter == nil || *createApplication.CanonicalDocumentHashAfter != hashReplayObservationBytes(after.Body) {
+		t.Fatalf("unexpected create application hash metadata: %+v", createApplication)
+	}
+	if createApplication.ReplayObservationID == nil || *createApplication.ReplayObservationID != observation.ID {
+		t.Fatalf("unexpected create application observation metadata: %+v", createApplication)
+	}
+
+	duplicateApplication := findReplayApplicationByMutationID(t, applications, "mut-create-duplicate")
+	if duplicateApplication.ApplicationStatus != SyncMutationReplayApplicationStatusSkipped || duplicateApplication.ApplicationReason != "duplicate_item_id_existing" {
+		t.Fatalf("unexpected duplicate application row: %+v", duplicateApplication)
+	}
+	if duplicateApplication.CanonicalDocumentVersionBefore != before.Version || duplicateApplication.CanonicalDocumentVersionAfter == nil || *duplicateApplication.CanonicalDocumentVersionAfter != after.Version {
+		t.Fatalf("unexpected duplicate application version metadata: %+v", duplicateApplication)
+	}
+	if duplicateApplication.CanonicalDocumentHashBefore != hashReplayObservationBytes(before.Body) || duplicateApplication.CanonicalDocumentHashAfter == nil || *duplicateApplication.CanonicalDocumentHashAfter != hashReplayObservationBytes(after.Body) {
+		t.Fatalf("unexpected duplicate application hash metadata: %+v", duplicateApplication)
+	}
+	if duplicateApplication.ReplayObservationID == nil || *duplicateApplication.ReplayObservationID != observation.ID {
+		t.Fatalf("unexpected duplicate application observation metadata: %+v", duplicateApplication)
+	}
+
+	createResult := findReplayAuthoritativeMutationResultByMutationID(t, result.MutationResults, "mut-create")
+	if createResult.ApplicationStatus != SyncMutationReplayApplicationStatusApplied || createResult.ApplicationReason != "policy_allowed" {
+		t.Fatalf("unexpected applied mutation result: %+v", createResult)
+	}
+	duplicateResult := findReplayAuthoritativeMutationResultByMutationID(t, result.MutationResults, "mut-create-duplicate")
+	if duplicateResult.ApplicationStatus != SyncMutationReplayApplicationStatusSkipped || duplicateResult.ApplicationReason != "duplicate_item_id_existing" {
+		t.Fatalf("unexpected skipped mutation result: %+v", duplicateResult)
+	}
+
+	afterReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	assertReplayReceiptRowsEqual(t, beforeReceipts, afterReceipts)
+}
+
+func TestApplySyncMutationReplayAuthoritativeForTestOnlyStaleCanonicalAbortsWithoutWrites(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-create", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","position":{"top":"10px","left":"20px"}}`),
+	)
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+	if _, err := docStore.PutDocument(ctx, "owner", "postbaby-web", buildReplaySnapshotBody(t, []replayTab{
+		{
+			ID:   "tab-1",
+			Name: "Main",
+			Items: []replayItem{
+				{ID: "changed-item", Name: "Changed", Position: replayPosition{Top: "0px", Left: "0px"}},
+			},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	}), nil); err != nil {
+		t.Fatalf("change canonical document: %v", err)
+	}
+
+	before, err := docStore.GetDocument(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("load document before authoritative replay attempt: %v", err)
+	}
+	beforeReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	beforeApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+
+	result, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+		AllowInternalAuthoritativeReplay: true,
+	})
+	if err != nil {
+		t.Fatalf("apply authoritative replay on stale canonical document: %v", err)
+	}
+	assertReplayAuthoritativeApplyStatus(t, result, SyncMutationReplayAuthoritativeApplyStatusAbortedPreconditions)
+
+	after, err := docStore.GetDocument(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("load document after authoritative replay attempt: %v", err)
+	}
+	if after.Version != before.Version || string(after.Body) != string(before.Body) {
+		t.Fatalf("expected stale canonical admission to preserve canonical document, before=%+v after=%+v", before, after)
+	}
+	afterReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	assertReplayReceiptRowsEqual(t, beforeReceipts, afterReceipts)
+	afterApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	assertReplayApplicationsEqual(t, beforeApplications, afterApplications)
+}
+
+func TestApplySyncMutationReplayAuthoritativeForTestOnlyStaleReceiptSetAbortsWithoutWrites(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	before := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-a", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","position":{"top":"10px","left":"20px"}}`),
+	)
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:01Z", "2026-06-01T12:00:01Z",
+		buildReplayReceiptInput("mut-b", "Node", "item-2", "CreateNode", `{"tabId":"tab-1","name":"Second","position":{"top":"30px","left":"40px"}}`),
+	)
+
+	beforeReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	beforeApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+
+	result, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+		AllowInternalAuthoritativeReplay: true,
+	})
+	if err != nil {
+		t.Fatalf("apply authoritative replay on stale receipt set: %v", err)
+	}
+	assertReplayAuthoritativeApplyStatus(t, result, SyncMutationReplayAuthoritativeApplyStatusAbortedPreconditions)
+
+	after, err := docStore.GetDocument(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("load document after stale receipt set attempt: %v", err)
+	}
+	if after.Version != before.Version || string(after.Body) != string(before.Body) {
+		t.Fatalf("expected stale receipt-set admission to preserve canonical document, before=%+v after=%+v", before, after)
+	}
+	afterReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	assertReplayReceiptRowsEqual(t, beforeReceipts, afterReceipts)
+	afterApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	assertReplayApplicationsEqual(t, beforeApplications, afterApplications)
+}
+
+func TestApplySyncMutationReplayAuthoritativeForTestOnlyBlockedSnapshotAbortsWithoutWrites(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		body json.RawMessage
+	}{
+		{
+			name: "duplicate_item_ids",
+			body: buildReplayRawSnapshotBody(t, `[
+				{
+					"id":"tab-1",
+					"name":"Legacy",
+					"items":[
+						{"id":"dup-item","name":"First","position":{"top":"0px","left":"0px"}},
+						{"id":"dup-item","name":"Second","position":{"top":"10px","left":"10px"}}
+					],
+					"edges":[]
+				}
+			]`),
+		},
+		{
+			name: "duplicate_edge_ids",
+			body: buildReplayRawSnapshotBody(t, `[
+				{
+					"id":"tab-1",
+					"name":"Legacy",
+					"items":[
+						{"id":"item-1","name":"First","position":{"top":"0px","left":"0px"}},
+						{"id":"item-2","name":"Second","position":{"top":"10px","left":"10px"}}
+					],
+					"edges":[
+						{"id":"dup-edge","fromItemId":"item-1","toItemId":"item-2","kind":"line"},
+						{"id":"dup-edge","fromItemId":"item-2","toItemId":"item-1","kind":"arrow"}
+					]
+				}
+			]`),
+		},
+	} {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			docStore := openTestStore(t)
+			ctx := context.Background()
+			before := seedReplayDocumentBody(t, docStore, "owner", "postbaby-web", testCase.body)
+			insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+				buildReplayReceiptInput("mut-create", "Node", "item-3", "CreateNode", `{"tabId":"tab-1","name":"Third","position":{"top":"20px","left":"20px"}}`),
+			)
+			observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+			if err != nil {
+				t.Fatalf("record observation: %v", err)
+			}
+
+			beforeReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+			beforeApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+
+			result, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+				AllowInternalAuthoritativeReplay: true,
+			})
+			if err != nil {
+				t.Fatalf("apply authoritative replay on blocked snapshot: %v", err)
+			}
+			assertReplayAuthoritativeApplyStatus(t, result, SyncMutationReplayAuthoritativeApplyStatusAbortedRecovery)
+
+			after, err := docStore.GetDocument(ctx, "owner", "postbaby-web")
+			if err != nil {
+				t.Fatalf("load document after blocked snapshot attempt: %v", err)
+			}
+			if after.Version != before.Version || string(after.Body) != string(before.Body) {
+				t.Fatalf("expected blocked snapshot attempt to preserve canonical document, before=%+v after=%+v", before, after)
+			}
+			afterReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+			assertReplayReceiptRowsEqual(t, beforeReceipts, afterReceipts)
+			afterApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+			assertReplayApplicationsEqual(t, beforeApplications, afterApplications)
+		})
+	}
+}
+
+func TestApplySyncMutationReplayAuthoritativeForTestOnlyPolicyAbortDoesNotWrite(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	before := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-missing-node", "Node", "missing-node", "UpdateNode", `{"tabId":"tab-1","changes":{"name":"Renamed"}}`),
+	)
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+
+	beforeReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	beforeApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+
+	result, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+		AllowInternalAuthoritativeReplay: true,
+	})
+	if err != nil {
+		t.Fatalf("apply authoritative replay with policy conflict: %v", err)
+	}
+	assertReplayAuthoritativeApplyStatus(t, result, SyncMutationReplayAuthoritativeApplyStatusAbortedPolicy)
+
+	after, err := docStore.GetDocument(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("load document after policy conflict attempt: %v", err)
+	}
+	if after.Version != before.Version || string(after.Body) != string(before.Body) {
+		t.Fatalf("expected policy conflict attempt to preserve canonical document, before=%+v after=%+v", before, after)
+	}
+	afterReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	assertReplayReceiptRowsEqual(t, beforeReceipts, afterReceipts)
+	afterApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	assertReplayApplicationsEqual(t, beforeApplications, afterApplications)
+}
+
+func TestApplySyncMutationReplayAuthoritativeForTestOnlyFailpointRollsBackBeforeFirstApplicationInsert(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	before := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-create", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","position":{"top":"10px","left":"20px"}}`),
+	)
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+
+	beforeReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	beforeApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	failAfter := 0
+
+	_, err = docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+		AllowInternalAuthoritativeReplay: true,
+		FailAfterApplicationRowInserts:   &failAfter,
+	})
+	if !errors.Is(err, ErrSyncMutationReplayAuthoritativeApplyFailpoint) {
+		t.Fatalf("expected authoritative replay failpoint, got %v", err)
+	}
+
+	after, err := docStore.GetDocument(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("load document after failpoint: %v", err)
+	}
+	if after.Version != before.Version || string(after.Body) != string(before.Body) {
+		t.Fatalf("expected failpoint rollback to preserve canonical document, before=%+v after=%+v", before, after)
+	}
+	afterReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	assertReplayReceiptRowsEqual(t, beforeReceipts, afterReceipts)
+	afterApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	assertReplayApplicationsEqual(t, beforeApplications, afterApplications)
+}
+
+func TestApplySyncMutationReplayAuthoritativeForTestOnlyFailpointRollsBackAfterFirstApplicationInsert(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	before := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-create", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","position":{"top":"10px","left":"20px"}}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:01Z", "2026-06-01T12:00:01Z",
+		buildReplayReceiptInput("mut-create-duplicate", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"Duplicate","position":{"top":"30px","left":"40px"}}`),
+	)
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+
+	beforeReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	beforeApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	failAfter := 1
+
+	_, err = docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+		AllowInternalAuthoritativeReplay: true,
+		FailAfterApplicationRowInserts:   &failAfter,
+	})
+	if !errors.Is(err, ErrSyncMutationReplayAuthoritativeApplyFailpoint) {
+		t.Fatalf("expected authoritative replay failpoint, got %v", err)
+	}
+
+	after, err := docStore.GetDocument(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("load document after failpoint: %v", err)
+	}
+	if after.Version != before.Version || string(after.Body) != string(before.Body) {
+		t.Fatalf("expected failpoint rollback to preserve canonical document, before=%+v after=%+v", before, after)
+	}
+	afterReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	assertReplayReceiptRowsEqual(t, beforeReceipts, afterReceipts)
+	afterApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	assertReplayApplicationsEqual(t, beforeApplications, afterApplications)
+}
+
+func TestApplySyncMutationReplayAuthoritativeForTestOnlyRepeatedApplyIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-create", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","position":{"top":"10px","left":"20px"}}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:01Z", "2026-06-01T12:00:01Z",
+		buildReplayReceiptInput("mut-create-duplicate", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"Duplicate","position":{"top":"30px","left":"40px"}}`),
+	)
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+
+	beforeReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	firstResult, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+		AllowInternalAuthoritativeReplay: true,
+	})
+	if err != nil {
+		t.Fatalf("first authoritative replay apply: %v", err)
+	}
+	assertReplayAuthoritativeApplyStatus(t, firstResult, SyncMutationReplayAuthoritativeApplyStatusApplied)
+
+	afterFirstDocument, err := docStore.GetDocument(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("load document after first authoritative replay apply: %v", err)
+	}
+	afterFirstApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	if len(afterFirstApplications) != 2 {
+		t.Fatalf("expected two application rows after first apply, got %+v", afterFirstApplications)
+	}
+
+	secondResult, err := docStore.ApplySyncMutationReplayAuthoritativeForTestOnly(ctx, "owner", "postbaby-web", observation.ID, SyncMutationReplayAuthoritativeApplyOptions{
+		AllowInternalAuthoritativeReplay: true,
+	})
+	if err != nil {
+		t.Fatalf("second authoritative replay apply: %v", err)
+	}
+	assertReplayAuthoritativeApplyStatus(t, secondResult, SyncMutationReplayAuthoritativeApplyStatusIdempotentExitAlreadyApplied)
+
+	afterSecondDocument, err := docStore.GetDocument(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("load document after second authoritative replay apply: %v", err)
+	}
+	if afterSecondDocument.Version != afterFirstDocument.Version || string(afterSecondDocument.Body) != string(afterFirstDocument.Body) {
+		t.Fatalf("expected repeated authoritative apply to preserve canonical document, first=%+v second=%+v", afterFirstDocument, afterSecondDocument)
+	}
+	afterSecondApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	assertReplayApplicationsEqual(t, afterFirstApplications, afterSecondApplications)
+	afterReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	assertReplayReceiptRowsEqual(t, beforeReceipts, afterReceipts)
 }
 
 func TestMapSyncMutationReplayPolicyStatusToApplicationStatus(t *testing.T) {
@@ -3837,6 +4408,14 @@ func assertReplayPolicyStatus(t *testing.T, evaluation SyncMutationReplayAuthori
 	}
 }
 
+func assertReplayAuthoritativeApplyStatus(t *testing.T, result SyncMutationReplayAuthoritativeApplyResult, expectedStatus string) {
+	t.Helper()
+
+	if result.Status != expectedStatus {
+		t.Fatalf("expected authoritative apply status %q, got %+v", expectedStatus, result)
+	}
+}
+
 func assertReplayPolicyReasons(t *testing.T, actual, expected []string) {
 	t.Helper()
 
@@ -3866,6 +4445,30 @@ func mustListReplayApplications(t *testing.T, docStore *Store, ownerKey, appID s
 		t.Fatalf("list inert replay applications: %v", err)
 	}
 	return applications
+}
+
+func findReplayApplicationByMutationID(t *testing.T, applications []SyncMutationReplayApplication, mutationID string) SyncMutationReplayApplication {
+	t.Helper()
+
+	for _, application := range applications {
+		if application.MutationID == mutationID {
+			return application
+		}
+	}
+	t.Fatalf("expected replay application for mutation %q in %+v", mutationID, applications)
+	return SyncMutationReplayApplication{}
+}
+
+func findReplayAuthoritativeMutationResultByMutationID(t *testing.T, results []SyncMutationReplayAuthoritativeMutationResult, mutationID string) SyncMutationReplayAuthoritativeMutationResult {
+	t.Helper()
+
+	for _, result := range results {
+		if result.MutationID == mutationID {
+			return result
+		}
+	}
+	t.Fatalf("expected authoritative mutation result for mutation %q in %+v", mutationID, results)
+	return SyncMutationReplayAuthoritativeMutationResult{}
 }
 
 func assertReplayCompareAndApplyStatus(t *testing.T, evaluation SyncMutationReplayCompareAndApplyEvaluation, expectedStatus string) {
