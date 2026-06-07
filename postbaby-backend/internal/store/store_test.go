@@ -582,6 +582,9 @@ func TestReplaySyncMutationReceiptsDryRunOrderingAndScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dry-run replay: %v", err)
 	}
+	if result.ConsideredCount != 4 {
+		t.Fatalf("expected only same-owner same-app receipts to be considered, got %d", result.ConsideredCount)
+	}
 	expectedOrder := []string{"mut-accepted-first", "mut-created-first", "mut-a", "mut-b"}
 	if len(result.OrderedMutationID) != len(expectedOrder) {
 		t.Fatalf("expected %d ordered mutation ids, got %d", len(expectedOrder), len(result.OrderedMutationID))
@@ -603,6 +606,461 @@ func TestReplaySyncMutationReceiptsDryRunOrderingAndScope(t *testing.T) {
 	}
 	if item.Position.Top != "40px" || item.Position.Left != "40px" {
 		t.Fatalf("expected deterministic final move position, got %+v", item.Position)
+	}
+
+	repeatedResult, err := docStore.ReplaySyncMutationReceiptsDryRun(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("repeat dry-run replay: %v", err)
+	}
+	if string(repeatedResult.PreviewBody) != string(result.PreviewBody) {
+		t.Fatalf("expected repeated dry-run preview to stay stable, first=%s second=%s", result.PreviewBody, repeatedResult.PreviewBody)
+	}
+	if len(repeatedResult.OrderedMutationID) != len(result.OrderedMutationID) {
+		t.Fatalf("expected repeated dry-run ordering length %d, got %d", len(result.OrderedMutationID), len(repeatedResult.OrderedMutationID))
+	}
+	for index, mutationID := range result.OrderedMutationID {
+		if repeatedResult.OrderedMutationID[index] != mutationID {
+			t.Fatalf("expected repeated dry-run mutation %d to be %q, got %q", index, mutationID, repeatedResult.OrderedMutationID[index])
+		}
+	}
+}
+
+func TestReplaySyncMutationReceiptsDryRunCreateUpdateMoveSequence(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-create", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","color":"yellow","shape":"circle","position":{"top":"10px","left":"20px"}}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:01Z", "2026-06-01T12:00:01Z",
+		buildReplayReceiptInput("mut-update", "Node", "item-1", "UpdateNode", `{"tabId":"tab-1","changes":{"name":"Renamed","color":"green","shape":"hexagon","width":167}}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:02Z", "2026-06-01T12:00:02Z",
+		buildReplayReceiptInput("mut-move", "Node", "item-1", "MoveNode", `{"tabId":"tab-1","position":{"top":"30px","left":"40px"}}`),
+	)
+
+	result, err := docStore.ReplaySyncMutationReceiptsDryRun(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("dry-run replay: %v", err)
+	}
+	if result.AppliedCount != 3 || result.SkippedCount != 0 || result.WarningCount != 0 {
+		t.Fatalf("unexpected dry-run counts: %+v", result)
+	}
+
+	tabs := extractReplayPreviewTabs(t, result.PreviewBody)
+	tab := findReplayTab(tabs, "tab-1")
+	if tab == nil {
+		t.Fatal("expected preview tab")
+	}
+	item := findReplayItem(tab, "item-1")
+	if item == nil {
+		t.Fatal("expected preview item")
+	}
+	if item.Name != "Renamed" || item.Color != "green" || item.Shape != "hexagon" {
+		t.Fatalf("unexpected preview item after create/update/move: %+v", item)
+	}
+	if item.Width == nil || *item.Width != 167 {
+		t.Fatalf("expected stored width 167, got %+v", item.Width)
+	}
+	if item.Position.Top != "30px" || item.Position.Left != "40px" {
+		t.Fatalf("unexpected preview position: %+v", item.Position)
+	}
+}
+
+func TestReplaySyncMutationReceiptsDryRunCreateEdgeAndMoveSequence(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:   "tab-1",
+			Name: "Main",
+			Items: []replayItem{
+				{ID: "item-2", Name: "Anchor", Color: "blue", Position: replayPosition{Top: "100px", Left: "100px"}},
+			},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-create", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","color":"yellow","position":{"top":"10px","left":"20px"}}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:01Z", "2026-06-01T12:00:01Z",
+		buildReplayReceiptInput("mut-edge", "Edge", "edge-1", "CreateEdge", `{"tabId":"tab-1","fromItemId":"item-1","toItemId":"item-2","kind":"arrow"}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:02Z", "2026-06-01T12:00:02Z",
+		buildReplayReceiptInput("mut-move", "Node", "item-1", "MoveNode", `{"tabId":"tab-1","position":{"top":"60px","left":"70px"}}`),
+	)
+
+	result, err := docStore.ReplaySyncMutationReceiptsDryRun(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("dry-run replay: %v", err)
+	}
+	if result.AppliedCount != 3 || result.SkippedCount != 0 || result.WarningCount != 0 {
+		t.Fatalf("unexpected dry-run counts: %+v", result)
+	}
+
+	tabs := extractReplayPreviewTabs(t, result.PreviewBody)
+	tab := findReplayTab(tabs, "tab-1")
+	if tab == nil {
+		t.Fatal("expected preview tab")
+	}
+	item := findReplayItem(tab, "item-1")
+	if item == nil {
+		t.Fatal("expected created node to exist")
+	}
+	if item.Position.Top != "60px" || item.Position.Left != "70px" {
+		t.Fatalf("expected moved position, got %+v", item.Position)
+	}
+	if len(tab.Edges) != 1 {
+		t.Fatalf("expected one preview edge, got %+v", tab.Edges)
+	}
+	if tab.Edges[0].FromItemID != "item-1" || tab.Edges[0].ToItemID != "item-2" || tab.Edges[0].Kind != "arrow" {
+		t.Fatalf("unexpected preview edge: %+v", tab.Edges[0])
+	}
+}
+
+func TestReplaySyncMutationReceiptsDryRunDeleteNodeRemovesDependentCreatedEdge(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:   "tab-1",
+			Name: "Main",
+			Items: []replayItem{
+				{ID: "item-2", Name: "Anchor", Color: "blue", Position: replayPosition{Top: "100px", Left: "100px"}},
+			},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-create", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","color":"yellow","position":{"top":"10px","left":"20px"}}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:01Z", "2026-06-01T12:00:01Z",
+		buildReplayReceiptInput("mut-edge", "Edge", "edge-1", "CreateEdge", `{"tabId":"tab-1","fromItemId":"item-1","toItemId":"item-2","kind":"line"}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:02Z", "2026-06-01T12:00:02Z",
+		buildReplayReceiptInput("mut-delete", "Node", "item-1", "DeleteNode", `{"tabId":"tab-1"}`),
+	)
+
+	result, err := docStore.ReplaySyncMutationReceiptsDryRun(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("dry-run replay: %v", err)
+	}
+	if result.AppliedCount != 3 || result.SkippedCount != 0 || result.WarningCount != 0 {
+		t.Fatalf("unexpected dry-run counts: %+v", result)
+	}
+
+	tabs := extractReplayPreviewTabs(t, result.PreviewBody)
+	tab := findReplayTab(tabs, "tab-1")
+	if tab == nil {
+		t.Fatal("expected preview tab")
+	}
+	if findReplayItem(tab, "item-1") != nil {
+		t.Fatal("expected deleted node to be absent")
+	}
+	if findReplayItem(tab, "item-2") == nil {
+		t.Fatal("expected anchor node to remain")
+	}
+	if len(tab.Edges) != 0 {
+		t.Fatalf("expected dependent edge removal, got %+v", tab.Edges)
+	}
+}
+
+func TestReplaySyncMutationReceiptsDryRunDeleteNodeThenUpdateSkipsMissingNode(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:   "tab-1",
+			Name: "Main",
+			Items: []replayItem{
+				{ID: "item-1", Name: "First", Color: "yellow", Position: replayPosition{Top: "0px", Left: "0px"}},
+			},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-delete", "Node", "item-1", "DeleteNode", `{"tabId":"tab-1"}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:01Z", "2026-06-01T12:00:01Z",
+		buildReplayReceiptInput("mut-update", "Node", "item-1", "UpdateNode", `{"tabId":"tab-1","changes":{"name":"Renamed"}}`),
+	)
+
+	result, err := docStore.ReplaySyncMutationReceiptsDryRun(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("dry-run replay: %v", err)
+	}
+	if result.AppliedCount != 1 || result.SkippedCount != 1 {
+		t.Fatalf("unexpected dry-run counts: %+v", result)
+	}
+	assertReplayWarningCodes(t, result.Warnings, []string{replayWarningSkippedMissingNode})
+
+	tabs := extractReplayPreviewTabs(t, result.PreviewBody)
+	tab := findReplayTab(tabs, "tab-1")
+	if tab == nil {
+		t.Fatal("expected preview tab")
+	}
+	if findReplayItem(tab, "item-1") != nil {
+		t.Fatal("expected deleted node to remain absent")
+	}
+}
+
+func TestReplaySyncMutationReceiptsDryRunCreateEdgeBeforeEndpointsExistSkipsWithoutBackfill(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-edge-early", "Edge", "edge-1", "CreateEdge", `{"tabId":"tab-1","fromItemId":"item-1","toItemId":"item-2","kind":"arrow"}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:01Z", "2026-06-01T12:00:01Z",
+		buildReplayReceiptInput("mut-create-1", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","color":"yellow","position":{"top":"0px","left":"0px"}}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:02Z", "2026-06-01T12:00:02Z",
+		buildReplayReceiptInput("mut-create-2", "Node", "item-2", "CreateNode", `{"tabId":"tab-1","name":"Second","color":"blue","position":{"top":"20px","left":"20px"}}`),
+	)
+
+	result, err := docStore.ReplaySyncMutationReceiptsDryRun(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("dry-run replay: %v", err)
+	}
+	if result.AppliedCount != 2 || result.SkippedCount != 1 {
+		t.Fatalf("unexpected dry-run counts: %+v", result)
+	}
+	assertReplayWarningCodes(t, result.Warnings, []string{replayWarningSkippedMissingEP})
+
+	tabs := extractReplayPreviewTabs(t, result.PreviewBody)
+	tab := findReplayTab(tabs, "tab-1")
+	if tab == nil {
+		t.Fatal("expected preview tab")
+	}
+	if len(tab.Items) != 2 {
+		t.Fatalf("expected both nodes to exist, got %+v", tab.Items)
+	}
+	if len(tab.Edges) != 0 {
+		t.Fatalf("expected skipped edge to stay absent, got %+v", tab.Edges)
+	}
+}
+
+func TestReplaySyncMutationReceiptsDryRunDuplicateDeleteNodeAndDeleteEdgeAreIdempotent(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:   "tab-1",
+			Name: "Main",
+			Items: []replayItem{
+				{ID: "item-1", Name: "First", Color: "yellow", Position: replayPosition{Top: "0px", Left: "0px"}},
+				{ID: "item-2", Name: "Second", Color: "blue", Position: replayPosition{Top: "10px", Left: "10px"}},
+			},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges: []replayEdge{
+				{ID: "edge-1", FromItemID: "item-1", ToItemID: "item-2", Kind: "line"},
+			},
+		},
+	})
+
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-delete-edge-1", "Edge", "edge-1", "DeleteEdge", `{"tabId":"tab-1"}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:01Z", "2026-06-01T12:00:01Z",
+		buildReplayReceiptInput("mut-delete-edge-2", "Edge", "edge-1", "DeleteEdge", `{"tabId":"tab-1"}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:02Z", "2026-06-01T12:00:02Z",
+		buildReplayReceiptInput("mut-delete-node-1", "Node", "item-2", "DeleteNode", `{"tabId":"tab-1"}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:03Z", "2026-06-01T12:00:03Z",
+		buildReplayReceiptInput("mut-delete-node-2", "Node", "item-2", "DeleteNode", `{"tabId":"tab-1"}`),
+	)
+
+	result, err := docStore.ReplaySyncMutationReceiptsDryRun(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("dry-run replay: %v", err)
+	}
+	if result.AppliedCount != 2 || result.SkippedCount != 2 || result.WarningCount != 0 {
+		t.Fatalf("unexpected dry-run counts: %+v", result)
+	}
+
+	tabs := extractReplayPreviewTabs(t, result.PreviewBody)
+	tab := findReplayTab(tabs, "tab-1")
+	if tab == nil {
+		t.Fatal("expected preview tab")
+	}
+	if findReplayItem(tab, "item-2") != nil {
+		t.Fatal("expected deleted node to be absent")
+	}
+	if len(tab.Edges) != 0 {
+		t.Fatalf("expected deleted edge to stay absent, got %+v", tab.Edges)
+	}
+}
+
+func TestReplaySyncMutationReceiptsDryRunPayloadWarnings(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:   "tab-1",
+			Name: "Main",
+			Items: []replayItem{
+				{ID: "item-1", Name: "First", Color: "yellow", Position: replayPosition{Top: "0px", Left: "0px"}},
+			},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-missing-tab", "Node", "item-2", "CreateNode", `{"name":"NoTab","position":{"top":"0px","left":"0px"}}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:01Z", "2026-06-01T12:00:01Z",
+		buildReplayReceiptInput("mut-missing-entity", "Node", "", "CreateNode", `{"tabId":"tab-1","name":"NoId","position":{"top":"0px","left":"0px"}}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:02Z", "2026-06-01T12:00:02Z",
+		buildReplayReceiptInput("mut-unknown-field", "Node", "item-1", "UpdateNode", `{"tabId":"tab-1","changes":{"bogus":"x"}}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:03Z", "2026-06-01T12:00:03Z",
+		buildReplayReceiptInput("mut-invalid-dims", "Node", "item-1", "UpdateNode", `{"tabId":"tab-1","changes":{"width":"wide","height":[]}}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:04Z", "2026-06-01T12:00:04Z",
+		buildReplayReceiptInput("mut-bad-position", "Node", "item-1", "MoveNode", `{"tabId":"tab-1","position":{"top":"bad","left":"0px"}}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:05Z", "2026-06-01T12:00:05Z",
+		buildReplayReceiptInput("mut-missing-endpoint", "Edge", "edge-1", "CreateEdge", `{"tabId":"tab-1","fromItemId":"item-1","kind":"line"}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:06Z", "2026-06-01T12:00:06Z",
+		buildReplayReceiptInput("mut-self-edge", "Edge", "edge-2", "CreateEdge", `{"tabId":"tab-1","fromItemId":"item-1","toItemId":"item-1","kind":"arrow"}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:07Z", "2026-06-01T12:00:07Z",
+		buildReplayReceiptInput("mut-delete-edge-no-tab", "Edge", "edge-3", "DeleteEdge", `{}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:08Z", "2026-06-01T12:00:08Z",
+		buildReplayReceiptInput("mut-wrong-type", "Node", "item-1", "MoveNode", `[]`),
+	)
+
+	result, err := docStore.ReplaySyncMutationReceiptsDryRun(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("dry-run replay: %v", err)
+	}
+	if result.AppliedCount != 0 || result.SkippedCount != 9 || result.WarningCount != 10 {
+		t.Fatalf("unexpected dry-run counts: %+v", result)
+	}
+	assertReplayWarningCodes(t, result.Warnings, []string{
+		replayWarningMissingTab,
+		replayWarningMissingEntityID,
+		replayWarningUnknownUpdateField,
+		replayWarningInvalidUpdateValue,
+		replayWarningInvalidUpdateValue,
+		replayWarningInvalidPosition,
+		replayWarningSkippedMissingEP,
+		replayWarningSelfEdge,
+		replayWarningMissingTab,
+		replayWarningInvalidPayload,
+	})
+
+	tabs := extractReplayPreviewTabs(t, result.PreviewBody)
+	tab := findReplayTab(tabs, "tab-1")
+	if tab == nil {
+		t.Fatal("expected preview tab")
+	}
+	item := findReplayItem(tab, "item-1")
+	if item == nil {
+		t.Fatal("expected original item to remain")
+	}
+	if item.Name != "First" || item.Position.Top != "0px" || item.Position.Left != "0px" {
+		t.Fatalf("expected malformed payloads to preserve original item, got %+v", item)
+	}
+	if len(tab.Edges) != 0 {
+		t.Fatalf("expected malformed payloads to avoid creating edges, got %+v", tab.Edges)
+	}
+}
+
+func TestReplaySyncMutationReceiptsDryRunPreviewNotPersistedAndStableAcrossCalls(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	before := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-create", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","color":"yellow","position":{"top":"10px","left":"20px"}}`),
+	)
+
+	firstResult, err := docStore.ReplaySyncMutationReceiptsDryRun(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("first dry-run replay: %v", err)
+	}
+	secondResult, err := docStore.ReplaySyncMutationReceiptsDryRun(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("second dry-run replay: %v", err)
+	}
+	if string(firstResult.PreviewBody) != string(secondResult.PreviewBody) {
+		t.Fatalf("expected stable preview body across calls, first=%s second=%s", firstResult.PreviewBody, secondResult.PreviewBody)
+	}
+	if string(firstResult.PreviewBody) == string(before.Body) {
+		t.Fatalf("expected preview output to differ from the stored document body, body=%s preview=%s", before.Body, firstResult.PreviewBody)
+	}
+
+	after, err := docStore.GetDocument(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("load document after repeated dry-run replay: %v", err)
+	}
+	if after.Version != before.Version {
+		t.Fatalf("expected dry-run replay to preserve version %d, got %d", before.Version, after.Version)
+	}
+	if string(after.Body) != string(before.Body) {
+		t.Fatalf("expected dry-run replay to avoid persisting preview output, before=%s after=%s", before.Body, after.Body)
 	}
 }
 
@@ -1061,6 +1519,21 @@ func buildTestSyncMutationReceiptInput(mutationID, operationType string) SyncMut
 		EntityID:      "item-1",
 		OperationType: operationType,
 		Payload:       json.RawMessage(`{"tabId":"tab-1","position":{"top":"0px","left":"0px"}}`),
+		BaseRevision:  &baseRevision,
+	}
+}
+
+func buildReplayReceiptInput(mutationID, entityType, entityID, operationType, payload string) SyncMutationReceiptInput {
+	baseRevision := int64(6)
+	return SyncMutationReceiptInput{
+		MutationID:    mutationID,
+		ClientID:      "client-1",
+		DeviceID:      "device-1",
+		Protocol:      "PB-SYNC/1",
+		EntityType:    entityType,
+		EntityID:      entityID,
+		OperationType: operationType,
+		Payload:       json.RawMessage(payload),
 		BaseRevision:  &baseRevision,
 	}
 }
