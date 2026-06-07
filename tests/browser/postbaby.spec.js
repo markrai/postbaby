@@ -8681,6 +8681,173 @@ test.describe('Mocked sync startup reconciliation', () => {
     expect(debugState.deltaMetadataLastError).not.toBe('');
   });
 
+  test('delta capability probe unauthorized failure stays probe-local and keeps snapshot sync usable', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Delta Unauthorized Note', { syncVersion: 6 });
+    const dialogs = [];
+    let capturedSaveBody = null;
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Delta Unauthorized Note', 6),
+      onDelta: async () => ({
+        status: 401,
+        body: {
+          ok: false,
+          error: {
+            code: 'auth_required',
+            message: 'login required for delta'
+          }
+        }
+      }),
+      onSave: async (body) => {
+        capturedSaveBody = body;
+        return {
+          status: 200,
+          body: { ok: true, version: 7, updatedAt: TIMESTAMP }
+        };
+      }
+    });
+    attachDialogHandler(page, [], dialogs);
+
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Delta Unauthorized Note');
+    await expect.poll(async () => {
+      const state = await page.evaluate(() => window.postbabyDebugSync());
+      return state.isBackgroundSyncActive === true;
+    }).toBe(true);
+
+    await setCamera(page, { x: 160, y: 90, zoom: 1.25 });
+    const tabsBefore = await readTabsSnapshot(page);
+    const outboxBefore = await readMutationOutbox(page);
+    const cameraBefore = await readCamera(page);
+
+    await expect.poll(async () => {
+      const state = await page.evaluate(() => window.postbabyDebugSync());
+      return state.deltaMetadataLastError;
+    }).toBe('unauthorized');
+
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    const tabsAfterProbe = await readTabsSnapshot(page);
+    const outboxAfterProbe = await readMutationOutbox(page);
+    const cameraAfterProbe = await readCamera(page);
+
+    expect(page.url()).not.toContain('/login');
+    expect(dialogs).toEqual([]);
+    expect(debugState.syncState).toBe('synced');
+    expect(debugState.runtimeConfig.isAuthenticated).toBe(true);
+    expect(debugState.runtimeConfig.syncUsable).toBe(true);
+    expect(debugState.isSyncAwaitingAuthentication).toBe(false);
+    expect(debugState.isSyncBlockedByEntitlement).toBe(false);
+    expect(debugState.isBackgroundSyncActive).toBe(true);
+    expect(debugState.deltaMetadataAvailable).toBe(false);
+    expect(debugState.deltaMetadataUnavailableForSession).toBe(true);
+    expect(debugState.deltaMetadataLastReason).toBe('auth_required');
+    expect(debugState.deltaMetadataLastError).toBe('unauthorized');
+    expect(tabsAfterProbe).toEqual(tabsBefore);
+    expect(outboxAfterProbe).toEqual(outboxBefore);
+    expect(cameraAfterProbe).toEqual(cameraBefore);
+
+    await page.locator('#syncStatusButton').click();
+    await page.locator('#syncNowButton').click();
+    await expect.poll(() => capturedSaveBody !== null).toBe(true);
+    await expect.poll(async () => {
+      const state = await page.evaluate(() => window.postbabyDebugSync());
+      return state.syncStoredVersion;
+    }).toBe(7);
+
+    const debugStateAfterManualSync = await page.evaluate(() => window.postbabyDebugSync());
+    expect(page.url()).not.toContain('/login');
+    expect(capturedSaveBody.baseServerRevision).toBe(6);
+    expect(debugStateAfterManualSync.runtimeConfig.syncUsable).toBe(true);
+    expect(debugStateAfterManualSync.syncState).toBe('synced');
+  });
+
+  test('delta capability probe entitlement failure stays probe-local and keeps snapshot sync usable', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshot('Delta Entitlement Note', { syncVersion: 6 });
+    const dialogs = [];
+    let capturedSaveBody = null;
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerPayload('Delta Entitlement Note', 6),
+      onDelta: async () => ({
+        status: 403,
+        body: {
+          ok: false,
+          error: {
+            code: 'entitlement_required',
+            message: 'delta entitlement unavailable'
+          }
+        }
+      }),
+      onSave: async (body) => {
+        capturedSaveBody = body;
+        return {
+          status: 200,
+          body: { ok: true, version: 7, updatedAt: TIMESTAMP }
+        };
+      }
+    });
+    attachDialogHandler(page, [], dialogs);
+
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Delta Entitlement Note');
+    await expect.poll(async () => {
+      const state = await page.evaluate(() => window.postbabyDebugSync());
+      return state.isBackgroundSyncActive === true;
+    }).toBe(true);
+
+    await setCamera(page, { x: 200, y: 120, zoom: 1.4 });
+    const tabsBefore = await readTabsSnapshot(page);
+    const outboxBefore = await readMutationOutbox(page);
+    const cameraBefore = await readCamera(page);
+
+    await expect.poll(async () => {
+      const state = await page.evaluate(() => window.postbabyDebugSync());
+      return state.deltaMetadataLastError;
+    }).toBe('entitlement_required');
+
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    const tabsAfterProbe = await readTabsSnapshot(page);
+    const outboxAfterProbe = await readMutationOutbox(page);
+    const cameraAfterProbe = await readCamera(page);
+
+    expect(page.url()).not.toContain('/login');
+    expect(dialogs).toEqual([]);
+    expect(debugState.syncState).toBe('synced');
+    expect(debugState.runtimeConfig.isAuthenticated).toBe(true);
+    expect(debugState.runtimeConfig.syncUsable).toBe(true);
+    expect(debugState.isSyncAwaitingAuthentication).toBe(false);
+    expect(debugState.isSyncBlockedByEntitlement).toBe(false);
+    expect(debugState.isBackgroundSyncActive).toBe(true);
+    expect(debugState.deltaMetadataAvailable).toBe(false);
+    expect(debugState.deltaMetadataUnavailableForSession).toBe(true);
+    expect(debugState.deltaMetadataLastReason).toBe('entitlement_required');
+    expect(debugState.deltaMetadataLastError).toBe('entitlement_required');
+    expect(tabsAfterProbe).toEqual(tabsBefore);
+    expect(outboxAfterProbe).toEqual(outboxBefore);
+    expect(cameraAfterProbe).toEqual(cameraBefore);
+
+    await page.locator('#syncStatusButton').click();
+    await page.locator('#syncNowButton').click();
+    await expect.poll(() => capturedSaveBody !== null).toBe(true);
+    await expect.poll(async () => {
+      const state = await page.evaluate(() => window.postbabyDebugSync());
+      return state.syncStoredVersion;
+    }).toBe(7);
+
+    const debugStateAfterManualSync = await page.evaluate(() => window.postbabyDebugSync());
+    expect(capturedSaveBody.baseServerRevision).toBe(6);
+    expect(debugStateAfterManualSync.runtimeConfig.syncUsable).toBe(true);
+    expect(debugStateAfterManualSync.syncState).toBe('synced');
+  });
+
   test('repairs durable pending upload after reload when server revision is unchanged', async ({ page }) => {
     const localSnapshot = addDurableCloudSyncMetadata(
       buildLocalSnapshot('Quick Close Repair Note', { syncVersion: 6 }),
