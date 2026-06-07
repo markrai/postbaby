@@ -946,6 +946,9 @@ func replayCreateEdge(tabs []replayTab, receipt SyncMutationReceipt, result *Syn
 		recordReplayWarning(result, receipt, replayWarningSkippedMissingEP, "dry-run replay skipped create-edge because an endpoint is missing")
 		return false
 	}
+	if findReplayEdgeByEndpoints(tab, fromItemID, toItemID) != nil {
+		return false
+	}
 
 	tab.Edges = append(tab.Edges, replayEdge{
 		ID:         entityID,
@@ -1045,6 +1048,16 @@ func findReplayEdgeAcrossTabs(tabs []replayTab, edgeID string) *replayEdge {
 			if tabs[index].Edges[edgeIndex].ID == edgeID {
 				return &tabs[index].Edges[edgeIndex]
 			}
+		}
+	}
+	return nil
+}
+
+func findReplayEdgeByEndpoints(tab *replayTab, fromItemID, toItemID string) *replayEdge {
+	for index := range tab.Edges {
+		edge := &tab.Edges[index]
+		if (edge.FromItemID == fromItemID && edge.ToItemID == toItemID) || (edge.FromItemID == toItemID && edge.ToItemID == fromItemID) {
+			return edge
 		}
 	}
 	return nil

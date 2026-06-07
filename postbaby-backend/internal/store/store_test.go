@@ -1064,6 +1064,216 @@ func TestReplaySyncMutationReceiptsDryRunPreviewNotPersistedAndStableAcrossCalls
 	}
 }
 
+func TestReplaySyncMutationReceiptsDryRunMalformedLegacySnapshotIsStable(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	before := seedReplayDocumentBody(t, docStore, "owner", "postbaby-web", buildReplayRawSnapshotBody(t, `[
+		{"id":"tab-empty","name":"Empty"},
+		{"id":"tab-legacy","name":"Legacy","items":[
+			{"id":"item-no-position","name":"NoPos","color":"yellow"},
+			{"id":"item-bad-position","name":"BadPos","color":"blue","position":{"top":"bad","left":"oops"},"shape":"mystery"},
+			{"id":"dup-item","name":"FirstDup","color":"green","position":{"top":"0px","left":"0px"}},
+			{"id":"dup-item","name":"SecondDup","color":"purple","position":{"top":"10px","left":"10px"}}
+		],"edges":[
+			{"id":"edge-missing-from","toItemId":"item-bad-position","kind":"line"},
+			{"id":"edge-missing-to","fromItemId":"item-bad-position","kind":"line"},
+			{"id":"edge-missing-node","fromItemId":"item-bad-position","toItemId":"missing","kind":"arrow"},
+			{"id":"edge-self","fromItemId":"item-bad-position","toItemId":"item-bad-position","kind":"line"},
+			{"id":"dup-edge","fromItemId":"dup-item","toItemId":"item-bad-position","kind":"line"},
+			{"id":"dup-edge","fromItemId":"item-bad-position","toItemId":"dup-item","kind":"arrow"}
+		]}
+	]`))
+
+	firstResult, err := docStore.ReplaySyncMutationReceiptsDryRun(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("first dry-run replay: %v", err)
+	}
+	secondResult, err := docStore.ReplaySyncMutationReceiptsDryRun(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("second dry-run replay: %v", err)
+	}
+	if firstResult.ConsideredCount != 0 || firstResult.AppliedCount != 0 || firstResult.SkippedCount != 0 || firstResult.WarningCount != 0 {
+		t.Fatalf("unexpected dry-run counts for malformed legacy snapshot: %+v", firstResult)
+	}
+	if string(firstResult.PreviewBody) != string(secondResult.PreviewBody) {
+		t.Fatalf("expected malformed legacy replay preview to stay stable, first=%s second=%s", firstResult.PreviewBody, secondResult.PreviewBody)
+	}
+
+	tabs := extractReplayPreviewTabs(t, firstResult.PreviewBody)
+	emptyTab := findReplayTab(tabs, "tab-empty")
+	if emptyTab == nil {
+		t.Fatal("expected empty legacy tab")
+	}
+	if len(emptyTab.Items) != 0 || len(emptyTab.Edges) != 0 {
+		t.Fatalf("expected missing collections to normalize to empty arrays, got items=%d edges=%d", len(emptyTab.Items), len(emptyTab.Edges))
+	}
+
+	legacyTab := findReplayTab(tabs, "tab-legacy")
+	if legacyTab == nil {
+		t.Fatal("expected legacy tab")
+	}
+	if len(legacyTab.Items) != 4 {
+		t.Fatalf("expected four legacy items, got %+v", legacyTab.Items)
+	}
+	if len(legacyTab.Edges) != 6 {
+		t.Fatalf("expected six legacy edges, got %+v", legacyTab.Edges)
+	}
+
+	itemNoPosition := findReplayItem(legacyTab, "item-no-position")
+	if itemNoPosition == nil {
+		t.Fatal("expected item with missing position to load")
+	}
+	if itemNoPosition.Position.Top != "" || itemNoPosition.Position.Left != "" {
+		t.Fatalf("expected missing position to decode to empty strings, got %+v", itemNoPosition.Position)
+	}
+
+	itemBadPosition := findReplayItem(legacyTab, "item-bad-position")
+	if itemBadPosition == nil {
+		t.Fatal("expected item with malformed position to load")
+	}
+	if itemBadPosition.Position.Top != "bad" || itemBadPosition.Position.Left != "oops" {
+		t.Fatalf("expected malformed position to remain untouched, got %+v", itemBadPosition.Position)
+	}
+	if itemBadPosition.Shape != "mystery" {
+		t.Fatalf("expected unknown legacy shape to remain untouched, got %+v", itemBadPosition)
+	}
+
+	if countReplayItemsByID(legacyTab, "dup-item") != 2 {
+		t.Fatalf("expected duplicate item ids to remain loaded, got %+v", legacyTab.Items)
+	}
+	if countReplayEdgesByID(legacyTab, "dup-edge") != 2 {
+		t.Fatalf("expected duplicate edge ids to remain loaded, got %+v", legacyTab.Edges)
+	}
+
+	after, err := docStore.GetDocument(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("load document after malformed legacy replay: %v", err)
+	}
+	if after.Version != before.Version {
+		t.Fatalf("expected malformed legacy replay to preserve version %d, got %d", before.Version, after.Version)
+	}
+	if string(after.Body) != string(before.Body) {
+		t.Fatalf("expected malformed legacy replay to preserve canonical body, before=%s after=%s", before.Body, after.Body)
+	}
+}
+
+func TestReplaySyncMutationReceiptsDryRunMalformedLegacyDuplicateIDsUseFirstMatch(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocumentBody(t, docStore, "owner", "postbaby-web", buildReplayRawSnapshotBody(t, `[
+		{"id":"tab-1","name":"Main","items":[
+			{"id":"dup-item","name":"FirstDup","color":"green","position":{"top":"0px","left":"0px"}},
+			{"id":"dup-item","name":"SecondDup","color":"purple","position":{"top":"10px","left":"10px"}},
+			{"id":"anchor","name":"Anchor","color":"blue","position":{"top":"20px","left":"20px"}}
+		],"edges":[
+			{"id":"dup-edge","fromItemId":"dup-item","toItemId":"anchor","kind":"line"},
+			{"id":"dup-edge","fromItemId":"anchor","toItemId":"dup-item","kind":"arrow"}
+		]}
+	]`))
+
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-update-dup-item", "Node", "dup-item", "UpdateNode", `{"tabId":"tab-1","changes":{"color":"red"}}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:01Z", "2026-06-01T12:00:01Z",
+		buildReplayReceiptInput("mut-delete-dup-edge", "Edge", "dup-edge", "DeleteEdge", `{"tabId":"tab-1"}`),
+	)
+
+	result, err := docStore.ReplaySyncMutationReceiptsDryRun(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("dry-run replay: %v", err)
+	}
+	if result.AppliedCount != 2 || result.SkippedCount != 0 || result.WarningCount != 0 {
+		t.Fatalf("unexpected dry-run counts: %+v", result)
+	}
+
+	tabs := extractReplayPreviewTabs(t, result.PreviewBody)
+	tab := findReplayTab(tabs, "tab-1")
+	if tab == nil {
+		t.Fatal("expected preview tab")
+	}
+	if countReplayItemsByID(tab, "dup-item") != 2 {
+		t.Fatalf("expected duplicate item ids to remain, got %+v", tab.Items)
+	}
+	if tab.Items[0].ID != "dup-item" || tab.Items[0].Color != "red" {
+		t.Fatalf("expected first duplicate item to be updated, got %+v", tab.Items[0])
+	}
+	if tab.Items[1].ID != "dup-item" || tab.Items[1].Color != "purple" {
+		t.Fatalf("expected second duplicate item to remain unchanged, got %+v", tab.Items[1])
+	}
+	if countReplayEdgesByID(tab, "dup-edge") != 1 {
+		t.Fatalf("expected one duplicate edge id to remain after first-match delete, got %+v", tab.Edges)
+	}
+	if tab.Edges[0].ID != "dup-edge" || tab.Edges[0].FromItemID != "anchor" || tab.Edges[0].ToItemID != "dup-item" || tab.Edges[0].Kind != "arrow" {
+		t.Fatalf("expected second duplicate edge to remain after first-match delete, got %+v", tab.Edges[0])
+	}
+}
+
+func TestReplaySyncMutationReceiptsDryRunCreateEdgeDuplicateEndpointSemantics(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:   "tab-1",
+			Name: "Main",
+			Items: []replayItem{
+				{ID: "item-1", Name: "First", Color: "yellow", Position: replayPosition{Top: "0px", Left: "0px"}},
+				{ID: "item-2", Name: "Second", Color: "blue", Position: replayPosition{Top: "10px", Left: "10px"}},
+				{ID: "item-3", Name: "Third", Color: "green", Position: replayPosition{Top: "20px", Left: "20px"}},
+			},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges: []replayEdge{
+				{ID: "edge-1", FromItemID: "item-1", ToItemID: "item-2", Kind: "line"},
+			},
+		},
+	})
+
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-same-endpoints", "Edge", "edge-2", "CreateEdge", `{"tabId":"tab-1","fromItemId":"item-1","toItemId":"item-2","kind":"line"}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:01Z", "2026-06-01T12:00:01Z",
+		buildReplayReceiptInput("mut-reversed-endpoints", "Edge", "edge-3", "CreateEdge", `{"tabId":"tab-1","fromItemId":"item-2","toItemId":"item-1","kind":"line"}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:02Z", "2026-06-01T12:00:02Z",
+		buildReplayReceiptInput("mut-different-kind", "Edge", "edge-4", "CreateEdge", `{"tabId":"tab-1","fromItemId":"item-1","toItemId":"item-2","kind":"arrow"}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:03Z", "2026-06-01T12:00:03Z",
+		buildReplayReceiptInput("mut-duplicate-id", "Edge", "edge-1", "CreateEdge", `{"tabId":"tab-1","fromItemId":"item-1","toItemId":"item-3","kind":"line"}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:04Z", "2026-06-01T12:00:04Z",
+		buildReplayReceiptInput("mut-unique-edge", "Edge", "edge-5", "CreateEdge", `{"tabId":"tab-1","fromItemId":"item-1","toItemId":"item-3","kind":"arrow"}`),
+	)
+
+	result, err := docStore.ReplaySyncMutationReceiptsDryRun(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("dry-run replay: %v", err)
+	}
+	if result.AppliedCount != 1 || result.SkippedCount != 4 || result.WarningCount != 0 {
+		t.Fatalf("unexpected dry-run counts: %+v", result)
+	}
+
+	tabs := extractReplayPreviewTabs(t, result.PreviewBody)
+	tab := findReplayTab(tabs, "tab-1")
+	if tab == nil {
+		t.Fatal("expected preview tab")
+	}
+	if len(tab.Edges) != 2 {
+		t.Fatalf("expected original edge plus one unique new edge, got %+v", tab.Edges)
+	}
+	if tab.Edges[0].ID != "edge-1" || tab.Edges[0].FromItemID != "item-1" || tab.Edges[0].ToItemID != "item-2" || tab.Edges[0].Kind != "line" {
+		t.Fatalf("expected original edge to remain untouched, got %+v", tab.Edges[0])
+	}
+	if tab.Edges[1].ID != "edge-5" || tab.Edges[1].FromItemID != "item-1" || tab.Edges[1].ToItemID != "item-3" || tab.Edges[1].Kind != "arrow" {
+		t.Fatalf("expected only unique endpoint pair edge to be added, got %+v", tab.Edges[1])
+	}
+}
+
 func TestCreateInitialUserAndLookup(t *testing.T) {
 	t.Parallel()
 
@@ -1538,6 +1748,16 @@ func buildReplayReceiptInput(mutationID, entityType, entityID, operationType, pa
 	}
 }
 
+func seedReplayDocumentBody(t *testing.T, docStore *Store, ownerKey, appID string, body json.RawMessage) Document {
+	t.Helper()
+
+	doc, err := docStore.PutDocument(context.Background(), ownerKey, appID, body, nil)
+	if err != nil {
+		t.Fatalf("seed replay document body: %v", err)
+	}
+	return doc
+}
+
 func seedReplayDocument(t *testing.T, docStore *Store, ownerKey, appID string, tabs []replayTab) Document {
 	t.Helper()
 
@@ -1562,6 +1782,19 @@ func buildReplaySnapshotBody(t *testing.T, tabs []replayTab) json.RawMessage {
 	})
 	if err != nil {
 		t.Fatalf("marshal replay snapshot body: %v", err)
+	}
+	return json.RawMessage(body)
+}
+
+func buildReplayRawSnapshotBody(t *testing.T, tabsJSON string) json.RawMessage {
+	t.Helper()
+
+	body, err := json.Marshal(map[string]string{
+		"tabs":        tabsJSON,
+		"activeTabId": "tab-1",
+	})
+	if err != nil {
+		t.Fatalf("marshal raw replay snapshot body: %v", err)
 	}
 	return json.RawMessage(body)
 }
@@ -1625,6 +1858,26 @@ func insertAcceptedReplayReceipt(t *testing.T, docStore *Store, ownerKey, appID,
 	if err != nil {
 		t.Fatalf("insert accepted replay receipt: %v", err)
 	}
+}
+
+func countReplayItemsByID(tab *replayTab, itemID string) int {
+	count := 0
+	for _, item := range tab.Items {
+		if item.ID == itemID {
+			count++
+		}
+	}
+	return count
+}
+
+func countReplayEdgesByID(tab *replayTab, edgeID string) int {
+	count := 0
+	for _, edge := range tab.Edges {
+		if edge.ID == edgeID {
+			count++
+		}
+	}
+	return count
 }
 
 func assertReplayWarningCodes(t *testing.T, warnings []SyncMutationDryRunWarning, expectedCodes []string) {
