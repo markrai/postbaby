@@ -145,6 +145,37 @@ type SyncMutationReplayDryRunObservation struct {
 	CreatedAt                        time.Time
 }
 
+type SyncMutationReplayApplicationInput struct {
+	MutationID                     string
+	ApplicationStatus              string
+	ApplicationReason              string
+	CanonicalDocumentVersionBefore int64
+	CanonicalDocumentHashBefore    string
+	CanonicalDocumentVersionAfter  *int64
+	CanonicalDocumentHashAfter     *string
+	ReplayObservationID            *int64
+}
+
+type SyncMutationReplayApplication struct {
+	ID                             int64
+	OwnerKey                       string
+	AppID                          string
+	MutationID                     string
+	ApplicationStatus              string
+	ApplicationReason              string
+	CanonicalDocumentVersionBefore int64
+	CanonicalDocumentHashBefore    string
+	CanonicalDocumentVersionAfter  *int64
+	CanonicalDocumentHashAfter     *string
+	ReplayObservationID            *int64
+	CreatedAt                      time.Time
+}
+
+type SyncMutationReplayApplicationResult struct {
+	Application SyncMutationReplayApplication
+	Duplicate   bool
+}
+
 type SyncMutationReplayAuthoritativeReadiness struct {
 	Ready    bool
 	Areas    []SyncMutationReplayAuthoritativeAreaReadiness
@@ -215,7 +246,18 @@ const (
 	replayAuthoritativePolicyStatusConflict        = "conflict"
 	replayAuthoritativePolicyStatusBlocked         = "blocked"
 	replayAuthoritativePolicyStatusFatal           = "fatal"
+	SyncMutationReplayApplicationStatusApplied     = "authoritativeApplied"
+	SyncMutationReplayApplicationStatusSkipped     = "authoritativeSkipped"
+	SyncMutationReplayApplicationStatusConflict    = "authoritativeConflict"
+	SyncMutationReplayApplicationStatusFailed      = "authoritativeFailed"
 )
+
+var syncMutationReplayApplicationStatusSet = map[string]struct{}{
+	SyncMutationReplayApplicationStatusApplied:  {},
+	SyncMutationReplayApplicationStatusSkipped:  {},
+	SyncMutationReplayApplicationStatusConflict: {},
+	SyncMutationReplayApplicationStatusFailed:   {},
+}
 
 func Open(dbPath string) (*Store, error) {
 	openStarted := time.Now()
@@ -583,6 +625,227 @@ func (s *Store) CountSyncMutationReceipts(ctx context.Context, ownerKey, appID s
 	return count, nil
 }
 
+func MapSyncMutationReplayPolicyStatusToApplicationStatus(policyStatus string) (string, bool) {
+	switch strings.TrimSpace(policyStatus) {
+	case replayAuthoritativePolicyStatusAllowed:
+		return SyncMutationReplayApplicationStatusApplied, true
+	case replayAuthoritativePolicyStatusSkip:
+		return SyncMutationReplayApplicationStatusSkipped, true
+	case replayAuthoritativePolicyStatusConflict:
+		return SyncMutationReplayApplicationStatusConflict, true
+	case replayAuthoritativePolicyStatusFatal:
+		return SyncMutationReplayApplicationStatusFailed, true
+	default:
+		return "", false
+	}
+}
+
+func (s *Store) RecordSyncMutationReplayApplicationInert(ctx context.Context, ownerKey, appID string, input SyncMutationReplayApplicationInput) (SyncMutationReplayApplicationResult, error) {
+	started := time.Now()
+	ctx, cancel := withDBTimeout(ctx)
+	defer cancel()
+
+	mutationID := strings.TrimSpace(input.MutationID)
+	applicationStatus := strings.TrimSpace(input.ApplicationStatus)
+	applicationReason := strings.TrimSpace(input.ApplicationReason)
+	if mutationID == "" {
+		return SyncMutationReplayApplicationResult{}, fmt.Errorf("record sync mutation replay application inert: mutation id is required")
+	}
+	if applicationReason == "" {
+		return SyncMutationReplayApplicationResult{}, fmt.Errorf("record sync mutation replay application inert: application reason is required")
+	}
+	if _, ok := syncMutationReplayApplicationStatusSet[applicationStatus]; !ok {
+		return SyncMutationReplayApplicationResult{}, fmt.Errorf("record sync mutation replay application inert: application status %q is invalid", applicationStatus)
+	}
+	if strings.TrimSpace(input.CanonicalDocumentHashBefore) == "" {
+		return SyncMutationReplayApplicationResult{}, fmt.Errorf("record sync mutation replay application inert: canonical document hash before is required")
+	}
+	if input.CanonicalDocumentHashAfter != nil && strings.TrimSpace(*input.CanonicalDocumentHashAfter) == "" {
+		return SyncMutationReplayApplicationResult{}, fmt.Errorf("record sync mutation replay application inert: canonical document hash after must be non-empty when provided")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return SyncMutationReplayApplicationResult{}, s.wrapDBError("write_begin_sync_mutation_replay_application_inert", started, fmt.Errorf("begin sync mutation replay application inert transaction: %w", err))
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var receiptID int64
+	if err := tx.QueryRowContext(
+		ctx,
+		`SELECT id
+		FROM sync_mutation_receipts
+		WHERE owner_key = ? AND app_id = ? AND mutation_id = ? AND status = ?
+		LIMIT 1`,
+		ownerKey,
+		appID,
+		mutationID,
+		SyncMutationReceiptStatusAccepted,
+	).Scan(&receiptID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return SyncMutationReplayApplicationResult{}, fmt.Errorf("record sync mutation replay application inert: accepted receipt %q not found", mutationID)
+		}
+		return SyncMutationReplayApplicationResult{}, s.wrapDBError("read_sync_mutation_replay_application_receipt", started, fmt.Errorf("load accepted receipt for inert replay application: %w", err))
+	}
+
+	if input.ReplayObservationID != nil {
+		var observationID int64
+		if err := tx.QueryRowContext(
+			ctx,
+			`SELECT id
+			FROM sync_mutation_replay_dry_run_observations
+			WHERE id = ? AND owner_key = ? AND app_id = ?
+			LIMIT 1`,
+			*input.ReplayObservationID,
+			ownerKey,
+			appID,
+		).Scan(&observationID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return SyncMutationReplayApplicationResult{}, fmt.Errorf("record sync mutation replay application inert: replay observation %d not found for owner/app", *input.ReplayObservationID)
+			}
+			return SyncMutationReplayApplicationResult{}, s.wrapDBError("read_sync_mutation_replay_application_observation", started, fmt.Errorf("load replay observation for inert replay application: %w", err))
+		}
+	}
+
+	createdAt := time.Now().UTC().Format(time.RFC3339)
+	var versionAfterValue any
+	var hashAfterValue any
+	var replayObservationValue any
+	if input.CanonicalDocumentVersionAfter != nil {
+		versionAfterValue = *input.CanonicalDocumentVersionAfter
+	}
+	if input.CanonicalDocumentHashAfter != nil {
+		hashAfterValue = strings.TrimSpace(*input.CanonicalDocumentHashAfter)
+	}
+	if input.ReplayObservationID != nil {
+		replayObservationValue = *input.ReplayObservationID
+	}
+
+	insertResult, err := tx.ExecContext(
+		ctx,
+		`INSERT OR IGNORE INTO sync_mutation_replay_applications (
+			owner_key,
+			app_id,
+			mutation_id,
+			application_status,
+			application_reason,
+			canonical_document_version_before,
+			canonical_document_hash_before,
+			canonical_document_version_after,
+			canonical_document_hash_after,
+			replay_observation_id,
+			created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		ownerKey,
+		appID,
+		mutationID,
+		applicationStatus,
+		applicationReason,
+		input.CanonicalDocumentVersionBefore,
+		strings.TrimSpace(input.CanonicalDocumentHashBefore),
+		versionAfterValue,
+		hashAfterValue,
+		replayObservationValue,
+		createdAt,
+	)
+	if err != nil {
+		return SyncMutationReplayApplicationResult{}, s.wrapDBError("write_insert_sync_mutation_replay_application_inert", started, fmt.Errorf("insert sync mutation replay application inert row: %w", err))
+	}
+
+	rowsAffected, err := insertResult.RowsAffected()
+	if err != nil {
+		return SyncMutationReplayApplicationResult{}, s.wrapDBError("write_sync_mutation_replay_application_inert_rows_affected", started, fmt.Errorf("read inert replay application rows affected: %w", err))
+	}
+
+	application, err := scanSyncMutationReplayApplication(tx.QueryRowContext(
+		ctx,
+		`SELECT
+			id,
+			owner_key,
+			app_id,
+			mutation_id,
+			application_status,
+			application_reason,
+			canonical_document_version_before,
+			canonical_document_hash_before,
+			canonical_document_version_after,
+			canonical_document_hash_after,
+			replay_observation_id,
+			created_at
+		FROM sync_mutation_replay_applications
+		WHERE owner_key = ? AND app_id = ? AND mutation_id = ?`,
+		ownerKey,
+		appID,
+		mutationID,
+	))
+	if err != nil {
+		return SyncMutationReplayApplicationResult{}, s.wrapDBError("read_sync_mutation_replay_application_inert", started, fmt.Errorf("load inert replay application row: %w", err))
+	}
+
+	if err := tx.Commit(); err != nil {
+		return SyncMutationReplayApplicationResult{}, s.wrapDBError("write_commit_sync_mutation_replay_application_inert", started, fmt.Errorf("commit inert replay application row: %w", err))
+	}
+	committed = true
+	s.logDBOperation("write_record_sync_mutation_replay_application_inert", started, nil)
+
+	return SyncMutationReplayApplicationResult{
+		Application: application,
+		Duplicate:   rowsAffected == 0,
+	}, nil
+}
+
+func (s *Store) ListSyncMutationReplayApplications(ctx context.Context, ownerKey, appID string) ([]SyncMutationReplayApplication, error) {
+	started := time.Now()
+	ctx, cancel := withDBTimeout(ctx)
+	defer cancel()
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT
+			id,
+			owner_key,
+			app_id,
+			mutation_id,
+			application_status,
+			application_reason,
+			canonical_document_version_before,
+			canonical_document_hash_before,
+			canonical_document_version_after,
+			canonical_document_hash_after,
+			replay_observation_id,
+			created_at
+		FROM sync_mutation_replay_applications
+		WHERE owner_key = ? AND app_id = ?
+		ORDER BY created_at ASC, id ASC`,
+		ownerKey,
+		appID,
+	)
+	if err != nil {
+		return nil, s.wrapDBError("read_list_sync_mutation_replay_applications", started, fmt.Errorf("list sync mutation replay applications: %w", err))
+	}
+	defer rows.Close()
+
+	applications := make([]SyncMutationReplayApplication, 0)
+	for rows.Next() {
+		application, scanErr := scanSyncMutationReplayApplication(rows)
+		if scanErr != nil {
+			return nil, s.wrapDBError("read_list_sync_mutation_replay_applications_scan", started, scanErr)
+		}
+		applications = append(applications, application)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, s.wrapDBError("read_list_sync_mutation_replay_applications_rows", started, fmt.Errorf("iterate sync mutation replay applications: %w", err))
+	}
+
+	s.logDBOperation("read_list_sync_mutation_replay_applications", started, nil)
+	return applications, nil
+}
+
 func (s *Store) ReplaySyncMutationReceiptsDryRun(ctx context.Context, ownerKey, appID string) (SyncMutationDryRunResult, error) {
 	doc, receipts, err := s.loadSyncMutationReplayDryRunInputs(ctx, ownerKey, appID)
 	if err != nil {
@@ -805,11 +1068,11 @@ func EvaluateSyncMutationReplayAuthoritativeReadiness(observation SyncMutationRe
 	appendReplayAuthoritativeArea(&readiness, "replay_ordering", replayAuthoritativeStatusPartiallyReady, "Deterministic ordering exists by accepted_at, created_at, and mutation_id, but it is not a full causal merge model.")
 	appendReplayAuthoritativeArea(&readiness, "transaction_boundary", replayAuthoritativeStatusBlocked, "There is no atomic transaction that would validate, apply, persist, and track receipt application together.")
 	appendReplayAuthoritativeArea(&readiness, "canonical_snapshot_observation", replayAuthoritativeStatusPartiallyReady, "Dry-run observations capture version and hash, but they are observational only and do not gate canonical writes.")
-	appendReplayAuthoritativeArea(&readiness, "receipt_status_model", replayAuthoritativeStatusBlocked, "Receipts have accepted status only. There is no separate authoritative applied, skipped, or rolled-back state.")
+	appendReplayAuthoritativeArea(&readiness, "receipt_status_model", replayAuthoritativeStatusPartiallyReady, "Applied-receipt tracking now has separate inert authoritative application statuses, but live compare-and-apply wiring does not exist yet.")
 	appendReplayAuthoritativeArea(&readiness, "replay_progress_state", replayAuthoritativeStatusBlocked, "Dry-run observation markers are not authoritative replay checkpoints.")
 	appendReplayAuthoritativeArea(&readiness, "rollback_behavior", replayAuthoritativeStatusBlocked, "Failure recovery for a future canonical replay transaction is not yet defined.")
 	appendReplayAuthoritativeArea(&readiness, "idempotency", replayAuthoritativeStatusPartiallyReady, "Receipt acceptance is idempotent, but authoritative application idempotency is not implemented.")
-	appendReplayAuthoritativeArea(&readiness, "conflict_behavior", replayAuthoritativeStatusBlocked, "The server does not yet define how to abort or retry when the canonical snapshot or accepted receipt set changes after observation.")
+	appendReplayAuthoritativeArea(&readiness, "conflict_behavior", replayAuthoritativeStatusPartiallyReady, "Conflict application statuses now exist in inert tracking, but compare-and-apply conflict handling is not implemented.")
 	appendReplayAuthoritativeArea(&readiness, "malformed_legacy_snapshot_policy", replayAuthoritativeStatusPartiallyReady, "Policy is defined to preserve unrelated malformed legacy data during replay admission, but no canonical write path applies that policy yet.")
 	appendReplayAuthoritativeArea(&readiness, "duplicate_item_id_policy", replayAuthoritativeStatusPartiallyReady, "Policy is defined to block authoritative replay when the snapshot contains duplicate item ids.")
 	appendReplayAuthoritativeArea(&readiness, "duplicate_edge_id_policy", replayAuthoritativeStatusPartiallyReady, "Policy is defined to block authoritative replay when the snapshot contains duplicate edge ids.")
@@ -825,7 +1088,7 @@ func EvaluateSyncMutationReplayAuthoritativeReadiness(observation SyncMutationRe
 	appendReplayAuthoritativeArea(&readiness, "unknown_fields", replayAuthoritativeStatusPartiallyReady, "Policy is defined to skip unknown update fields deterministically.")
 	appendReplayAuthoritativeArea(&readiness, "unknown_operations", replayAuthoritativeStatusPartiallyReady, "Receipt acceptance already rejects unsupported operations, and policy evaluation treats unknown operations as fatal.")
 	appendReplayAuthoritativeArea(&readiness, "server_side_validation_requirements", replayAuthoritativeStatusPartiallyReady, "Pure validation policy evaluation now exists, but it is not yet wired into a compare-and-apply transaction.")
-	appendReplayAuthoritativeArea(&readiness, "applied_receipt_tracking", replayAuthoritativeStatusBlocked, "There is no authoritative applied-receipt tracking separate from dry-run observations.")
+	appendReplayAuthoritativeArea(&readiness, "applied_receipt_tracking", replayAuthoritativeStatusPartiallyReady, "Separate inert applied-receipt tracking infrastructure now exists, but it is not wired into live replay.")
 	appendReplayAuthoritativeArea(&readiness, "delta_pull", replayAuthoritativeStatusIntentionallyDeferred, "Revisioned delta pull remains out of scope until authoritative replay and applied-state tracking exist.")
 
 	addReplayAuthoritativeBlockerIf(&readiness, currentDoc.Version != observation.CanonicalDocumentVersionObserved, "canonical_snapshot_changed_since_observation")
@@ -1997,6 +2260,28 @@ func (s *Store) init(ctx context.Context) error {
 
 	_, err = s.db.ExecContext(
 		ctx,
+		`CREATE TABLE IF NOT EXISTS sync_mutation_replay_applications (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			owner_key TEXT NOT NULL,
+			app_id TEXT NOT NULL,
+			mutation_id TEXT NOT NULL,
+			application_status TEXT NOT NULL,
+			application_reason TEXT NOT NULL,
+			canonical_document_version_before INTEGER NOT NULL,
+			canonical_document_hash_before TEXT NOT NULL,
+			canonical_document_version_after INTEGER,
+			canonical_document_hash_after TEXT,
+			replay_observation_id INTEGER,
+			created_at TEXT NOT NULL,
+			UNIQUE(owner_key, app_id, mutation_id)
+		)`,
+	)
+	if err != nil {
+		return s.wrapDBError("db_init_create_sync_mutation_replay_applications", started, fmt.Errorf("create sync_mutation_replay_applications table: %w", err))
+	}
+
+	_, err = s.db.ExecContext(
+		ctx,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
 	)
 	if err != nil {
@@ -2041,6 +2326,14 @@ func (s *Store) init(ctx context.Context) error {
 	)
 	if err != nil {
 		return s.wrapDBError("db_init_create_sync_mutation_replay_dry_run_observations_owner_app_created_idx", started, fmt.Errorf("create sync_mutation_replay_dry_run_observations owner/app/created_at index: %w", err))
+	}
+
+	_, err = s.db.ExecContext(
+		ctx,
+		`CREATE INDEX IF NOT EXISTS idx_sync_mutation_replay_applications_owner_app_created_at ON sync_mutation_replay_applications(owner_key, app_id, created_at)`,
+	)
+	if err != nil {
+		return s.wrapDBError("db_init_create_sync_mutation_replay_applications_owner_app_created_idx", started, fmt.Errorf("create sync_mutation_replay_applications owner/app/created_at index: %w", err))
 	}
 
 	s.logDBOperation("db_init_create_schema", started, nil)
@@ -2140,6 +2433,50 @@ func scanSyncMutationReceipt(row interface {
 	receipt.CreatedAt = mustParseTimestamp(createdAt)
 	receipt.AcceptedAt = mustParseTimestamp(acceptedAt)
 	return receipt, nil
+}
+
+func scanSyncMutationReplayApplication(row interface {
+	Scan(dest ...any) error
+}) (SyncMutationReplayApplication, error) {
+	var application SyncMutationReplayApplication
+	var versionAfter sql.NullInt64
+	var hashAfter sql.NullString
+	var replayObservationID sql.NullInt64
+	var createdAt string
+	if err := row.Scan(
+		&application.ID,
+		&application.OwnerKey,
+		&application.AppID,
+		&application.MutationID,
+		&application.ApplicationStatus,
+		&application.ApplicationReason,
+		&application.CanonicalDocumentVersionBefore,
+		&application.CanonicalDocumentHashBefore,
+		&versionAfter,
+		&hashAfter,
+		&replayObservationID,
+		&createdAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return SyncMutationReplayApplication{}, fmt.Errorf("sync mutation replay application not found")
+		}
+		return SyncMutationReplayApplication{}, fmt.Errorf("scan sync mutation replay application: %w", err)
+	}
+
+	if versionAfter.Valid {
+		value := versionAfter.Int64
+		application.CanonicalDocumentVersionAfter = &value
+	}
+	if hashAfter.Valid {
+		value := hashAfter.String
+		application.CanonicalDocumentHashAfter = &value
+	}
+	if replayObservationID.Valid {
+		value := replayObservationID.Int64
+		application.ReplayObservationID = &value
+	}
+	application.CreatedAt = mustParseTimestamp(createdAt)
+	return application, nil
 }
 
 func cloneJSON(value json.RawMessage) json.RawMessage {

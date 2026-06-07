@@ -16,7 +16,7 @@ func TestOpenCreatesSchema(t *testing.T) {
 
 	docStore := openTestStore(t)
 
-	for _, tableName := range []string{"documents", "users", "sessions", "account_entitlements", "billing_customers", "billing_subscriptions", "sync_mutation_receipts", "sync_mutation_replay_dry_run_observations"} {
+	for _, tableName := range []string{"documents", "users", "sessions", "account_entitlements", "billing_customers", "billing_subscriptions", "sync_mutation_receipts", "sync_mutation_replay_dry_run_observations", "sync_mutation_replay_applications"} {
 		var found string
 		err := docStore.db.QueryRowContext(
 			context.Background(),
@@ -2004,11 +2004,8 @@ func TestEvaluateSyncMutationReplayAuthoritativeReadinessBlockedByContractGaps(t
 	assertReplayReadinessBlockers(t, readiness.Blockers, []string{
 		"document_version_gating",
 		"transaction_boundary",
-		"receipt_status_model",
 		"replay_progress_state",
 		"rollback_behavior",
-		"conflict_behavior",
-		"applied_receipt_tracking",
 	})
 	assertReplayAreaStatus(t, readiness.Areas, "duplicate_endpoint_edge_policy", replayAuthoritativeStatusReady)
 	assertReplayAreaStatus(t, readiness.Areas, "missing_tab_policy", replayAuthoritativeStatusReady)
@@ -2020,6 +2017,9 @@ func TestEvaluateSyncMutationReplayAuthoritativeReadinessBlockedByContractGaps(t
 	assertReplayAreaStatus(t, readiness.Areas, "duplicate_item_id_policy", replayAuthoritativeStatusPartiallyReady)
 	assertReplayAreaStatus(t, readiness.Areas, "duplicate_edge_id_policy", replayAuthoritativeStatusPartiallyReady)
 	assertReplayAreaStatus(t, readiness.Areas, "server_side_validation_requirements", replayAuthoritativeStatusPartiallyReady)
+	assertReplayAreaStatus(t, readiness.Areas, "receipt_status_model", replayAuthoritativeStatusPartiallyReady)
+	assertReplayAreaStatus(t, readiness.Areas, "conflict_behavior", replayAuthoritativeStatusPartiallyReady)
+	assertReplayAreaStatus(t, readiness.Areas, "applied_receipt_tracking", replayAuthoritativeStatusPartiallyReady)
 	assertReplayAreaStatus(t, readiness.Areas, "delta_pull", replayAuthoritativeStatusIntentionallyDeferred)
 }
 
@@ -2112,6 +2112,302 @@ func TestEvaluateSyncMutationReplayAuthoritativeReadinessWarnsOnMalformedLegacyA
 		"snapshot_contains_duplicate_edge_ids",
 	})
 	assertReplayWarnings(t, readiness.Warnings, []string{"preserve_malformed_legacy_edges"})
+}
+
+func TestMapSyncMutationReplayPolicyStatusToApplicationStatus(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		policyStatus       string
+		expectedStatus     string
+		expectedRecordable bool
+	}{
+		{policyStatus: replayAuthoritativePolicyStatusAllowed, expectedStatus: SyncMutationReplayApplicationStatusApplied, expectedRecordable: true},
+		{policyStatus: replayAuthoritativePolicyStatusSkip, expectedStatus: SyncMutationReplayApplicationStatusSkipped, expectedRecordable: true},
+		{policyStatus: replayAuthoritativePolicyStatusConflict, expectedStatus: SyncMutationReplayApplicationStatusConflict, expectedRecordable: true},
+		{policyStatus: replayAuthoritativePolicyStatusFatal, expectedStatus: SyncMutationReplayApplicationStatusFailed, expectedRecordable: true},
+		{policyStatus: replayAuthoritativePolicyStatusBlocked, expectedStatus: "", expectedRecordable: false},
+		{policyStatus: "unknown", expectedStatus: "", expectedRecordable: false},
+	}
+
+	for _, testCase := range testCases {
+		actualStatus, actualRecordable := MapSyncMutationReplayPolicyStatusToApplicationStatus(testCase.policyStatus)
+		if actualStatus != testCase.expectedStatus || actualRecordable != testCase.expectedRecordable {
+			t.Fatalf("unexpected mapping for %q: got (%q,%t) want (%q,%t)", testCase.policyStatus, actualStatus, actualRecordable, testCase.expectedStatus, testCase.expectedRecordable)
+		}
+	}
+}
+
+func TestRecordSyncMutationReplayApplicationInertStoresApplicationSeparately(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	before := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-create", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","position":{"top":"10px","left":"20px"}}`),
+	)
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+
+	beforeReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	beforeObservationCount := countReplayDryRunObservationsForTest(t, docStore, "owner", "postbaby-web")
+	beforeApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	if len(beforeApplications) != 0 {
+		t.Fatalf("expected no inert applications before insert, got %+v", beforeApplications)
+	}
+
+	result, err := docStore.RecordSyncMutationReplayApplicationInert(ctx, "owner", "postbaby-web", SyncMutationReplayApplicationInput{
+		MutationID:                     "mut-create",
+		ApplicationStatus:              SyncMutationReplayApplicationStatusApplied,
+		ApplicationReason:              "policy_allowed",
+		CanonicalDocumentVersionBefore: before.Version,
+		CanonicalDocumentHashBefore:    hashReplayObservationBytes(before.Body),
+		ReplayObservationID:            &observation.ID,
+	})
+	if err != nil {
+		t.Fatalf("record inert replay application: %v", err)
+	}
+	if result.Duplicate {
+		t.Fatal("expected first inert replay application insert to be new")
+	}
+	if result.Application.ApplicationStatus != SyncMutationReplayApplicationStatusApplied {
+		t.Fatalf("unexpected inert application: %+v", result.Application)
+	}
+	if result.Application.ReplayObservationID == nil || *result.Application.ReplayObservationID != observation.ID {
+		t.Fatalf("expected inert application to retain replay observation id %d, got %+v", observation.ID, result.Application.ReplayObservationID)
+	}
+
+	after, err := docStore.GetDocument(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("load document after inert application: %v", err)
+	}
+	if after.Version != before.Version {
+		t.Fatalf("expected inert application to preserve version %d, got %d", before.Version, after.Version)
+	}
+	if string(after.Body) != string(before.Body) {
+		t.Fatalf("expected inert application to preserve body, before=%s after=%s", before.Body, after.Body)
+	}
+
+	afterReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	assertReplayReceiptRowsEqual(t, beforeReceipts, afterReceipts)
+	if countReplayDryRunObservationsForTest(t, docStore, "owner", "postbaby-web") != beforeObservationCount {
+		t.Fatalf("expected inert application insert to preserve dry-run observation count %d", beforeObservationCount)
+	}
+
+	applications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	if len(applications) != 1 {
+		t.Fatalf("expected one inert replay application, got %+v", applications)
+	}
+	if applications[0].MutationID != "mut-create" || applications[0].ApplicationReason != "policy_allowed" {
+		t.Fatalf("unexpected inert replay application row: %+v", applications[0])
+	}
+}
+
+func TestRecordSyncMutationReplayApplicationInertIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	before := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-create", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","position":{"top":"10px","left":"20px"}}`),
+	)
+
+	firstResult, err := docStore.RecordSyncMutationReplayApplicationInert(ctx, "owner", "postbaby-web", SyncMutationReplayApplicationInput{
+		MutationID:                     "mut-create",
+		ApplicationStatus:              SyncMutationReplayApplicationStatusSkipped,
+		ApplicationReason:              "policy_skip",
+		CanonicalDocumentVersionBefore: before.Version,
+		CanonicalDocumentHashBefore:    hashReplayObservationBytes(before.Body),
+	})
+	if err != nil {
+		t.Fatalf("record first inert replay application: %v", err)
+	}
+	secondResult, err := docStore.RecordSyncMutationReplayApplicationInert(ctx, "owner", "postbaby-web", SyncMutationReplayApplicationInput{
+		MutationID:                     "mut-create",
+		ApplicationStatus:              SyncMutationReplayApplicationStatusConflict,
+		ApplicationReason:              "should_not_replace_existing_row",
+		CanonicalDocumentVersionBefore: before.Version,
+		CanonicalDocumentHashBefore:    hashReplayObservationBytes(before.Body),
+	})
+	if err != nil {
+		t.Fatalf("record duplicate inert replay application: %v", err)
+	}
+	if secondResult.Duplicate != true {
+		t.Fatal("expected duplicate inert replay application insert to be idempotent")
+	}
+	if secondResult.Application.ID != firstResult.Application.ID {
+		t.Fatalf("expected duplicate inert replay application to reuse row id %d, got %d", firstResult.Application.ID, secondResult.Application.ID)
+	}
+	if secondResult.Application.ApplicationStatus != firstResult.Application.ApplicationStatus || secondResult.Application.ApplicationReason != firstResult.Application.ApplicationReason {
+		t.Fatalf("expected duplicate inert replay application to preserve original row, first=%+v second=%+v", firstResult.Application, secondResult.Application)
+	}
+
+	applications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	if len(applications) != 1 {
+		t.Fatalf("expected one inert replay application row after duplicate insert, got %+v", applications)
+	}
+}
+
+func TestListSyncMutationReplayApplicationsScopesOwnerAndApp(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	beforeBody := buildReplaySnapshotBody(t, []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	for _, scope := range []struct {
+		ownerKey string
+		appID    string
+		mutation string
+	}{
+		{"owner", "postbaby-web", "mut-a"},
+		{"owner", "other-app", "mut-b"},
+		{"other-owner", "postbaby-web", "mut-c"},
+	} {
+		if _, err := docStore.PutDocument(ctx, scope.ownerKey, scope.appID, beforeBody, nil); err != nil {
+			t.Fatalf("seed document for %s/%s: %v", scope.ownerKey, scope.appID, err)
+		}
+		insertAcceptedReplayReceipt(t, docStore, scope.ownerKey, scope.appID, "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+			buildReplayReceiptInput(scope.mutation, "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","position":{"top":"10px","left":"20px"}}`),
+		)
+		_, err := docStore.RecordSyncMutationReplayApplicationInert(ctx, scope.ownerKey, scope.appID, SyncMutationReplayApplicationInput{
+			MutationID:                     scope.mutation,
+			ApplicationStatus:              SyncMutationReplayApplicationStatusApplied,
+			ApplicationReason:              "policy_allowed",
+			CanonicalDocumentVersionBefore: 1,
+			CanonicalDocumentHashBefore:    hashReplayObservationBytes(beforeBody),
+		})
+		if err != nil {
+			t.Fatalf("record inert replay application for %s/%s: %v", scope.ownerKey, scope.appID, err)
+		}
+	}
+
+	applications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	if len(applications) != 1 {
+		t.Fatalf("expected one scoped inert replay application, got %+v", applications)
+	}
+	if applications[0].MutationID != "mut-a" {
+		t.Fatalf("expected scoped inert replay application mutation mut-a, got %+v", applications[0])
+	}
+}
+
+func TestAcceptSyncMutationReceiptsDoesNotCreateReplayApplications(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	_, err := docStore.AcceptSyncMutationReceipts(ctx, "owner", "postbaby-web", []SyncMutationReceiptInput{
+		buildTestSyncMutationReceiptInput("mut-1", "CreateNode"),
+	})
+	if err != nil {
+		t.Fatalf("accept sync mutation receipts: %v", err)
+	}
+
+	applications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	if len(applications) != 0 {
+		t.Fatalf("expected receipt acceptance to avoid inert replay applications, got %+v", applications)
+	}
+}
+
+func TestRecordSyncMutationReplayDryRunObservationDoesNotCreateReplayApplications(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+
+	if _, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web"); err != nil {
+		t.Fatalf("record dry-run observation: %v", err)
+	}
+
+	applications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	if len(applications) != 0 {
+		t.Fatalf("expected dry-run observation recording to avoid inert replay applications, got %+v", applications)
+	}
+}
+
+func TestBlockedPolicyResultDoesNotBecomeReplayApplicationRecord(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	body := buildReplayRawSnapshotBody(t, `[
+		{
+			"id":"tab-1",
+			"name":"Legacy",
+			"items":[
+				{"id":"dup-item","name":"First","position":{"top":"0px","left":"0px"}},
+				{"id":"dup-item","name":"Second","position":{"top":"10px","left":"10px"}}
+			],
+			"edges":[]
+		}
+	]`)
+	if _, err := docStore.PutDocument(ctx, "owner", "postbaby-web", body, nil); err != nil {
+		t.Fatalf("seed blocked snapshot: %v", err)
+	}
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-blocked", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","position":{"top":"10px","left":"20px"}}`),
+	)
+
+	evaluation, err := EvaluateSyncMutationReplayAuthoritativePolicy(body, SyncMutationReceipt{
+		EntityID:      "item-1",
+		OperationType: "CreateNode",
+		Payload:       json.RawMessage(`{"tabId":"tab-1","name":"First","position":{"top":"10px","left":"20px"}}`),
+	})
+	if err != nil {
+		t.Fatalf("evaluate blocked authoritative policy: %v", err)
+	}
+	assertReplayPolicyStatus(t, evaluation, replayAuthoritativePolicyStatusBlocked)
+
+	mappedStatus, recordable := MapSyncMutationReplayPolicyStatusToApplicationStatus(evaluation.Status)
+	if mappedStatus != "" || recordable {
+		t.Fatalf("expected blocked policy status to avoid application mapping, got (%q,%t)", mappedStatus, recordable)
+	}
+
+	applications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	if len(applications) != 0 {
+		t.Fatalf("expected blocked policy result to avoid inert replay application records, got %+v", applications)
+	}
 }
 
 func TestCreateInitialUserAndLookup(t *testing.T) {
@@ -2818,6 +3114,16 @@ func assertReplayPolicyReasons(t *testing.T, actual, expected []string) {
 			t.Fatalf("expected policy reasons %v, got mismatch for %q in %+v", expected, reason, actual)
 		}
 	}
+}
+
+func mustListReplayApplications(t *testing.T, docStore *Store, ownerKey, appID string) []SyncMutationReplayApplication {
+	t.Helper()
+
+	applications, err := docStore.ListSyncMutationReplayApplications(context.Background(), ownerKey, appID)
+	if err != nil {
+		t.Fatalf("list inert replay applications: %v", err)
+	}
+	return applications
 }
 
 func assertReplayAreaStatus(t *testing.T, areas []SyncMutationReplayAuthoritativeAreaReadiness, area, expectedStatus string) {
