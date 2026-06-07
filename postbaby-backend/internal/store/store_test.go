@@ -4273,6 +4273,438 @@ func TestListSyncMutationReplayApplicationsScopesOwnerAndApp(t *testing.T) {
 	}
 }
 
+func TestGetSyncDeltaMetadataUpToDateAndReadOnly(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	doc := seedReplayDocumentBody(t, docStore, "owner", "postbaby-web", buildReplayRawSnapshotBody(t, `[
+		{
+			"id":"tab-1",
+			"name":"NO_BODY_LEAK_MARKER_123",
+			"items":[],
+			"edges":[]
+		}
+	]`))
+	if _, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web"); err != nil {
+		t.Fatalf("record dry-run observation: %v", err)
+	}
+
+	beforeState := snapshotSyncDeltaMetadataStateForTest(t, docStore, "owner", "postbaby-web")
+	result, err := docStore.GetSyncDeltaMetadata(ctx, "owner", "postbaby-web", SyncDeltaMetadataOptions{
+		SinceVersion: doc.Version,
+	})
+	if err != nil {
+		t.Fatalf("get sync delta metadata: %v", err)
+	}
+
+	if result.AppID != "postbaby-web" ||
+		result.CurrentDocumentVersion != doc.Version ||
+		result.CurrentDocumentHash != hashReplayObservationBytes(doc.Body) ||
+		result.ClientVersion != doc.Version ||
+		result.RequiresSnapshotRefresh ||
+		result.Reason != SyncDeltaMetadataReasonUpToDate ||
+		len(result.Applications) != 0 ||
+		len(result.Warnings) != 0 {
+		t.Fatalf("unexpected sync delta metadata result: %+v", result)
+	}
+
+	marshaled, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal sync delta metadata: %v", err)
+	}
+	marshaledText := string(marshaled)
+	if strings.Contains(marshaledText, "NO_BODY_LEAK_MARKER_123") || strings.Contains(marshaledText, `"Body"`) {
+		t.Fatalf("expected sync delta metadata to exclude canonical body bytes, got %s", marshaledText)
+	}
+	if strings.Contains(strings.ToLower(marshaledText), "camera") {
+		t.Fatalf("expected sync delta metadata model to exclude camera state, got %s", marshaledText)
+	}
+
+	afterState := snapshotSyncDeltaMetadataStateForTest(t, docStore, "owner", "postbaby-web")
+	assertSyncDeltaMetadataStateEqual(t, beforeState, afterState)
+}
+
+func TestGetSyncDeltaMetadataDocumentVersionChangedAndReadOnly(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	doc := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	if _, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web"); err != nil {
+		t.Fatalf("record dry-run observation: %v", err)
+	}
+
+	beforeState := snapshotSyncDeltaMetadataStateForTest(t, docStore, "owner", "postbaby-web")
+	result, err := docStore.GetSyncDeltaMetadata(ctx, "owner", "postbaby-web", SyncDeltaMetadataOptions{
+		SinceVersion: doc.Version - 1,
+	})
+	if err != nil {
+		t.Fatalf("get sync delta metadata: %v", err)
+	}
+
+	if result.RequiresSnapshotRefresh || result.Reason != SyncDeltaMetadataReasonDocumentVersionChanged || len(result.Applications) != 0 {
+		t.Fatalf("unexpected sync delta metadata result: %+v", result)
+	}
+
+	afterState := snapshotSyncDeltaMetadataStateForTest(t, docStore, "owner", "postbaby-web")
+	assertSyncDeltaMetadataStateEqual(t, beforeState, afterState)
+}
+
+func TestGetSyncDeltaMetadataReturnsCommittedApplicationsWhenIncluded(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	before := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Before",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	hashBefore := hashReplayObservationBytes(before.Body)
+	expectedVersion := before.Version
+	afterDoc, err := docStore.PutDocument(ctx, "owner", "postbaby-web", buildReplaySnapshotBody(t, []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "After",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	}), &expectedVersion)
+	if err != nil {
+		t.Fatalf("advance canonical document: %v", err)
+	}
+	hashAfter := hashReplayObservationBytes(afterDoc.Body)
+
+	for _, mutationID := range []string{"mut-applied", "mut-skipped", "mut-conflict", "mut-failed"} {
+		insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+			buildReplayReceiptInput(mutationID, "Node", mutationID, "CreateNode", `{"tabId":"tab-1","name":"X","position":{"top":"10px","left":"20px"}}`),
+		)
+	}
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record dry-run observation: %v", err)
+	}
+	recordReplayApplicationForTest(t, docStore, "owner", "postbaby-web", SyncMutationReplayApplicationInput{
+		MutationID:                     "mut-applied",
+		ApplicationStatus:              SyncMutationReplayApplicationStatusApplied,
+		ApplicationReason:              "policy_allowed",
+		CanonicalDocumentVersionBefore: before.Version,
+		CanonicalDocumentHashBefore:    hashBefore,
+		CanonicalDocumentVersionAfter:  &afterDoc.Version,
+		CanonicalDocumentHashAfter:     &hashAfter,
+		ReplayObservationID:            &observation.ID,
+	})
+	recordReplayApplicationForTest(t, docStore, "owner", "postbaby-web", SyncMutationReplayApplicationInput{
+		MutationID:                     "mut-skipped",
+		ApplicationStatus:              SyncMutationReplayApplicationStatusSkipped,
+		ApplicationReason:              "policy_skip",
+		CanonicalDocumentVersionBefore: before.Version,
+		CanonicalDocumentHashBefore:    hashBefore,
+		CanonicalDocumentVersionAfter:  &afterDoc.Version,
+		CanonicalDocumentHashAfter:     &hashAfter,
+		ReplayObservationID:            &observation.ID,
+	})
+	recordReplayApplicationForTest(t, docStore, "owner", "postbaby-web", SyncMutationReplayApplicationInput{
+		MutationID:                     "mut-conflict",
+		ApplicationStatus:              SyncMutationReplayApplicationStatusConflict,
+		ApplicationReason:              "policy_conflict",
+		CanonicalDocumentVersionBefore: before.Version,
+		CanonicalDocumentHashBefore:    hashBefore,
+		ReplayObservationID:            &observation.ID,
+	})
+	recordReplayApplicationForTest(t, docStore, "owner", "postbaby-web", SyncMutationReplayApplicationInput{
+		MutationID:                     "mut-failed",
+		ApplicationStatus:              SyncMutationReplayApplicationStatusFailed,
+		ApplicationReason:              "policy_failed",
+		CanonicalDocumentVersionBefore: before.Version,
+		CanonicalDocumentHashBefore:    hashBefore,
+		ReplayObservationID:            &observation.ID,
+	})
+
+	beforeState := snapshotSyncDeltaMetadataStateForTest(t, docStore, "owner", "postbaby-web")
+	result, err := docStore.GetSyncDeltaMetadata(ctx, "owner", "postbaby-web", SyncDeltaMetadataOptions{
+		SinceVersion:        before.Version,
+		IncludeApplications: true,
+		Limit:               10,
+	})
+	if err != nil {
+		t.Fatalf("get sync delta metadata: %v", err)
+	}
+
+	if result.RequiresSnapshotRefresh ||
+		result.Reason != SyncDeltaMetadataReasonApplicationsAvailable ||
+		result.CurrentDocumentVersion != afterDoc.Version ||
+		result.CurrentDocumentHash != hashAfter ||
+		len(result.Applications) != 2 {
+		t.Fatalf("unexpected sync delta metadata result: %+v", result)
+	}
+	if result.NextApplicationWatermark == nil {
+		t.Fatalf("expected next application watermark, got %+v", result)
+	}
+
+	foundApplied := false
+	foundSkipped := false
+	for _, application := range result.Applications {
+		switch application.MutationID {
+		case "mut-applied":
+			foundApplied = application.ApplicationStatus == SyncMutationReplayApplicationStatusApplied
+		case "mut-skipped":
+			foundSkipped = application.ApplicationStatus == SyncMutationReplayApplicationStatusSkipped
+		default:
+			t.Fatalf("expected conflict/failed rows to be filtered out, got %+v", application)
+		}
+	}
+	if !foundApplied || !foundSkipped {
+		t.Fatalf("expected applied and skipped application metadata, got %+v", result.Applications)
+	}
+
+	afterState := snapshotSyncDeltaMetadataStateForTest(t, docStore, "owner", "postbaby-web")
+	assertSyncDeltaMetadataStateEqual(t, beforeState, afterState)
+}
+
+func TestGetSyncDeltaMetadataOmitsApplicationsWhenIncludeFalse(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	before := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Before",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	hashBefore := hashReplayObservationBytes(before.Body)
+	expectedVersion := before.Version
+	afterDoc, err := docStore.PutDocument(ctx, "owner", "postbaby-web", buildReplaySnapshotBody(t, []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "After",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	}), &expectedVersion)
+	if err != nil {
+		t.Fatalf("advance canonical document: %v", err)
+	}
+	hashAfter := hashReplayObservationBytes(afterDoc.Body)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-applied", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"X","position":{"top":"10px","left":"20px"}}`),
+	)
+	recordReplayApplicationForTest(t, docStore, "owner", "postbaby-web", SyncMutationReplayApplicationInput{
+		MutationID:                     "mut-applied",
+		ApplicationStatus:              SyncMutationReplayApplicationStatusApplied,
+		ApplicationReason:              "policy_allowed",
+		CanonicalDocumentVersionBefore: before.Version,
+		CanonicalDocumentHashBefore:    hashBefore,
+		CanonicalDocumentVersionAfter:  &afterDoc.Version,
+		CanonicalDocumentHashAfter:     &hashAfter,
+	})
+
+	beforeState := snapshotSyncDeltaMetadataStateForTest(t, docStore, "owner", "postbaby-web")
+	result, err := docStore.GetSyncDeltaMetadata(ctx, "owner", "postbaby-web", SyncDeltaMetadataOptions{
+		SinceVersion:        before.Version,
+		IncludeApplications: false,
+	})
+	if err != nil {
+		t.Fatalf("get sync delta metadata: %v", err)
+	}
+
+	if result.RequiresSnapshotRefresh || result.Reason != SyncDeltaMetadataReasonDocumentVersionChanged || len(result.Applications) != 0 {
+		t.Fatalf("unexpected sync delta metadata result: %+v", result)
+	}
+
+	afterState := snapshotSyncDeltaMetadataStateForTest(t, docStore, "owner", "postbaby-web")
+	assertSyncDeltaMetadataStateEqual(t, beforeState, afterState)
+}
+
+func TestGetSyncDeltaMetadataRepresentsBodyUnchangedVersionBumpSafely(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	before := seedReplayDocumentBody(t, docStore, "owner", "postbaby-web", buildReplayRawSnapshotBody(t, `[
+		{
+			"id":"tab-1",
+			"name":"Stable",
+			"items":[],
+			"edges":[]
+		}
+	]`))
+	hashBefore := hashReplayObservationBytes(before.Body)
+	expectedVersion := before.Version
+	afterDoc, err := docStore.PutDocument(ctx, "owner", "postbaby-web", before.Body, &expectedVersion)
+	if err != nil {
+		t.Fatalf("advance canonical document without body change: %v", err)
+	}
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-skipped", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"X","position":{"top":"10px","left":"20px"}}`),
+	)
+	recordReplayApplicationForTest(t, docStore, "owner", "postbaby-web", SyncMutationReplayApplicationInput{
+		MutationID:                     "mut-skipped",
+		ApplicationStatus:              SyncMutationReplayApplicationStatusSkipped,
+		ApplicationReason:              "policy_skip",
+		CanonicalDocumentVersionBefore: before.Version,
+		CanonicalDocumentHashBefore:    hashBefore,
+		CanonicalDocumentVersionAfter:  &afterDoc.Version,
+		CanonicalDocumentHashAfter:     &hashBefore,
+	})
+
+	beforeState := snapshotSyncDeltaMetadataStateForTest(t, docStore, "owner", "postbaby-web")
+	result, err := docStore.GetSyncDeltaMetadata(ctx, "owner", "postbaby-web", SyncDeltaMetadataOptions{
+		SinceVersion:        before.Version,
+		IncludeApplications: true,
+		Limit:               10,
+	})
+	if err != nil {
+		t.Fatalf("get sync delta metadata: %v", err)
+	}
+
+	if result.RequiresSnapshotRefresh ||
+		result.Reason != SyncDeltaMetadataReasonApplicationsAvailable ||
+		result.CurrentDocumentVersion != afterDoc.Version ||
+		result.CurrentDocumentHash != hashBefore ||
+		len(result.Applications) != 1 {
+		t.Fatalf("unexpected sync delta metadata result: %+v", result)
+	}
+	application := result.Applications[0]
+	if application.ApplicationStatus != SyncMutationReplayApplicationStatusSkipped ||
+		application.CanonicalDocumentVersionAfter == nil ||
+		*application.CanonicalDocumentVersionAfter != afterDoc.Version ||
+		application.CanonicalDocumentHashAfter == nil ||
+		*application.CanonicalDocumentHashAfter != hashBefore {
+		t.Fatalf("unexpected skipped application metadata: %+v", application)
+	}
+	if !containsStringValue(result.Warnings, syncDeltaMetadataWarningVersionAdvancedWithoutBodyChange) {
+		t.Fatalf("expected body-unchanged version-advance warning, got %+v", result.Warnings)
+	}
+
+	afterState := snapshotSyncDeltaMetadataStateForTest(t, docStore, "owner", "postbaby-web")
+	assertSyncDeltaMetadataStateEqual(t, beforeState, afterState)
+}
+
+func TestGetSyncDeltaMetadataTooManyApplicationsRequiresSnapshotRefresh(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	before := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Before",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	hashBefore := hashReplayObservationBytes(before.Body)
+	expectedVersion := before.Version
+	afterDoc, err := docStore.PutDocument(ctx, "owner", "postbaby-web", buildReplaySnapshotBody(t, []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "After",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	}), &expectedVersion)
+	if err != nil {
+		t.Fatalf("advance canonical document: %v", err)
+	}
+	hashAfter := hashReplayObservationBytes(afterDoc.Body)
+
+	for _, mutationID := range []string{"mut-a", "mut-b", "mut-c"} {
+		insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+			buildReplayReceiptInput(mutationID, "Node", mutationID, "CreateNode", `{"tabId":"tab-1","name":"X","position":{"top":"10px","left":"20px"}}`),
+		)
+		recordReplayApplicationForTest(t, docStore, "owner", "postbaby-web", SyncMutationReplayApplicationInput{
+			MutationID:                     mutationID,
+			ApplicationStatus:              SyncMutationReplayApplicationStatusApplied,
+			ApplicationReason:              "policy_allowed",
+			CanonicalDocumentVersionBefore: before.Version,
+			CanonicalDocumentHashBefore:    hashBefore,
+			CanonicalDocumentVersionAfter:  &afterDoc.Version,
+			CanonicalDocumentHashAfter:     &hashAfter,
+		})
+	}
+
+	beforeState := snapshotSyncDeltaMetadataStateForTest(t, docStore, "owner", "postbaby-web")
+	result, err := docStore.GetSyncDeltaMetadata(ctx, "owner", "postbaby-web", SyncDeltaMetadataOptions{
+		SinceVersion:        before.Version,
+		IncludeApplications: true,
+		Limit:               2,
+	})
+	if err != nil {
+		t.Fatalf("get sync delta metadata: %v", err)
+	}
+
+	if !result.RequiresSnapshotRefresh || result.Reason != SyncDeltaMetadataReasonSnapshotRequiredTooManyApplications || len(result.Applications) != 0 {
+		t.Fatalf("unexpected sync delta metadata result: %+v", result)
+	}
+
+	afterState := snapshotSyncDeltaMetadataStateForTest(t, docStore, "owner", "postbaby-web")
+	assertSyncDeltaMetadataStateEqual(t, beforeState, afterState)
+}
+
+func TestGetSyncDeltaMetadataStaleSinceVersionRequiresSnapshotRefresh(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	doc := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	if _, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web"); err != nil {
+		t.Fatalf("record dry-run observation: %v", err)
+	}
+
+	beforeState := snapshotSyncDeltaMetadataStateForTest(t, docStore, "owner", "postbaby-web")
+	result, err := docStore.GetSyncDeltaMetadata(ctx, "owner", "postbaby-web", SyncDeltaMetadataOptions{
+		SinceVersion: doc.Version + 1,
+	})
+	if err != nil {
+		t.Fatalf("get sync delta metadata: %v", err)
+	}
+
+	if !result.RequiresSnapshotRefresh || result.Reason != SyncDeltaMetadataReasonSnapshotRequiredStaleVersion {
+		t.Fatalf("unexpected sync delta metadata result: %+v", result)
+	}
+
+	afterState := snapshotSyncDeltaMetadataStateForTest(t, docStore, "owner", "postbaby-web")
+	assertSyncDeltaMetadataStateEqual(t, beforeState, afterState)
+}
+
 func TestAcceptSyncMutationReceiptsDoesNotCreateReplayApplications(t *testing.T) {
 	t.Parallel()
 
@@ -5186,6 +5618,55 @@ func assertReplayApplicationsEqual(t *testing.T, expected, actual []SyncMutation
 	}
 }
 
+type syncDeltaMetadataStateSnapshot struct {
+	Document     Document
+	Receipts     []SyncMutationReceipt
+	Applications []SyncMutationReplayApplication
+	Observations []SyncMutationReplayDryRunObservation
+}
+
+func snapshotSyncDeltaMetadataStateForTest(t *testing.T, docStore *Store, ownerKey, appID string) syncDeltaMetadataStateSnapshot {
+	t.Helper()
+
+	doc, err := docStore.GetDocument(context.Background(), ownerKey, appID)
+	if err != nil {
+		t.Fatalf("load sync delta metadata document snapshot: %v", err)
+	}
+
+	return syncDeltaMetadataStateSnapshot{
+		Document:     doc,
+		Receipts:     loadAllReplayReceiptRowsForTest(t, docStore, ownerKey, appID),
+		Applications: mustListReplayApplications(t, docStore, ownerKey, appID),
+		Observations: loadAllReplayDryRunObservationsForTest(t, docStore, ownerKey, appID),
+	}
+}
+
+func assertSyncDeltaMetadataStateEqual(t *testing.T, expected, actual syncDeltaMetadataStateSnapshot) {
+	t.Helper()
+
+	if expected.Document.ID != actual.Document.ID ||
+		expected.Document.OwnerKey != actual.Document.OwnerKey ||
+		expected.Document.AppID != actual.Document.AppID ||
+		string(expected.Document.Body) != string(actual.Document.Body) ||
+		expected.Document.Version != actual.Document.Version ||
+		!expected.Document.UpdatedAt.Equal(actual.Document.UpdatedAt) {
+		t.Fatalf("document snapshot changed during sync delta metadata read\nexpected=%+v\nactual=%+v", expected.Document, actual.Document)
+	}
+	assertReplayReceiptRowsEqual(t, expected.Receipts, actual.Receipts)
+	assertReplayApplicationsEqual(t, expected.Applications, actual.Applications)
+	assertReplayDryRunObservationsEqual(t, expected.Observations, actual.Observations)
+}
+
+func recordReplayApplicationForTest(t *testing.T, docStore *Store, ownerKey, appID string, input SyncMutationReplayApplicationInput) SyncMutationReplayApplication {
+	t.Helper()
+
+	result, err := docStore.RecordSyncMutationReplayApplicationInert(context.Background(), ownerKey, appID, input)
+	if err != nil {
+		t.Fatalf("record replay application for test: %v", err)
+	}
+	return result.Application
+}
+
 func setReplayDocumentBodyWithoutVersionChangeForTest(t *testing.T, docStore *Store, ownerKey, appID string, body json.RawMessage) {
 	t.Helper()
 
@@ -5282,6 +5763,52 @@ func loadReplayDryRunObservationForTest(t *testing.T, docStore *Store, observati
 
 	observation.CreatedAt = mustParseTimestamp(createdAt)
 	return observation
+}
+
+func loadAllReplayDryRunObservationsForTest(t *testing.T, docStore *Store, ownerKey, appID string) []SyncMutationReplayDryRunObservation {
+	t.Helper()
+
+	rows, err := docStore.db.QueryContext(
+		context.Background(),
+		`SELECT
+			id,
+			owner_key,
+			app_id,
+			canonical_document_version_observed,
+			canonical_document_hash_observed,
+			receipt_count_considered,
+			first_ordered_mutation_id,
+			last_ordered_mutation_id,
+			ordered_receipt_high_watermark,
+			applied_count,
+			skipped_count,
+			warning_count,
+			preview_hash,
+			created_at
+		FROM sync_mutation_replay_dry_run_observations
+		WHERE owner_key = ? AND app_id = ?
+		ORDER BY created_at ASC, id ASC`,
+		ownerKey,
+		appID,
+	)
+	if err != nil {
+		t.Fatalf("query replay dry-run observations: %v", err)
+	}
+	defer rows.Close()
+
+	observations := make([]SyncMutationReplayDryRunObservation, 0)
+	for rows.Next() {
+		observation, scanErr := scanSyncMutationReplayDryRunObservation(rows)
+		if scanErr != nil {
+			t.Fatalf("scan replay dry-run observation row: %v", scanErr)
+		}
+		observations = append(observations, observation)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate replay dry-run observations: %v", err)
+	}
+
+	return observations
 }
 
 func countReplayDryRunObservationsForTest(t *testing.T, docStore *Store, ownerKey, appID string) int64 {
@@ -5382,6 +5909,42 @@ func assertReplayReceiptRowsEqual(t *testing.T, expected, actual []SyncMutationR
 			t.Fatalf("replay receipt row %d mismatch: expected=%+v actual=%+v", index, expected[index], actual[index])
 		}
 	}
+}
+
+func assertReplayDryRunObservationsEqual(t *testing.T, expected, actual []SyncMutationReplayDryRunObservation) {
+	t.Helper()
+
+	if len(actual) != len(expected) {
+		t.Fatalf("expected %d replay dry-run observations, got %d", len(expected), len(actual))
+	}
+
+	for index := range expected {
+		if actual[index].ID != expected[index].ID ||
+			actual[index].OwnerKey != expected[index].OwnerKey ||
+			actual[index].AppID != expected[index].AppID ||
+			actual[index].CanonicalDocumentVersionObserved != expected[index].CanonicalDocumentVersionObserved ||
+			actual[index].CanonicalDocumentHashObserved != expected[index].CanonicalDocumentHashObserved ||
+			actual[index].ReceiptCountConsidered != expected[index].ReceiptCountConsidered ||
+			actual[index].FirstOrderedMutationID != expected[index].FirstOrderedMutationID ||
+			actual[index].LastOrderedMutationID != expected[index].LastOrderedMutationID ||
+			actual[index].OrderedReceiptHighWatermark != expected[index].OrderedReceiptHighWatermark ||
+			actual[index].AppliedCount != expected[index].AppliedCount ||
+			actual[index].SkippedCount != expected[index].SkippedCount ||
+			actual[index].WarningCount != expected[index].WarningCount ||
+			actual[index].PreviewHash != expected[index].PreviewHash ||
+			!actual[index].CreatedAt.Equal(expected[index].CreatedAt) {
+			t.Fatalf("replay dry-run observation row %d mismatch: expected=%+v actual=%+v", index, expected[index], actual[index])
+		}
+	}
+}
+
+func containsStringValue(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func equalInt64Pointers(left, right *int64) bool {

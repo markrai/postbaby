@@ -250,6 +250,38 @@ type SyncMutationReplayAuthoritativeApplyResult struct {
 	MutationResults                []SyncMutationReplayAuthoritativeMutationResult
 }
 
+type SyncDeltaMetadataOptions struct {
+	SinceVersion         int64
+	ApplicationWatermark *int64
+	IncludeApplications  bool
+	Limit                int
+}
+
+type SyncDeltaMetadata struct {
+	AppID                    string
+	CurrentDocumentVersion   int64
+	CurrentDocumentHash      string
+	ClientVersion            int64
+	RequiresSnapshotRefresh  bool
+	Reason                   string
+	ApplicationWatermark     *int64
+	NextApplicationWatermark *int64
+	Applications             []SyncDeltaApplicationMetadata
+	Warnings                 []string
+}
+
+type SyncDeltaApplicationMetadata struct {
+	MutationID                     string
+	ApplicationStatus              string
+	ApplicationReason              string
+	CanonicalDocumentVersionBefore int64
+	CanonicalDocumentVersionAfter  *int64
+	CanonicalDocumentHashBefore    string
+	CanonicalDocumentHashAfter     *string
+	ReplayObservationID            *int64
+	CreatedAt                      time.Time
+}
+
 type syncMutationReplayAuthoritativeStagedApplication struct {
 	MutationID        string
 	OperationType     string
@@ -345,6 +377,14 @@ const (
 	SyncMutationReplayAuthoritativeApplyStatusAbortedRecovery                    = "aborted_recovery"
 	SyncMutationReplayAuthoritativeApplyStatusAbortedPolicy                      = "aborted_policy"
 	SyncMutationReplayAuthoritativeApplyStatusIdempotentExitAlreadyApplied       = "idempotent_exit_already_applied"
+	SyncDeltaMetadataReasonUpToDate                                              = "up_to_date"
+	SyncDeltaMetadataReasonDocumentVersionChanged                                = "document_version_changed"
+	SyncDeltaMetadataReasonApplicationsAvailable                                 = "applications_available"
+	SyncDeltaMetadataReasonSnapshotRequiredStaleVersion                          = "snapshot_required_stale_version"
+	SyncDeltaMetadataReasonSnapshotRequiredTooManyApplications                   = "snapshot_required_too_many_applications"
+	syncDeltaMetadataWarningVersionAdvancedWithoutBodyChange                     = "document_version_advanced_without_body_change"
+	syncDeltaMetadataDefaultLimit                                                = 100
+	syncDeltaMetadataMaxLimit                                                    = 1000
 )
 
 var syncMutationReplayApplicationStatusSet = map[string]struct{}{
@@ -908,6 +948,78 @@ func (s *Store) ListSyncMutationReplayApplications(ctx context.Context, ownerKey
 	return applications, nil
 }
 
+func (s *Store) GetSyncDeltaMetadata(ctx context.Context, ownerKey, appID string, options SyncDeltaMetadataOptions) (SyncDeltaMetadata, error) {
+	started := time.Now()
+	if options.SinceVersion < 0 {
+		return SyncDeltaMetadata{}, fmt.Errorf("get sync delta metadata: since version must be non-negative")
+	}
+	if options.ApplicationWatermark != nil && *options.ApplicationWatermark < 0 {
+		return SyncDeltaMetadata{}, fmt.Errorf("get sync delta metadata: application watermark must be non-negative")
+	}
+
+	ctx, cancel := withDBTimeout(ctx)
+	defer cancel()
+
+	doc, err := loadReplayDocumentFromQuerier(ctx, s.db, ownerKey, appID)
+	if err != nil {
+		return SyncDeltaMetadata{}, s.wrapDBError("read_get_sync_delta_metadata_document", started, fmt.Errorf("load sync delta metadata document: %w", err))
+	}
+	applications, err := listSyncMutationReplayApplicationsFromQuerier(ctx, s.db, ownerKey, appID)
+	if err != nil {
+		return SyncDeltaMetadata{}, s.wrapDBError("read_get_sync_delta_metadata_applications", started, fmt.Errorf("load sync delta metadata applications: %w", err))
+	}
+
+	result := SyncDeltaMetadata{
+		AppID:                   appID,
+		CurrentDocumentVersion:  doc.Version,
+		CurrentDocumentHash:     hashReplayObservationBytes(doc.Body),
+		ClientVersion:           options.SinceVersion,
+		RequiresSnapshotRefresh: false,
+		Reason:                  SyncDeltaMetadataReasonUpToDate,
+		ApplicationWatermark:    cloneInt64Pointer(options.ApplicationWatermark),
+		Applications:            []SyncDeltaApplicationMetadata{},
+		Warnings:                []string{},
+	}
+
+	committedApplications := filterCommittedSyncDeltaApplications(applications)
+	result.NextApplicationWatermark = currentSyncDeltaApplicationWatermark(committedApplications)
+
+	if options.SinceVersion > doc.Version {
+		result.RequiresSnapshotRefresh = true
+		result.Reason = SyncDeltaMetadataReasonSnapshotRequiredStaleVersion
+		s.logDBOperation("read_get_sync_delta_metadata", started, nil)
+		return result, nil
+	}
+
+	if options.IncludeApplications {
+		filteredApplications := filterSyncDeltaApplicationsForOptions(committedApplications, options)
+		limit := normalizeSyncDeltaMetadataLimit(options.Limit)
+		if len(filteredApplications) > limit {
+			result.RequiresSnapshotRefresh = true
+			result.Reason = SyncDeltaMetadataReasonSnapshotRequiredTooManyApplications
+			s.logDBOperation("read_get_sync_delta_metadata", started, nil)
+			return result, nil
+		}
+		if len(filteredApplications) > 0 {
+			result.Reason = SyncDeltaMetadataReasonApplicationsAvailable
+			result.Applications = buildSyncDeltaApplicationMetadataSlice(filteredApplications)
+			result.NextApplicationWatermark = cloneInt64Pointer(&filteredApplications[len(filteredApplications)-1].ID)
+			if hasSyncDeltaVersionAdvanceWithoutBodyChange(result.Applications) {
+				result.Warnings = append(result.Warnings, syncDeltaMetadataWarningVersionAdvancedWithoutBodyChange)
+			}
+			s.logDBOperation("read_get_sync_delta_metadata", started, nil)
+			return result, nil
+		}
+	}
+
+	if doc.Version != options.SinceVersion {
+		result.Reason = SyncDeltaMetadataReasonDocumentVersionChanged
+	}
+
+	s.logDBOperation("read_get_sync_delta_metadata", started, nil)
+	return result, nil
+}
+
 func (s *Store) ApplySyncMutationReplayAuthoritativeInternal(ctx context.Context, ownerKey, appID string, observationID int64, options SyncMutationReplayAuthoritativeApplyOptions) (SyncMutationReplayAuthoritativeApplyResult, error) {
 	started := time.Now()
 	result := SyncMutationReplayAuthoritativeApplyResult{
@@ -1395,6 +1507,96 @@ func listSyncMutationReplayApplicationsFromQuerier(ctx context.Context, querier 
 		return nil, err
 	}
 	return applications, nil
+}
+
+func filterCommittedSyncDeltaApplications(applications []SyncMutationReplayApplication) []SyncMutationReplayApplication {
+	filtered := make([]SyncMutationReplayApplication, 0, len(applications))
+	for _, application := range applications {
+		if application.ApplicationStatus != SyncMutationReplayApplicationStatusApplied &&
+			application.ApplicationStatus != SyncMutationReplayApplicationStatusSkipped {
+			continue
+		}
+		filtered = append(filtered, application)
+	}
+	return filtered
+}
+
+func filterSyncDeltaApplicationsForOptions(applications []SyncMutationReplayApplication, options SyncDeltaMetadataOptions) []SyncMutationReplayApplication {
+	filtered := make([]SyncMutationReplayApplication, 0, len(applications))
+	for _, application := range applications {
+		if options.ApplicationWatermark != nil {
+			if application.ID <= *options.ApplicationWatermark {
+				continue
+			}
+			filtered = append(filtered, application)
+			continue
+		}
+		if application.CanonicalDocumentVersionAfter == nil {
+			continue
+		}
+		if *application.CanonicalDocumentVersionAfter <= options.SinceVersion {
+			continue
+		}
+		filtered = append(filtered, application)
+	}
+	return filtered
+}
+
+func buildSyncDeltaApplicationMetadataSlice(applications []SyncMutationReplayApplication) []SyncDeltaApplicationMetadata {
+	metadata := make([]SyncDeltaApplicationMetadata, 0, len(applications))
+	for _, application := range applications {
+		metadata = append(metadata, SyncDeltaApplicationMetadata{
+			MutationID:                     application.MutationID,
+			ApplicationStatus:              application.ApplicationStatus,
+			ApplicationReason:              application.ApplicationReason,
+			CanonicalDocumentVersionBefore: application.CanonicalDocumentVersionBefore,
+			CanonicalDocumentVersionAfter:  cloneInt64Pointer(application.CanonicalDocumentVersionAfter),
+			CanonicalDocumentHashBefore:    application.CanonicalDocumentHashBefore,
+			CanonicalDocumentHashAfter:     cloneStringPointer(application.CanonicalDocumentHashAfter),
+			ReplayObservationID:            cloneInt64Pointer(application.ReplayObservationID),
+			CreatedAt:                      application.CreatedAt,
+		})
+	}
+	return metadata
+}
+
+func currentSyncDeltaApplicationWatermark(applications []SyncMutationReplayApplication) *int64 {
+	if len(applications) == 0 {
+		return nil
+	}
+	maxID := applications[0].ID
+	for _, application := range applications[1:] {
+		if application.ID > maxID {
+			maxID = application.ID
+		}
+	}
+	return &maxID
+}
+
+func normalizeSyncDeltaMetadataLimit(limit int) int {
+	switch {
+	case limit <= 0:
+		return syncDeltaMetadataDefaultLimit
+	case limit > syncDeltaMetadataMaxLimit:
+		return syncDeltaMetadataMaxLimit
+	default:
+		return limit
+	}
+}
+
+func hasSyncDeltaVersionAdvanceWithoutBodyChange(applications []SyncDeltaApplicationMetadata) bool {
+	for _, application := range applications {
+		if application.CanonicalDocumentVersionAfter == nil || application.CanonicalDocumentHashAfter == nil {
+			continue
+		}
+		if *application.CanonicalDocumentVersionAfter == application.CanonicalDocumentVersionBefore {
+			continue
+		}
+		if *application.CanonicalDocumentHashAfter == application.CanonicalDocumentHashBefore {
+			return true
+		}
+	}
+	return false
 }
 
 func getSyncMutationReplayDryRunObservationByIDFromQuerier(ctx context.Context, querier syncMutationReplayQuerier, observationID int64) (SyncMutationReplayDryRunObservation, bool, error) {
@@ -2718,6 +2920,22 @@ func cloneStringSlice(values []string) []string {
 		return []string{}
 	}
 	return append([]string{}, values...)
+}
+
+func cloneInt64Pointer(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneStringPointer(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func cloneReplayWarnings(warnings []string) []string {
