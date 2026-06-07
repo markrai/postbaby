@@ -2003,13 +2003,13 @@ func TestEvaluateSyncMutationReplayAuthoritativeReadinessBlockedByContractGaps(t
 	}
 	assertReplayReadinessBlockers(t, readiness.Blockers, []string{
 		"transaction_boundary",
-		"rollback_behavior",
 	})
 	assertReplayAreaStatus(t, readiness.Areas, "duplicate_endpoint_edge_policy", replayAuthoritativeStatusReady)
 	assertReplayAreaStatus(t, readiness.Areas, "missing_tab_policy", replayAuthoritativeStatusReady)
 	assertReplayAreaStatus(t, readiness.Areas, "document_version_gating", replayAuthoritativeStatusPartiallyReady)
 	assertReplayAreaStatus(t, readiness.Areas, "replay_ordering", replayAuthoritativeStatusPartiallyReady)
 	assertReplayAreaStatus(t, readiness.Areas, "replay_progress_state", replayAuthoritativeStatusPartiallyReady)
+	assertReplayAreaStatus(t, readiness.Areas, "rollback_behavior", replayAuthoritativeStatusPartiallyReady)
 	assertReplayAreaStatus(t, readiness.Areas, "per_tab_item_limit", replayAuthoritativeStatusPartiallyReady)
 	assertReplayAreaStatus(t, readiness.Areas, "per_tab_edge_limit", replayAuthoritativeStatusPartiallyReady)
 	assertReplayAreaStatus(t, readiness.Areas, "text_length_limit_behavior", replayAuthoritativeStatusPartiallyReady)
@@ -2477,6 +2477,383 @@ func TestEvaluateSyncMutationReplayCompareAndApplyPreconditionsMissingObservatio
 	}
 	assertReplayCompareAndApplyStatus(t, invalidScopeEvaluation, SyncMutationReplayCompareAndApplyStatusInvalidObservationScope)
 	assertReplayReadinessBlockers(t, invalidScopeEvaluation.Reasons, []string{"observation_owner_app_mismatch"})
+}
+
+func TestEvaluateSyncMutationReplayRecoveryStateSafeToAttemptTransaction(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	before := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-create", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","position":{"top":"10px","left":"20px"}}`),
+	)
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+
+	beforeReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	beforeApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	if len(beforeApplications) != 0 {
+		t.Fatalf("expected no replay applications before recovery evaluation, got %+v", beforeApplications)
+	}
+
+	recovery, err := docStore.EvaluateSyncMutationReplayRecoveryState(ctx, "owner", "postbaby-web", observation.ID)
+	if err != nil {
+		t.Fatalf("evaluate replay recovery state: %v", err)
+	}
+	assertReplayRecoveryStatus(t, recovery, SyncMutationReplayRecoveryStatusSafeToAttemptTransaction)
+	assertReplayCompareAndApplyStatus(t, recovery.CompareAndApplyEvaluation, SyncMutationReplayCompareAndApplyStatusAllowed)
+	if recovery.MatchingApplicationRowCount != 0 {
+		t.Fatalf("expected no matching application rows, got %+v", recovery)
+	}
+
+	after, err := docStore.GetDocument(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("load document after recovery evaluation: %v", err)
+	}
+	if after.Version != before.Version {
+		t.Fatalf("expected recovery evaluation to preserve version %d, got %d", before.Version, after.Version)
+	}
+	if string(after.Body) != string(before.Body) {
+		t.Fatalf("expected recovery evaluation to preserve body, before=%s after=%s", before.Body, after.Body)
+	}
+
+	afterReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	assertReplayReceiptRowsEqual(t, beforeReceipts, afterReceipts)
+	afterApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	if len(afterApplications) != 0 {
+		t.Fatalf("expected recovery evaluation to avoid inserting application rows, got %+v", afterApplications)
+	}
+}
+
+func TestEvaluateSyncMutationReplayRecoveryStateStaleCanonicalRequiresRedryrun(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+	if _, err := docStore.PutDocument(ctx, "owner", "postbaby-web", buildReplaySnapshotBody(t, []replayTab{
+		{
+			ID:   "tab-1",
+			Name: "Main",
+			Items: []replayItem{
+				{ID: "item-1", Name: "Changed", Color: "yellow", Position: replayPosition{Top: "0px", Left: "0px"}},
+			},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	}), nil); err != nil {
+		t.Fatalf("change canonical document: %v", err)
+	}
+
+	recovery, err := docStore.EvaluateSyncMutationReplayRecoveryState(ctx, "owner", "postbaby-web", observation.ID)
+	if err != nil {
+		t.Fatalf("evaluate replay recovery state: %v", err)
+	}
+	assertReplayRecoveryStatus(t, recovery, SyncMutationReplayRecoveryStatusStaleObservationRequiresRedryrun)
+	assertReplayReadinessBlockers(t, recovery.Reasons, []string{"canonical_document_version_changed", "canonical_document_hash_changed"})
+}
+
+func TestEvaluateSyncMutationReplayRecoveryStateStaleReceiptSetRequiresRedryrun(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-a", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","position":{"top":"10px","left":"20px"}}`),
+	)
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:02Z", "2026-06-01T12:00:02Z",
+		buildReplayReceiptInput("mut-extra", "Node", "item-2", "CreateNode", `{"tabId":"tab-1","name":"Second","position":{"top":"30px","left":"30px"}}`),
+	)
+
+	recovery, err := docStore.EvaluateSyncMutationReplayRecoveryState(ctx, "owner", "postbaby-web", observation.ID)
+	if err != nil {
+		t.Fatalf("evaluate replay recovery state: %v", err)
+	}
+	assertReplayRecoveryStatus(t, recovery, SyncMutationReplayRecoveryStatusStaleObservationRequiresRedryrun)
+	assertReplayReadinessBlockers(t, recovery.Reasons, []string{"receipt_count_changed", "last_mutation_id_changed", "receipt_high_watermark_changed", "preview_hash_changed_since_observation"})
+}
+
+func TestEvaluateSyncMutationReplayRecoveryStateBlockedSnapshotRequiresCleanupForDuplicateItemIDs(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocumentBody(t, docStore, "owner", "postbaby-web", buildReplayRawSnapshotBody(t, `[
+		{
+			"id":"tab-1",
+			"name":"Legacy",
+			"items":[
+				{"id":"dup-item","name":"First","position":{"top":"0px","left":"0px"}},
+				{"id":"dup-item","name":"Second","position":{"top":"10px","left":"10px"}}
+			],
+			"edges":[]
+		}
+	]`))
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+
+	recovery, err := docStore.EvaluateSyncMutationReplayRecoveryState(ctx, "owner", "postbaby-web", observation.ID)
+	if err != nil {
+		t.Fatalf("evaluate replay recovery state: %v", err)
+	}
+	assertReplayRecoveryStatus(t, recovery, SyncMutationReplayRecoveryStatusBlockedSnapshotRequiresCleanup)
+	assertReplayReadinessBlockers(t, recovery.Reasons, []string{"snapshot_contains_duplicate_item_ids"})
+}
+
+func TestEvaluateSyncMutationReplayRecoveryStateBlockedSnapshotRequiresCleanupForDuplicateEdgeIDs(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocumentBody(t, docStore, "owner", "postbaby-web", buildReplayRawSnapshotBody(t, `[
+		{
+			"id":"tab-1",
+			"name":"Legacy",
+			"items":[
+				{"id":"item-1","name":"First","position":{"top":"0px","left":"0px"}},
+				{"id":"item-2","name":"Second","position":{"top":"10px","left":"10px"}}
+			],
+			"edges":[
+				{"id":"dup-edge","fromItemId":"item-1","toItemId":"item-2","kind":"line"},
+				{"id":"dup-edge","fromItemId":"item-2","toItemId":"item-1","kind":"arrow"}
+			]
+		}
+	]`))
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+
+	recovery, err := docStore.EvaluateSyncMutationReplayRecoveryState(ctx, "owner", "postbaby-web", observation.ID)
+	if err != nil {
+		t.Fatalf("evaluate replay recovery state: %v", err)
+	}
+	assertReplayRecoveryStatus(t, recovery, SyncMutationReplayRecoveryStatusBlockedSnapshotRequiresCleanup)
+	assertReplayReadinessBlockers(t, recovery.Reasons, []string{"snapshot_contains_duplicate_edge_ids"})
+}
+
+func TestEvaluateSyncMutationReplayRecoveryStateAlreadyAppliedRequiresIdempotentExit(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	before := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-create", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","position":{"top":"10px","left":"20px"}}`),
+	)
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+	beforeApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	if len(beforeApplications) != 0 {
+		t.Fatalf("expected no replay applications before inert insert, got %+v", beforeApplications)
+	}
+	if _, err := docStore.RecordSyncMutationReplayApplicationInert(ctx, "owner", "postbaby-web", SyncMutationReplayApplicationInput{
+		MutationID:                     "mut-create",
+		ApplicationStatus:              SyncMutationReplayApplicationStatusApplied,
+		ApplicationReason:              "policy_allowed",
+		CanonicalDocumentVersionBefore: before.Version,
+		CanonicalDocumentHashBefore:    hashReplayObservationBytes(before.Body),
+		ReplayObservationID:            &observation.ID,
+	}); err != nil {
+		t.Fatalf("record inert replay application: %v", err)
+	}
+	applicationsBeforeRecovery := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+
+	recovery, err := docStore.EvaluateSyncMutationReplayRecoveryState(ctx, "owner", "postbaby-web", observation.ID)
+	if err != nil {
+		t.Fatalf("evaluate replay recovery state: %v", err)
+	}
+	assertReplayRecoveryStatus(t, recovery, SyncMutationReplayRecoveryStatusAlreadyAppliedRequiresIdempotentExit)
+	assertReplayReadinessBlockers(t, recovery.Reasons, []string{"application_rows_exist_for_candidate_receipts"})
+	if recovery.MatchingApplicationRowCount != 1 {
+		t.Fatalf("expected one matching application row, got %+v", recovery)
+	}
+	applicationsAfterRecovery := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	assertReplayApplicationsEqual(t, applicationsBeforeRecovery, applicationsAfterRecovery)
+}
+
+func TestEvaluateSyncMutationReplayRecoveryStatePartialApplicationRows(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	before := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-a", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","position":{"top":"10px","left":"20px"}}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:01Z", "2026-06-01T12:00:01Z",
+		buildReplayReceiptInput("mut-b", "Node", "item-2", "CreateNode", `{"tabId":"tab-1","name":"Second","position":{"top":"20px","left":"30px"}}`),
+	)
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+	if _, err := docStore.RecordSyncMutationReplayApplicationInert(ctx, "owner", "postbaby-web", SyncMutationReplayApplicationInput{
+		MutationID:                     "mut-a",
+		ApplicationStatus:              SyncMutationReplayApplicationStatusApplied,
+		ApplicationReason:              "policy_allowed",
+		CanonicalDocumentVersionBefore: before.Version,
+		CanonicalDocumentHashBefore:    hashReplayObservationBytes(before.Body),
+		ReplayObservationID:            &observation.ID,
+	}); err != nil {
+		t.Fatalf("record partial inert replay application: %v", err)
+	}
+
+	recovery, err := docStore.EvaluateSyncMutationReplayRecoveryState(ctx, "owner", "postbaby-web", observation.ID)
+	if err != nil {
+		t.Fatalf("evaluate replay recovery state: %v", err)
+	}
+	assertReplayRecoveryStatus(t, recovery, SyncMutationReplayRecoveryStatusPartialApplicationRows)
+	assertReplayReadinessBlockers(t, recovery.Reasons, []string{"application_rows_exist_for_subset_of_candidate_receipts"})
+	if recovery.MatchingApplicationRowCount != 1 {
+		t.Fatalf("expected one matching application row, got %+v", recovery)
+	}
+}
+
+func TestEvaluateSyncMutationReplayRecoveryStateApplicationRowsWithoutMatchingCanonicalState(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	before := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-create", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","position":{"top":"10px","left":"20px"}}`),
+	)
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+	mismatchedVersionAfter := before.Version + 9
+	mismatchedHashAfter := "definitely-not-current-hash"
+	if _, err := docStore.RecordSyncMutationReplayApplicationInert(ctx, "owner", "postbaby-web", SyncMutationReplayApplicationInput{
+		MutationID:                     "mut-create",
+		ApplicationStatus:              SyncMutationReplayApplicationStatusApplied,
+		ApplicationReason:              "policy_allowed",
+		CanonicalDocumentVersionBefore: before.Version,
+		CanonicalDocumentHashBefore:    hashReplayObservationBytes(before.Body),
+		CanonicalDocumentVersionAfter:  &mismatchedVersionAfter,
+		CanonicalDocumentHashAfter:     &mismatchedHashAfter,
+		ReplayObservationID:            &observation.ID,
+	}); err != nil {
+		t.Fatalf("record mismatched inert replay application: %v", err)
+	}
+
+	recovery, err := docStore.EvaluateSyncMutationReplayRecoveryState(ctx, "owner", "postbaby-web", observation.ID)
+	if err != nil {
+		t.Fatalf("evaluate replay recovery state: %v", err)
+	}
+	assertReplayRecoveryStatus(t, recovery, SyncMutationReplayRecoveryStatusApplicationRowsWithoutMatchingCanonicalState)
+	assertReplayReadinessBlockers(t, recovery.Reasons, []string{
+		"application_rows_reference_mismatched_canonical_version_after",
+		"application_rows_reference_mismatched_canonical_hash_after",
+	})
+}
+
+func TestEvaluateSyncMutationReplayRecoveryStateCanonicalStateWithoutApplicationRows(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-create", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","position":{"top":"10px","left":"20px"}}`),
+	)
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+	dryRun, err := docStore.ReplaySyncMutationReceiptsDryRun(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("build dry-run preview: %v", err)
+	}
+	setReplayDocumentBodyWithoutVersionChangeForTest(t, docStore, "owner", "postbaby-web", dryRun.PreviewBody)
+
+	recovery, err := docStore.EvaluateSyncMutationReplayRecoveryState(ctx, "owner", "postbaby-web", observation.ID)
+	if err != nil {
+		t.Fatalf("evaluate replay recovery state: %v", err)
+	}
+	assertReplayRecoveryStatus(t, recovery, SyncMutationReplayRecoveryStatusCanonicalStateWithoutApplicationRows)
+	assertReplayReadinessBlockers(t, recovery.Reasons, []string{"current_canonical_matches_observed_preview_without_application_rows"})
 }
 
 func TestMapSyncMutationReplayPolicyStatusToApplicationStatus(t *testing.T) {
@@ -3499,6 +3876,14 @@ func assertReplayCompareAndApplyStatus(t *testing.T, evaluation SyncMutationRepl
 	}
 }
 
+func assertReplayRecoveryStatus(t *testing.T, evaluation SyncMutationReplayRecoveryEvaluation, expectedStatus string) {
+	t.Helper()
+
+	if evaluation.Status != expectedStatus {
+		t.Fatalf("expected replay recovery status %q, got %+v", expectedStatus, evaluation)
+	}
+}
+
 func assertReplayAreaStatus(t *testing.T, areas []SyncMutationReplayAuthoritativeAreaReadiness, area, expectedStatus string) {
 	t.Helper()
 
@@ -3531,6 +3916,31 @@ func assertReplayWarnings(t *testing.T, actual, expected []string) {
 	for warning, count := range remaining {
 		if count != 0 {
 			t.Fatalf("expected readiness warnings %v, got mismatch for %q in %+v", expected, warning, actual)
+		}
+	}
+}
+
+func assertReplayApplicationsEqual(t *testing.T, expected, actual []SyncMutationReplayApplication) {
+	t.Helper()
+
+	if len(actual) != len(expected) {
+		t.Fatalf("expected %d replay application rows, got %d", len(expected), len(actual))
+	}
+
+	for index := range expected {
+		if actual[index].ID != expected[index].ID ||
+			actual[index].OwnerKey != expected[index].OwnerKey ||
+			actual[index].AppID != expected[index].AppID ||
+			actual[index].MutationID != expected[index].MutationID ||
+			actual[index].ApplicationStatus != expected[index].ApplicationStatus ||
+			actual[index].ApplicationReason != expected[index].ApplicationReason ||
+			actual[index].CanonicalDocumentVersionBefore != expected[index].CanonicalDocumentVersionBefore ||
+			actual[index].CanonicalDocumentHashBefore != expected[index].CanonicalDocumentHashBefore ||
+			!equalInt64Pointers(actual[index].CanonicalDocumentVersionAfter, expected[index].CanonicalDocumentVersionAfter) ||
+			!equalStringPointers(actual[index].CanonicalDocumentHashAfter, expected[index].CanonicalDocumentHashAfter) ||
+			!equalInt64Pointers(actual[index].ReplayObservationID, expected[index].ReplayObservationID) ||
+			!actual[index].CreatedAt.Equal(expected[index].CreatedAt) {
+			t.Fatalf("replay application row %d mismatch: expected=%+v actual=%+v", index, expected[index], actual[index])
 		}
 	}
 }
@@ -3734,6 +4144,13 @@ func assertReplayReceiptRowsEqual(t *testing.T, expected, actual []SyncMutationR
 }
 
 func equalInt64Pointers(left, right *int64) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func equalStringPointers(left, right *string) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
 	}
