@@ -7,6 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +26,13 @@ const (
 	dbStartupTimeout                  = 10 * time.Second
 	slowDBOperationThreshold          = 750 * time.Millisecond
 	SyncMutationReceiptStatusAccepted = "accepted"
+	replayTabsSnapshotKey             = "tabs"
+	replayCoordMin                    = -100000
+	replayCoordMax                    = 100000
+	replayItemWidthMin                = 120
+	replayItemWidthMax                = 600
+	replayItemHeightMin               = 80
+	replayItemHeightMax               = 600
 )
 
 type VersionConflictError struct {
@@ -56,6 +66,63 @@ type DocumentMeta struct {
 	AppID     string
 	Version   int64
 	UpdatedAt time.Time
+}
+
+type SyncMutationDryRunResult struct {
+	SourceVersion     int64
+	ConsideredCount   int
+	AppliedCount      int
+	SkippedCount      int
+	WarningCount      int
+	OrderedMutationID []string
+	PreviewBody       json.RawMessage
+	MutationResults   []SyncMutationDryRunMutationResult
+	Warnings          []SyncMutationDryRunWarning
+}
+
+type SyncMutationDryRunMutationResult struct {
+	MutationID    string
+	OperationType string
+	Outcome       string
+}
+
+type SyncMutationDryRunWarning struct {
+	MutationID string
+	Code       string
+	Message    string
+}
+
+type replaySnapshot map[string]string
+
+type replayTab struct {
+	ID          string       `json:"id"`
+	Name        string       `json:"name"`
+	Items       []replayItem `json:"items"`
+	ColorIndex  int          `json:"colorIndex"`
+	GridSetting string       `json:"gridSetting"`
+	Edges       []replayEdge `json:"edges"`
+}
+
+type replayItem struct {
+	ID       string         `json:"id"`
+	Name     string         `json:"name"`
+	Color    string         `json:"color"`
+	Position replayPosition `json:"position"`
+	Shape    string         `json:"shape,omitempty"`
+	Width    *float64       `json:"width,omitempty"`
+	Height   *float64       `json:"height,omitempty"`
+}
+
+type replayPosition struct {
+	Top  string `json:"top"`
+	Left string `json:"left"`
+}
+
+type replayEdge struct {
+	ID         string `json:"id"`
+	FromItemID string `json:"fromItemId"`
+	ToItemID   string `json:"toItemId"`
+	Kind       string `json:"kind,omitempty"`
 }
 
 func Open(dbPath string) (*Store, error) {
@@ -422,6 +489,584 @@ func (s *Store) CountSyncMutationReceipts(ctx context.Context, ownerKey, appID s
 
 	s.logDBOperation("count_sync_mutation_receipts", started, nil)
 	return count, nil
+}
+
+func (s *Store) ReplaySyncMutationReceiptsDryRun(ctx context.Context, ownerKey, appID string) (SyncMutationDryRunResult, error) {
+	doc, err := s.GetDocument(ctx, ownerKey, appID)
+	if err != nil {
+		return SyncMutationDryRunResult{}, err
+	}
+
+	receipts, err := s.listAcceptedSyncMutationReceipts(ctx, ownerKey, appID)
+	if err != nil {
+		return SyncMutationDryRunResult{}, err
+	}
+
+	snapshot, err := decodeReplaySnapshot(doc.Body)
+	if err != nil {
+		return SyncMutationDryRunResult{}, err
+	}
+
+	tabs, err := decodeReplayTabs(snapshot[replayTabsSnapshotKey])
+	if err != nil {
+		return SyncMutationDryRunResult{}, err
+	}
+
+	result := SyncMutationDryRunResult{
+		SourceVersion:     doc.Version,
+		ConsideredCount:   len(receipts),
+		OrderedMutationID: make([]string, 0, len(receipts)),
+		MutationResults:   make([]SyncMutationDryRunMutationResult, 0, len(receipts)),
+		Warnings:          make([]SyncMutationDryRunWarning, 0),
+	}
+
+	for _, receipt := range receipts {
+		result.OrderedMutationID = append(result.OrderedMutationID, receipt.MutationID)
+		outcome := "skipped"
+
+		switch receipt.OperationType {
+		case "CreateNode":
+			if replayCreateNode(&tabs, receipt, &result) {
+				outcome = "applied"
+			}
+		case "UpdateNode":
+			if replayUpdateNode(tabs, receipt, &result) {
+				outcome = "applied"
+			}
+		case "MoveNode":
+			if replayMoveNode(tabs, receipt, &result) {
+				outcome = "applied"
+			}
+		case "DeleteNode":
+			if replayDeleteNode(tabs, receipt, &result) {
+				outcome = "applied"
+			}
+		case "CreateEdge":
+			if replayCreateEdge(tabs, receipt, &result) {
+				outcome = "applied"
+			}
+		case "DeleteEdge":
+			if replayDeleteEdge(tabs, receipt, &result) {
+				outcome = "applied"
+			}
+		default:
+			recordReplayWarning(&result, receipt, "unknown_operation", "dry-run replay skipped an unknown operation type")
+		}
+
+		if outcome == "applied" {
+			result.AppliedCount++
+		} else {
+			result.SkippedCount++
+		}
+
+		result.MutationResults = append(result.MutationResults, SyncMutationDryRunMutationResult{
+			MutationID:    receipt.MutationID,
+			OperationType: receipt.OperationType,
+			Outcome:       outcome,
+		})
+	}
+
+	previewBody, err := encodeReplaySnapshot(snapshot, tabs)
+	if err != nil {
+		return SyncMutationDryRunResult{}, err
+	}
+
+	result.PreviewBody = previewBody
+	result.WarningCount = len(result.Warnings)
+	return result, nil
+}
+
+func (s *Store) listAcceptedSyncMutationReceipts(ctx context.Context, ownerKey, appID string) ([]SyncMutationReceipt, error) {
+	started := time.Now()
+	ctx, cancel := withDBTimeout(ctx)
+	defer cancel()
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT
+			id,
+			owner_key,
+			app_id,
+			mutation_id,
+			client_id,
+			device_id,
+			protocol,
+			entity_type,
+			entity_id,
+			operation_type,
+			payload_json,
+			base_revision,
+			status,
+			created_at,
+			accepted_at
+		FROM sync_mutation_receipts
+		WHERE owner_key = ? AND app_id = ? AND status = ?
+		ORDER BY accepted_at ASC, created_at ASC, mutation_id ASC`,
+		ownerKey,
+		appID,
+		SyncMutationReceiptStatusAccepted,
+	)
+	if err != nil {
+		return nil, s.wrapDBError("read_list_sync_mutation_receipts", started, fmt.Errorf("list sync mutation receipts: %w", err))
+	}
+	defer rows.Close()
+
+	receipts := make([]SyncMutationReceipt, 0)
+	for rows.Next() {
+		receipt, scanErr := scanSyncMutationReceipt(rows)
+		if scanErr != nil {
+			return nil, s.wrapDBError("read_list_sync_mutation_receipts_scan", started, scanErr)
+		}
+		receipts = append(receipts, receipt)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, s.wrapDBError("read_list_sync_mutation_receipts_rows", started, fmt.Errorf("iterate sync mutation receipts: %w", err))
+	}
+
+	s.logDBOperation("read_list_sync_mutation_receipts", started, nil)
+	return receipts, nil
+}
+
+func decodeReplaySnapshot(body json.RawMessage) (replaySnapshot, error) {
+	var snapshot replaySnapshot
+	if err := json.Unmarshal(body, &snapshot); err != nil {
+		return nil, fmt.Errorf("decode replay snapshot: %w", err)
+	}
+	if snapshot == nil {
+		return nil, fmt.Errorf("decode replay snapshot: empty snapshot")
+	}
+	return snapshot, nil
+}
+
+func decodeReplayTabs(value string) ([]replayTab, error) {
+	if strings.TrimSpace(value) == "" {
+		return []replayTab{}, nil
+	}
+
+	var tabs []replayTab
+	if err := json.Unmarshal([]byte(value), &tabs); err != nil {
+		return nil, fmt.Errorf("decode replay tabs: %w", err)
+	}
+	for index := range tabs {
+		if tabs[index].Items == nil {
+			tabs[index].Items = []replayItem{}
+		}
+		if tabs[index].Edges == nil {
+			tabs[index].Edges = []replayEdge{}
+		}
+	}
+	return tabs, nil
+}
+
+func encodeReplaySnapshot(snapshot replaySnapshot, tabs []replayTab) (json.RawMessage, error) {
+	tabsJSON, err := json.Marshal(tabs)
+	if err != nil {
+		return nil, fmt.Errorf("encode replay tabs: %w", err)
+	}
+
+	clone := make(replaySnapshot, len(snapshot))
+	for key, value := range snapshot {
+		clone[key] = value
+	}
+	clone[replayTabsSnapshotKey] = string(tabsJSON)
+
+	encoded, err := json.Marshal(clone)
+	if err != nil {
+		return nil, fmt.Errorf("encode replay snapshot: %w", err)
+	}
+	return json.RawMessage(encoded), nil
+}
+
+func replayCreateNode(tabs *[]replayTab, receipt SyncMutationReceipt, result *SyncMutationDryRunResult) bool {
+	var payload struct {
+		TabID    string         `json:"tabId"`
+		Name     string         `json:"name"`
+		Color    string         `json:"color"`
+		Position replayPosition `json:"position"`
+		Shape    string         `json:"shape"`
+		Width    *float64       `json:"width"`
+		Height   *float64       `json:"height"`
+	}
+	if err := json.Unmarshal(receipt.Payload, &payload); err != nil {
+		recordReplayWarning(result, receipt, "invalid_payload", "dry-run replay could not decode create-node payload")
+		return false
+	}
+
+	tab := findReplayTab(*tabs, payload.TabID)
+	if tab == nil {
+		recordReplayWarning(result, receipt, "missing_tab", "dry-run replay skipped create-node because the tab is missing")
+		return false
+	}
+	if findReplayItemAcrossTabs(*tabs, receipt.EntityID) != nil {
+		return false
+	}
+
+	position, ok := normalizeReplayPosition(payload.Position)
+	if !ok {
+		recordReplayWarning(result, receipt, "invalid_position", "dry-run replay skipped create-node because the position is invalid")
+		return false
+	}
+
+	item := replayItem{
+		ID:       receipt.EntityID,
+		Name:     payload.Name,
+		Color:    payload.Color,
+		Position: position,
+	}
+	if payload.Shape != "" {
+		item.Shape = normalizeReplayShape(payload.Shape)
+	}
+	if payload.Width != nil {
+		item.Width = float64Pointer(float64(normalizeReplayDimension(*payload.Width, replayItemWidthMin, replayItemWidthMax)))
+	}
+	if payload.Height != nil {
+		item.Height = float64Pointer(float64(normalizeReplayDimension(*payload.Height, replayItemHeightMin, replayItemHeightMax)))
+	}
+
+	tab.Items = append(tab.Items, item)
+	return true
+}
+
+func replayUpdateNode(tabs []replayTab, receipt SyncMutationReceipt, result *SyncMutationDryRunResult) bool {
+	var payload struct {
+		TabID   string                     `json:"tabId"`
+		Changes map[string]json.RawMessage `json:"changes"`
+	}
+	if err := json.Unmarshal(receipt.Payload, &payload); err != nil {
+		recordReplayWarning(result, receipt, "invalid_payload", "dry-run replay could not decode update-node payload")
+		return false
+	}
+
+	tab := findReplayTab(tabs, payload.TabID)
+	if tab == nil {
+		recordReplayWarning(result, receipt, "missing_tab", "dry-run replay skipped update-node because the tab is missing")
+		return false
+	}
+
+	item := findReplayItem(tab, receipt.EntityID)
+	if item == nil {
+		recordReplayWarning(result, receipt, "skipped_missing_node", "dry-run replay skipped update-node because the node is missing")
+		return false
+	}
+
+	applied := false
+	for field, rawValue := range payload.Changes {
+		switch field {
+		case "name", "text":
+			var value string
+			if err := json.Unmarshal(rawValue, &value); err != nil {
+				recordReplayWarning(result, receipt, "invalid_update_value", "dry-run replay skipped a node text update because the value is invalid")
+				continue
+			}
+			item.Name = value
+			applied = true
+		case "color":
+			var value string
+			if err := json.Unmarshal(rawValue, &value); err != nil {
+				recordReplayWarning(result, receipt, "invalid_update_value", "dry-run replay skipped a node color update because the value is invalid")
+				continue
+			}
+			item.Color = value
+			applied = true
+		case "shape":
+			var value string
+			if err := json.Unmarshal(rawValue, &value); err != nil {
+				recordReplayWarning(result, receipt, "invalid_update_value", "dry-run replay skipped a node shape update because the value is invalid")
+				continue
+			}
+			item.Shape = normalizeReplayShape(value)
+			applied = true
+		case "width":
+			value, ok := decodeReplayNumber(rawValue)
+			if !ok {
+				recordReplayWarning(result, receipt, "invalid_update_value", "dry-run replay skipped a node width update because the value is invalid")
+				continue
+			}
+			item.Width = float64Pointer(float64(normalizeReplayDimension(value, replayItemWidthMin, replayItemWidthMax)))
+			applied = true
+		case "height":
+			value, ok := decodeReplayNumber(rawValue)
+			if !ok {
+				recordReplayWarning(result, receipt, "invalid_update_value", "dry-run replay skipped a node height update because the value is invalid")
+				continue
+			}
+			item.Height = float64Pointer(float64(normalizeReplayDimension(value, replayItemHeightMin, replayItemHeightMax)))
+			applied = true
+		default:
+			recordReplayWarning(result, receipt, "unknown_update_field", "dry-run replay skipped an unknown update-node field")
+		}
+	}
+
+	return applied
+}
+
+func replayMoveNode(tabs []replayTab, receipt SyncMutationReceipt, result *SyncMutationDryRunResult) bool {
+	var payload struct {
+		TabID    string         `json:"tabId"`
+		Position replayPosition `json:"position"`
+	}
+	if err := json.Unmarshal(receipt.Payload, &payload); err != nil {
+		recordReplayWarning(result, receipt, "invalid_payload", "dry-run replay could not decode move-node payload")
+		return false
+	}
+
+	tab := findReplayTab(tabs, payload.TabID)
+	if tab == nil {
+		recordReplayWarning(result, receipt, "missing_tab", "dry-run replay skipped move-node because the tab is missing")
+		return false
+	}
+
+	item := findReplayItem(tab, receipt.EntityID)
+	if item == nil {
+		recordReplayWarning(result, receipt, "skipped_missing_node", "dry-run replay skipped move-node because the node is missing")
+		return false
+	}
+
+	position, ok := normalizeReplayPosition(payload.Position)
+	if !ok {
+		recordReplayWarning(result, receipt, "invalid_position", "dry-run replay skipped move-node because the position is invalid")
+		return false
+	}
+
+	item.Position = position
+	return true
+}
+
+func replayDeleteNode(tabs []replayTab, receipt SyncMutationReceipt, result *SyncMutationDryRunResult) bool {
+	var payload struct {
+		TabID string `json:"tabId"`
+	}
+	if err := json.Unmarshal(receipt.Payload, &payload); err != nil {
+		recordReplayWarning(result, receipt, "invalid_payload", "dry-run replay could not decode delete-node payload")
+		return false
+	}
+
+	tab := findReplayTab(tabs, payload.TabID)
+	if tab == nil {
+		recordReplayWarning(result, receipt, "missing_tab", "dry-run replay skipped delete-node because the tab is missing")
+		return false
+	}
+
+	itemIndex := findReplayItemIndex(tab, receipt.EntityID)
+	if itemIndex < 0 {
+		return false
+	}
+
+	tab.Items = append(tab.Items[:itemIndex], tab.Items[itemIndex+1:]...)
+
+	filteredEdges := tab.Edges[:0]
+	for _, edge := range tab.Edges {
+		if edge.FromItemID == receipt.EntityID || edge.ToItemID == receipt.EntityID {
+			continue
+		}
+		filteredEdges = append(filteredEdges, edge)
+	}
+	tab.Edges = filteredEdges
+	return true
+}
+
+func replayCreateEdge(tabs []replayTab, receipt SyncMutationReceipt, result *SyncMutationDryRunResult) bool {
+	var payload struct {
+		TabID      string `json:"tabId"`
+		FromItemID string `json:"fromItemId"`
+		ToItemID   string `json:"toItemId"`
+		Kind       string `json:"kind"`
+	}
+	if err := json.Unmarshal(receipt.Payload, &payload); err != nil {
+		recordReplayWarning(result, receipt, "invalid_payload", "dry-run replay could not decode create-edge payload")
+		return false
+	}
+
+	tab := findReplayTab(tabs, payload.TabID)
+	if tab == nil {
+		recordReplayWarning(result, receipt, "missing_tab", "dry-run replay skipped create-edge because the tab is missing")
+		return false
+	}
+	if findReplayEdgeAcrossTabs(tabs, receipt.EntityID) != nil {
+		return false
+	}
+	if findReplayItem(tab, payload.FromItemID) == nil || findReplayItem(tab, payload.ToItemID) == nil {
+		recordReplayWarning(result, receipt, "skipped_missing_endpoint", "dry-run replay skipped create-edge because an endpoint is missing")
+		return false
+	}
+
+	tab.Edges = append(tab.Edges, replayEdge{
+		ID:         receipt.EntityID,
+		FromItemID: payload.FromItemID,
+		ToItemID:   payload.ToItemID,
+		Kind:       normalizeReplayEdgeKind(payload.Kind),
+	})
+	return true
+}
+
+func replayDeleteEdge(tabs []replayTab, receipt SyncMutationReceipt, result *SyncMutationDryRunResult) bool {
+	var payload struct {
+		TabID string `json:"tabId"`
+	}
+	if err := json.Unmarshal(receipt.Payload, &payload); err != nil {
+		recordReplayWarning(result, receipt, "invalid_payload", "dry-run replay could not decode delete-edge payload")
+		return false
+	}
+
+	tab := findReplayTab(tabs, payload.TabID)
+	if tab == nil {
+		recordReplayWarning(result, receipt, "missing_tab", "dry-run replay skipped delete-edge because the tab is missing")
+		return false
+	}
+
+	edgeIndex := findReplayEdgeIndex(tab, receipt.EntityID)
+	if edgeIndex < 0 {
+		return false
+	}
+
+	tab.Edges = append(tab.Edges[:edgeIndex], tab.Edges[edgeIndex+1:]...)
+	return true
+}
+
+func recordReplayWarning(result *SyncMutationDryRunResult, receipt SyncMutationReceipt, code, message string) {
+	result.Warnings = append(result.Warnings, SyncMutationDryRunWarning{
+		MutationID: receipt.MutationID,
+		Code:       code,
+		Message:    message,
+	})
+}
+
+func findReplayTab(tabs []replayTab, tabID string) *replayTab {
+	for index := range tabs {
+		if tabs[index].ID == tabID {
+			return &tabs[index]
+		}
+	}
+	return nil
+}
+
+func findReplayItem(tab *replayTab, itemID string) *replayItem {
+	for index := range tab.Items {
+		if tab.Items[index].ID == itemID {
+			return &tab.Items[index]
+		}
+	}
+	return nil
+}
+
+func findReplayItemIndex(tab *replayTab, itemID string) int {
+	for index := range tab.Items {
+		if tab.Items[index].ID == itemID {
+			return index
+		}
+	}
+	return -1
+}
+
+func findReplayItemAcrossTabs(tabs []replayTab, itemID string) *replayItem {
+	for index := range tabs {
+		item := findReplayItem(&tabs[index], itemID)
+		if item != nil {
+			return item
+		}
+	}
+	return nil
+}
+
+func findReplayEdgeIndex(tab *replayTab, edgeID string) int {
+	for index := range tab.Edges {
+		if tab.Edges[index].ID == edgeID {
+			return index
+		}
+	}
+	return -1
+}
+
+func findReplayEdgeAcrossTabs(tabs []replayTab, edgeID string) *replayEdge {
+	for index := range tabs {
+		for edgeIndex := range tabs[index].Edges {
+			if tabs[index].Edges[edgeIndex].ID == edgeID {
+				return &tabs[index].Edges[edgeIndex]
+			}
+		}
+	}
+	return nil
+}
+
+func normalizeReplayPosition(position replayPosition) (replayPosition, bool) {
+	top, ok := parseReplayCoordinate(position.Top)
+	if !ok {
+		return replayPosition{}, false
+	}
+	left, ok := parseReplayCoordinate(position.Left)
+	if !ok {
+		return replayPosition{}, false
+	}
+	return replayPosition{
+		Top:  formatReplayCoordinate(top),
+		Left: formatReplayCoordinate(left),
+	}, true
+}
+
+func parseReplayCoordinate(value string) (int64, bool) {
+	trimmed := strings.TrimSpace(value)
+	if !strings.HasSuffix(trimmed, "px") {
+		return 0, false
+	}
+
+	numericValue, err := strconv.ParseFloat(strings.TrimSuffix(trimmed, "px"), 64)
+	if err != nil {
+		return 0, false
+	}
+
+	rounded := int64(math.Round(numericValue))
+	if rounded < replayCoordMin {
+		rounded = replayCoordMin
+	}
+	if rounded > replayCoordMax {
+		rounded = replayCoordMax
+	}
+	return rounded, true
+}
+
+func formatReplayCoordinate(value int64) string {
+	return strconv.FormatInt(value, 10) + "px"
+}
+
+func normalizeReplayDimension(value float64, minValue, maxValue int) int {
+	rounded := int(math.Round(value))
+	if rounded < minValue {
+		return minValue
+	}
+	if rounded > maxValue {
+		return maxValue
+	}
+	return rounded
+}
+
+func normalizeReplayShape(value string) string {
+	normalized := strings.TrimSpace(value)
+	if normalized == "" {
+		return ""
+	}
+	if slices.Contains([]string{"default", "circle", "square", "triangle", "diamond", "upsideDownTriangle", "hexagon", "oval"}, normalized) {
+		return normalized
+	}
+	return "default"
+}
+
+func normalizeReplayEdgeKind(value string) string {
+	if strings.TrimSpace(value) == "arrow" {
+		return "arrow"
+	}
+	return "line"
+}
+
+func decodeReplayNumber(value json.RawMessage) (float64, bool) {
+	var number float64
+	if err := json.Unmarshal(value, &number); err != nil {
+		return 0, false
+	}
+	return number, true
+}
+
+func float64Pointer(value float64) *float64 {
+	return &value
 }
 
 func (s *Store) init(ctx context.Context) error {
