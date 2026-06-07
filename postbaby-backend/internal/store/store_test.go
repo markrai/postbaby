@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1585,6 +1586,335 @@ func TestRecordSyncMutationReplayDryRunObservationMalformedLegacySnapshotIsStabl
 	}
 }
 
+func TestReplaySyncMutationReceiptsDryRunDoesNotEnforcePerTabItemLimit(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	tab := replayTab{
+		ID:          "tab-1",
+		Name:        "Main",
+		Items:       make([]replayItem, 0, 500),
+		ColorIndex:  0,
+		GridSetting: "none",
+		Edges:       []replayEdge{},
+	}
+	for index := 0; index < 500; index += 1 {
+		tab.Items = append(tab.Items, replayItem{
+			ID:       fmt.Sprintf("seed-item-%d", index),
+			Name:     fmt.Sprintf("Seed %d", index),
+			Color:    "yellow",
+			Position: replayPosition{Top: fmt.Sprintf("%dpx", index), Left: fmt.Sprintf("%dpx", index)},
+		})
+	}
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{tab})
+
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-over-limit-item", "Node", "item-over-limit", "CreateNode", `{"tabId":"tab-1","name":"Over Limit","color":"blue","position":{"top":"10px","left":"20px"}}`),
+	)
+
+	result, err := docStore.ReplaySyncMutationReceiptsDryRun(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("dry-run replay: %v", err)
+	}
+	if result.AppliedCount != 1 || result.SkippedCount != 0 || result.WarningCount != 0 {
+		t.Fatalf("unexpected dry-run counts: %+v", result)
+	}
+
+	tabs := extractReplayPreviewTabs(t, result.PreviewBody)
+	replayTab := findReplayTab(tabs, "tab-1")
+	if replayTab == nil {
+		t.Fatal("expected preview tab")
+	}
+	if len(replayTab.Items) != 501 {
+		t.Fatalf("expected dry-run replay to exceed the frontend item limit, got %d items", len(replayTab.Items))
+	}
+}
+
+func TestReplaySyncMutationReceiptsDryRunDoesNotEnforcePerTabEdgeLimit(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	tab := buildReplayTabWithEdgeLimitState()
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{tab})
+
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-over-limit-edge", "Edge", "edge-over-limit", "CreateEdge", `{"tabId":"tab-1","fromItemId":"seed-item-2000","toItemId":"seed-item-2001","kind":"line"}`),
+	)
+
+	result, err := docStore.ReplaySyncMutationReceiptsDryRun(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("dry-run replay: %v", err)
+	}
+	if result.AppliedCount != 1 || result.SkippedCount != 0 || result.WarningCount != 0 {
+		t.Fatalf("unexpected dry-run counts: %+v", result)
+	}
+
+	tabs := extractReplayPreviewTabs(t, result.PreviewBody)
+	replayTab := findReplayTab(tabs, "tab-1")
+	if replayTab == nil {
+		t.Fatal("expected preview tab")
+	}
+	if len(replayTab.Edges) != 2001 {
+		t.Fatalf("expected dry-run replay to exceed the frontend edge limit, got %d edges", len(replayTab.Edges))
+	}
+}
+
+func TestReplaySyncMutationReceiptsDryRunPreservesOversizeText(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:   "tab-1",
+			Name: "Main",
+			Items: []replayItem{
+				{ID: "item-1", Name: "First", Color: "yellow", Position: replayPosition{Top: "0px", Left: "0px"}},
+			},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+
+	oversizeText := strings.Repeat("x", 4001)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-oversize-text", "Node", "item-1", "UpdateNode", `{"tabId":"tab-1","changes":{"name":"`+oversizeText+`"}}`),
+	)
+
+	result, err := docStore.ReplaySyncMutationReceiptsDryRun(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("dry-run replay: %v", err)
+	}
+	if result.AppliedCount != 1 || result.WarningCount != 0 {
+		t.Fatalf("expected oversize text to be preserved by dry-run replay, got %+v", result)
+	}
+
+	tabs := extractReplayPreviewTabs(t, result.PreviewBody)
+	replayTab := findReplayTab(tabs, "tab-1")
+	if replayTab == nil {
+		t.Fatal("expected preview tab")
+	}
+	item := findReplayItem(replayTab, "item-1")
+	if item == nil {
+		t.Fatal("expected preview item")
+	}
+	if len(item.Name) != len(oversizeText) {
+		t.Fatalf("expected oversize text length %d, got %d", len(oversizeText), len(item.Name))
+	}
+}
+
+func TestReplaySyncMutationReceiptsDryRunDoesNotDeriveFixedRatioShapeHeight(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	initialWidth := 170.0
+	initialHeight := 170.0
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:   "tab-1",
+			Name: "Main",
+			Items: []replayItem{
+				{
+					ID:       "item-1",
+					Name:     "Circle",
+					Color:    "yellow",
+					Position: replayPosition{Top: "0px", Left: "0px"},
+					Shape:    "circle",
+					Width:    &initialWidth,
+					Height:   &initialHeight,
+				},
+			},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-circle-width-only", "Node", "item-1", "UpdateNode", `{"tabId":"tab-1","changes":{"width":220}}`),
+	)
+
+	result, err := docStore.ReplaySyncMutationReceiptsDryRun(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("dry-run replay: %v", err)
+	}
+	if result.AppliedCount != 1 || result.WarningCount != 0 {
+		t.Fatalf("unexpected dry-run counts: %+v", result)
+	}
+
+	tabs := extractReplayPreviewTabs(t, result.PreviewBody)
+	replayTab := findReplayTab(tabs, "tab-1")
+	if replayTab == nil {
+		t.Fatal("expected preview tab")
+	}
+	item := findReplayItem(replayTab, "item-1")
+	if item == nil || item.Width == nil || item.Height == nil {
+		t.Fatalf("expected preview item with stored dimensions, got %+v", item)
+	}
+	if *item.Width != 220 {
+		t.Fatalf("expected updated width 220, got %v", *item.Width)
+	}
+	if *item.Height != 170 {
+		t.Fatalf("expected dry-run replay to preserve stored height 170 instead of deriving a fixed-ratio height, got %v", *item.Height)
+	}
+}
+
+func TestEvaluateSyncMutationReplayAuthoritativeReadinessBlockedByContractGaps(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-create", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","color":"yellow","position":{"top":"10px","left":"20px"}}`),
+	)
+
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+	currentDoc, err := docStore.GetDocument(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("load current document: %v", err)
+	}
+	currentReceipts := loadAcceptedReplayReceiptsForTest(t, docStore, "owner", "postbaby-web")
+
+	readiness, err := EvaluateSyncMutationReplayAuthoritativeReadiness(observation, currentDoc, currentReceipts)
+	if err != nil {
+		t.Fatalf("evaluate readiness: %v", err)
+	}
+	if readiness.Ready {
+		t.Fatalf("expected authoritative replay readiness to stay blocked, got %+v", readiness)
+	}
+	assertReplayReadinessBlockers(t, readiness.Blockers, []string{
+		"document_version_gating",
+		"transaction_boundary",
+		"receipt_status_model",
+		"replay_progress_state",
+		"rollback_behavior",
+		"conflict_behavior",
+		"malformed_legacy_snapshot_policy",
+		"duplicate_item_id_policy",
+		"duplicate_edge_id_policy",
+		"per_tab_item_limit",
+		"per_tab_edge_limit",
+		"item_width_height_semantics",
+		"shape_specific_sizing_behavior",
+		"text_length_limit_behavior",
+		"server_side_validation_requirements",
+		"applied_receipt_tracking",
+	})
+	assertReplayAreaStatus(t, readiness.Areas, "duplicate_endpoint_edge_policy", replayAuthoritativeStatusReady)
+	assertReplayAreaStatus(t, readiness.Areas, "missing_tab_policy", replayAuthoritativeStatusReady)
+	assertReplayAreaStatus(t, readiness.Areas, "replay_ordering", replayAuthoritativeStatusPartiallyReady)
+	assertReplayAreaStatus(t, readiness.Areas, "delta_pull", replayAuthoritativeStatusIntentionallyDeferred)
+}
+
+func TestEvaluateSyncMutationReplayAuthoritativeReadinessBlocksChangedCanonicalDocument(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+
+	_, err = docStore.PutDocument(ctx, "owner", "postbaby-web", buildReplaySnapshotBody(t, []replayTab{
+		{
+			ID:   "tab-1",
+			Name: "Main",
+			Items: []replayItem{
+				{ID: "item-1", Name: "Changed", Color: "yellow", Position: replayPosition{Top: "0px", Left: "0px"}},
+			},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	}), nil)
+	if err != nil {
+		t.Fatalf("change canonical document: %v", err)
+	}
+
+	currentDoc, err := docStore.GetDocument(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("load current document: %v", err)
+	}
+	currentReceipts := loadAcceptedReplayReceiptsForTest(t, docStore, "owner", "postbaby-web")
+
+	readiness, err := EvaluateSyncMutationReplayAuthoritativeReadiness(observation, currentDoc, currentReceipts)
+	if err != nil {
+		t.Fatalf("evaluate readiness: %v", err)
+	}
+	assertReplayReadinessBlockers(t, readiness.Blockers, []string{"canonical_snapshot_changed_since_observation"})
+}
+
+func TestEvaluateSyncMutationReplayAuthoritativeReadinessWarnsOnMalformedLegacyAndDuplicateIDs(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocumentBody(t, docStore, "owner", "postbaby-web", buildReplayRawSnapshotBody(t, `[
+		{
+			"id":"tab-1",
+			"name":"Legacy",
+			"items":[
+				{"id":"dup-item","name":"First","position":{"top":"0px","left":"0px"}},
+				{"id":"dup-item","name":"Second","position":{"top":"10px","left":"10px"}}
+			],
+			"edges":[
+				{"id":"dup-edge","fromItemId":"dup-item","toItemId":"ghost","kind":"line"},
+				{"id":"dup-edge","fromItemId":"dup-item","toItemId":"dup-item","kind":"arrow"}
+			]
+		}
+	]`))
+
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+	currentDoc, err := docStore.GetDocument(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("load current document: %v", err)
+	}
+	currentReceipts := loadAcceptedReplayReceiptsForTest(t, docStore, "owner", "postbaby-web")
+
+	readiness, err := EvaluateSyncMutationReplayAuthoritativeReadiness(observation, currentDoc, currentReceipts)
+	if err != nil {
+		t.Fatalf("evaluate readiness: %v", err)
+	}
+	assertReplayWarnings(t, readiness.Warnings, []string{
+		"snapshot_contains_duplicate_item_ids",
+		"snapshot_contains_duplicate_edge_ids",
+		"snapshot_contains_malformed_legacy_edges",
+	})
+}
+
 func TestCreateInitialUserAndLookup(t *testing.T) {
 	t.Parallel()
 
@@ -2181,6 +2511,37 @@ func countReplayItemsByID(tab *replayTab, itemID string) int {
 	return count
 }
 
+func buildReplayTabWithEdgeLimitState() replayTab {
+	tab := replayTab{
+		ID:          "tab-1",
+		Name:        "Main",
+		Items:       make([]replayItem, 0, 2002),
+		ColorIndex:  0,
+		GridSetting: "none",
+		Edges:       make([]replayEdge, 0, 2000),
+	}
+
+	for index := 0; index <= 2001; index += 1 {
+		tab.Items = append(tab.Items, replayItem{
+			ID:       fmt.Sprintf("seed-item-%d", index),
+			Name:     fmt.Sprintf("Seed %d", index),
+			Color:    "yellow",
+			Position: replayPosition{Top: fmt.Sprintf("%dpx", index), Left: fmt.Sprintf("%dpx", index)},
+		})
+	}
+
+	for index := 0; index < 2000; index += 1 {
+		tab.Edges = append(tab.Edges, replayEdge{
+			ID:         fmt.Sprintf("seed-edge-%d", index),
+			FromItemID: fmt.Sprintf("seed-item-%d", index),
+			ToItemID:   fmt.Sprintf("seed-item-%d", index+1),
+			Kind:       "line",
+		})
+	}
+
+	return tab
+}
+
 func countReplayEdgesByID(tab *replayTab, edgeID string) int {
 	count := 0
 	for _, edge := range tab.Edges {
@@ -2210,6 +2571,59 @@ func assertReplayWarningCodes(t *testing.T, warnings []SyncMutationDryRunWarning
 	for code, count := range remaining {
 		if count != 0 {
 			t.Fatalf("expected warning code counts %v, got mismatch for %q in %+v", expectedCodes, code, warnings)
+		}
+	}
+}
+
+func assertReplayReadinessBlockers(t *testing.T, actual, expected []string) {
+	t.Helper()
+
+	for _, blocker := range expected {
+		found := false
+		for _, actualBlocker := range actual {
+			if actualBlocker == blocker {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected blocker %q in %+v", blocker, actual)
+		}
+	}
+}
+
+func assertReplayAreaStatus(t *testing.T, areas []SyncMutationReplayAuthoritativeAreaReadiness, area, expectedStatus string) {
+	t.Helper()
+
+	for _, areaReadiness := range areas {
+		if areaReadiness.Area == area {
+			if areaReadiness.Status != expectedStatus {
+				t.Fatalf("expected area %q to have status %q, got %+v", area, expectedStatus, areaReadiness)
+			}
+			return
+		}
+	}
+
+	t.Fatalf("expected readiness area %q in %+v", area, areas)
+}
+
+func assertReplayWarnings(t *testing.T, actual, expected []string) {
+	t.Helper()
+
+	if len(actual) != len(expected) {
+		t.Fatalf("expected %d readiness warnings, got %d: %+v", len(expected), len(actual), actual)
+	}
+
+	remaining := make(map[string]int, len(expected))
+	for _, warning := range expected {
+		remaining[warning]++
+	}
+	for _, warning := range actual {
+		remaining[warning]--
+	}
+	for warning, count := range remaining {
+		if count != 0 {
+			t.Fatalf("expected readiness warnings %v, got mismatch for %q in %+v", expected, warning, actual)
 		}
 	}
 }
@@ -2321,6 +2735,16 @@ func loadAllReplayReceiptRowsForTest(t *testing.T, docStore *Store, ownerKey, ap
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate replay receipt rows: %v", err)
+	}
+	return receipts
+}
+
+func loadAcceptedReplayReceiptsForTest(t *testing.T, docStore *Store, ownerKey, appID string) []SyncMutationReceipt {
+	t.Helper()
+
+	receipts, err := docStore.listAcceptedSyncMutationReceipts(context.Background(), ownerKey, appID)
+	if err != nil {
+		t.Fatalf("load accepted replay receipts: %v", err)
 	}
 	return receipts
 }

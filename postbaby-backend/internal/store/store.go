@@ -132,6 +132,19 @@ type SyncMutationReplayDryRunObservation struct {
 	CreatedAt                        time.Time
 }
 
+type SyncMutationReplayAuthoritativeReadiness struct {
+	Ready    bool
+	Areas    []SyncMutationReplayAuthoritativeAreaReadiness
+	Blockers []string
+	Warnings []string
+}
+
+type SyncMutationReplayAuthoritativeAreaReadiness struct {
+	Area   string
+	Status string
+	Detail string
+}
+
 type replaySnapshot map[string]string
 
 type replayTab struct {
@@ -164,6 +177,13 @@ type replayEdge struct {
 	ToItemID   string `json:"toItemId"`
 	Kind       string `json:"kind,omitempty"`
 }
+
+const (
+	replayAuthoritativeStatusReady                 = "ready"
+	replayAuthoritativeStatusPartiallyReady        = "partially_ready"
+	replayAuthoritativeStatusBlocked               = "blocked"
+	replayAuthoritativeStatusIntentionallyDeferred = "intentionally_deferred"
+)
 
 func Open(dbPath string) (*Store, error) {
 	openStarted := time.Now()
@@ -718,6 +738,63 @@ func buildSyncMutationReplayDryRunObservation(doc Document, receipts []SyncMutat
 	}
 }
 
+func EvaluateSyncMutationReplayAuthoritativeReadiness(observation SyncMutationReplayDryRunObservation, currentDoc Document, currentReceipts []SyncMutationReceipt) (SyncMutationReplayAuthoritativeReadiness, error) {
+	snapshot, err := decodeReplaySnapshot(currentDoc.Body)
+	if err != nil {
+		return SyncMutationReplayAuthoritativeReadiness{}, err
+	}
+
+	tabs, err := decodeReplayTabs(snapshot[replayTabsSnapshotKey])
+	if err != nil {
+		return SyncMutationReplayAuthoritativeReadiness{}, err
+	}
+
+	readiness := SyncMutationReplayAuthoritativeReadiness{
+		Areas: make([]SyncMutationReplayAuthoritativeAreaReadiness, 0, 24),
+	}
+
+	appendReplayAuthoritativeArea(&readiness, "document_version_gating", replayAuthoritativeStatusBlocked, "No compare-and-apply gate exists to prove the canonical snapshot stayed unchanged between dry-run observation and any future authoritative write.")
+	appendReplayAuthoritativeArea(&readiness, "receipt_selection", replayAuthoritativeStatusPartiallyReady, "Accepted receipts are scoped by owner and app, but there is no authoritative applied-receipt boundary yet.")
+	appendReplayAuthoritativeArea(&readiness, "replay_ordering", replayAuthoritativeStatusPartiallyReady, "Deterministic ordering exists by accepted_at, created_at, and mutation_id, but it is not a full causal merge model.")
+	appendReplayAuthoritativeArea(&readiness, "transaction_boundary", replayAuthoritativeStatusBlocked, "There is no atomic transaction that would validate, apply, persist, and track receipt application together.")
+	appendReplayAuthoritativeArea(&readiness, "canonical_snapshot_observation", replayAuthoritativeStatusPartiallyReady, "Dry-run observations capture version and hash, but they are observational only and do not gate canonical writes.")
+	appendReplayAuthoritativeArea(&readiness, "receipt_status_model", replayAuthoritativeStatusBlocked, "Receipts have accepted status only. There is no separate authoritative applied, skipped, or rolled-back state.")
+	appendReplayAuthoritativeArea(&readiness, "replay_progress_state", replayAuthoritativeStatusBlocked, "Dry-run observation markers are not authoritative replay checkpoints.")
+	appendReplayAuthoritativeArea(&readiness, "rollback_behavior", replayAuthoritativeStatusBlocked, "Failure recovery for a future canonical replay transaction is not yet defined.")
+	appendReplayAuthoritativeArea(&readiness, "idempotency", replayAuthoritativeStatusPartiallyReady, "Receipt acceptance is idempotent, but authoritative application idempotency is not implemented.")
+	appendReplayAuthoritativeArea(&readiness, "conflict_behavior", replayAuthoritativeStatusBlocked, "The server does not yet define how to abort or retry when the canonical snapshot or accepted receipt set changes after observation.")
+	appendReplayAuthoritativeArea(&readiness, "malformed_legacy_snapshot_policy", replayAuthoritativeStatusBlocked, "Dry-run preserves malformed legacy data deterministically, but authoritative scrub-or-preserve policy is unresolved.")
+	appendReplayAuthoritativeArea(&readiness, "duplicate_item_id_policy", replayAuthoritativeStatusBlocked, "Dry-run uses deterministic first-match behavior, but authoritative duplicate item-id handling is unresolved.")
+	appendReplayAuthoritativeArea(&readiness, "duplicate_edge_id_policy", replayAuthoritativeStatusBlocked, "Dry-run uses deterministic first-match behavior, but authoritative duplicate edge-id handling is unresolved.")
+	appendReplayAuthoritativeArea(&readiness, "duplicate_endpoint_edge_policy", replayAuthoritativeStatusReady, "Dry-run matches the frontend rule that duplicate endpoint pairs are rejected in either direction regardless of edge kind.")
+	appendReplayAuthoritativeArea(&readiness, "self_edge_policy", replayAuthoritativeStatusPartiallyReady, "Replay rejects new self-edges, but legacy self-edge cleanup policy is unresolved.")
+	appendReplayAuthoritativeArea(&readiness, "missing_endpoint_policy", replayAuthoritativeStatusPartiallyReady, "Replay rejects new edges with missing endpoints, but malformed stored edge cleanup policy is unresolved.")
+	appendReplayAuthoritativeArea(&readiness, "missing_tab_policy", replayAuthoritativeStatusReady, "Replay never creates tabs implicitly and reports missing_tab deterministically.")
+	appendReplayAuthoritativeArea(&readiness, "per_tab_item_limit", replayAuthoritativeStatusBlocked, "Dry-run does not enforce the frontend item limit server-side.")
+	appendReplayAuthoritativeArea(&readiness, "per_tab_edge_limit", replayAuthoritativeStatusBlocked, "Dry-run does not enforce the frontend edge limit server-side.")
+	appendReplayAuthoritativeArea(&readiness, "item_width_height_semantics", replayAuthoritativeStatusBlocked, "Dry-run clamps numeric width and height values but does not settle authoritative size semantics across shapes.")
+	appendReplayAuthoritativeArea(&readiness, "shape_specific_sizing_behavior", replayAuthoritativeStatusBlocked, "Frontend width-reference sizing for fixed-ratio shapes is not fully mirrored by Go replay.")
+	appendReplayAuthoritativeArea(&readiness, "text_length_limit_behavior", replayAuthoritativeStatusBlocked, "Dry-run does not enforce the frontend text length limit.")
+	appendReplayAuthoritativeArea(&readiness, "unknown_fields", replayAuthoritativeStatusPartiallyReady, "Dry-run skips unknown update fields deterministically, but the authoritative validation contract is not finalized.")
+	appendReplayAuthoritativeArea(&readiness, "unknown_operations", replayAuthoritativeStatusPartiallyReady, "Receipt acceptance already rejects unsupported operations, but authoritative validation and recovery behavior are not finalized.")
+	appendReplayAuthoritativeArea(&readiness, "server_side_validation_requirements", replayAuthoritativeStatusBlocked, "Authoritative replay validation requirements are not yet locked down.")
+	appendReplayAuthoritativeArea(&readiness, "applied_receipt_tracking", replayAuthoritativeStatusBlocked, "There is no authoritative applied-receipt tracking separate from dry-run observations.")
+	appendReplayAuthoritativeArea(&readiness, "delta_pull", replayAuthoritativeStatusIntentionallyDeferred, "Revisioned delta pull remains out of scope until authoritative replay and applied-state tracking exist.")
+
+	addReplayAuthoritativeBlockerIf(&readiness, currentDoc.Version != observation.CanonicalDocumentVersionObserved, "canonical_snapshot_changed_since_observation")
+	addReplayAuthoritativeBlockerIf(&readiness, hashReplayObservationBytes(currentDoc.Body) != observation.CanonicalDocumentHashObserved, "canonical_snapshot_changed_since_observation")
+
+	receiptCount, firstMutationID, lastMutationID, highWatermark := summarizeReplayReceiptOrdering(currentReceipts)
+	addReplayAuthoritativeBlockerIf(&readiness, receiptCount != observation.ReceiptCountConsidered, "receipt_set_changed_since_observation")
+	addReplayAuthoritativeBlockerIf(&readiness, firstMutationID != observation.FirstOrderedMutationID, "receipt_set_changed_since_observation")
+	addReplayAuthoritativeBlockerIf(&readiness, lastMutationID != observation.LastOrderedMutationID, "receipt_set_changed_since_observation")
+	addReplayAuthoritativeBlockerIf(&readiness, highWatermark != observation.OrderedReceiptHighWatermark, "receipt_set_changed_since_observation")
+
+	readiness.Warnings = collectReplayAuthoritativeSnapshotWarnings(tabs)
+	readiness.Ready = len(readiness.Blockers) == 0
+	return readiness, nil
+}
+
 func (s *Store) listAcceptedSyncMutationReceipts(ctx context.Context, ownerKey, appID string) ([]SyncMutationReceipt, error) {
 	started := time.Now()
 	ctx, cancel := withDBTimeout(ctx)
@@ -1257,9 +1334,90 @@ func buildReplayReceiptHighWatermark(receipts []SyncMutationReceipt) string {
 	return lastReceipt.AcceptedAt.UTC().Format(time.RFC3339) + "|" + lastReceipt.CreatedAt.UTC().Format(time.RFC3339) + "|" + lastReceipt.MutationID
 }
 
+func summarizeReplayReceiptOrdering(receipts []SyncMutationReceipt) (int, string, string, string) {
+	count := len(receipts)
+	if count == 0 {
+		return 0, "", "", ""
+	}
+	return count, receipts[0].MutationID, receipts[count-1].MutationID, buildReplayReceiptHighWatermark(receipts)
+}
+
 func hashReplayObservationBytes(value []byte) string {
 	sum := sha256.Sum256(value)
 	return hex.EncodeToString(sum[:])
+}
+
+func appendReplayAuthoritativeArea(readiness *SyncMutationReplayAuthoritativeReadiness, area, status, detail string) {
+	readiness.Areas = append(readiness.Areas, SyncMutationReplayAuthoritativeAreaReadiness{
+		Area:   area,
+		Status: status,
+		Detail: detail,
+	})
+	if status == replayAuthoritativeStatusBlocked {
+		addReplayAuthoritativeBlocker(readiness, area)
+	}
+}
+
+func addReplayAuthoritativeBlockerIf(readiness *SyncMutationReplayAuthoritativeReadiness, condition bool, blocker string) {
+	if condition {
+		addReplayAuthoritativeBlocker(readiness, blocker)
+	}
+}
+
+func addReplayAuthoritativeBlocker(readiness *SyncMutationReplayAuthoritativeReadiness, blocker string) {
+	for _, existing := range readiness.Blockers {
+		if existing == blocker {
+			return
+		}
+	}
+	readiness.Blockers = append(readiness.Blockers, blocker)
+}
+
+func collectReplayAuthoritativeSnapshotWarnings(tabs []replayTab) []string {
+	duplicateItemIDs := false
+	duplicateEdgeIDs := false
+	malformedLegacyEdges := false
+
+	for _, tab := range tabs {
+		seenItemIDs := make(map[string]struct{}, len(tab.Items))
+		for _, item := range tab.Items {
+			if _, exists := seenItemIDs[item.ID]; exists {
+				duplicateItemIDs = true
+			} else {
+				seenItemIDs[item.ID] = struct{}{}
+			}
+		}
+
+		seenEdgeIDs := make(map[string]struct{}, len(tab.Edges))
+		for _, edge := range tab.Edges {
+			if _, exists := seenEdgeIDs[edge.ID]; exists {
+				duplicateEdgeIDs = true
+			} else {
+				seenEdgeIDs[edge.ID] = struct{}{}
+			}
+
+			if strings.TrimSpace(edge.ID) == "" ||
+				strings.TrimSpace(edge.FromItemID) == "" ||
+				strings.TrimSpace(edge.ToItemID) == "" ||
+				edge.FromItemID == edge.ToItemID ||
+				findReplayItem(&tab, edge.FromItemID) == nil ||
+				findReplayItem(&tab, edge.ToItemID) == nil {
+				malformedLegacyEdges = true
+			}
+		}
+	}
+
+	warnings := make([]string, 0, 3)
+	if duplicateItemIDs {
+		warnings = append(warnings, "snapshot_contains_duplicate_item_ids")
+	}
+	if duplicateEdgeIDs {
+		warnings = append(warnings, "snapshot_contains_duplicate_edge_ids")
+	}
+	if malformedLegacyEdges {
+		warnings = append(warnings, "snapshot_contains_malformed_legacy_edges")
+	}
+	return warnings
 }
 
 func normalizeReplayShape(value string) string {
