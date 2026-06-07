@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -111,6 +113,23 @@ type SyncMutationDryRunWarning struct {
 	MutationID string
 	Code       string
 	Message    string
+}
+
+type SyncMutationReplayDryRunObservation struct {
+	ID                               int64
+	OwnerKey                         string
+	AppID                            string
+	CanonicalDocumentVersionObserved int64
+	CanonicalDocumentHashObserved    string
+	ReceiptCountConsidered           int
+	FirstOrderedMutationID           string
+	LastOrderedMutationID            string
+	OrderedReceiptHighWatermark      string
+	AppliedCount                     int
+	SkippedCount                     int
+	WarningCount                     int
+	PreviewHash                      string
+	CreatedAt                        time.Time
 }
 
 type replaySnapshot map[string]string
@@ -513,16 +532,93 @@ func (s *Store) CountSyncMutationReceipts(ctx context.Context, ownerKey, appID s
 }
 
 func (s *Store) ReplaySyncMutationReceiptsDryRun(ctx context.Context, ownerKey, appID string) (SyncMutationDryRunResult, error) {
-	doc, err := s.GetDocument(ctx, ownerKey, appID)
+	doc, receipts, err := s.loadSyncMutationReplayDryRunInputs(ctx, ownerKey, appID)
 	if err != nil {
 		return SyncMutationDryRunResult{}, err
+	}
+
+	return buildSyncMutationDryRunResult(doc, receipts)
+}
+
+func (s *Store) RecordSyncMutationReplayDryRunObservation(ctx context.Context, ownerKey, appID string) (SyncMutationReplayDryRunObservation, error) {
+	started := time.Now()
+
+	doc, receipts, err := s.loadSyncMutationReplayDryRunInputs(ctx, ownerKey, appID)
+	if err != nil {
+		return SyncMutationReplayDryRunObservation{}, err
+	}
+
+	result, err := buildSyncMutationDryRunResult(doc, receipts)
+	if err != nil {
+		return SyncMutationReplayDryRunObservation{}, err
+	}
+
+	createdAt := time.Now().UTC()
+	observation := buildSyncMutationReplayDryRunObservation(doc, receipts, result, createdAt)
+
+	dbCtx, cancel := withDBTimeout(ctx)
+	defer cancel()
+
+	insertResult, err := s.db.ExecContext(
+		dbCtx,
+		`INSERT INTO sync_mutation_replay_dry_run_observations (
+			owner_key,
+			app_id,
+			canonical_document_version_observed,
+			canonical_document_hash_observed,
+			receipt_count_considered,
+			first_ordered_mutation_id,
+			last_ordered_mutation_id,
+			ordered_receipt_high_watermark,
+			applied_count,
+			skipped_count,
+			warning_count,
+			preview_hash,
+			created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		observation.OwnerKey,
+		observation.AppID,
+		observation.CanonicalDocumentVersionObserved,
+		observation.CanonicalDocumentHashObserved,
+		observation.ReceiptCountConsidered,
+		observation.FirstOrderedMutationID,
+		observation.LastOrderedMutationID,
+		observation.OrderedReceiptHighWatermark,
+		observation.AppliedCount,
+		observation.SkippedCount,
+		observation.WarningCount,
+		observation.PreviewHash,
+		observation.CreatedAt.Format(time.RFC3339),
+	)
+	if err != nil {
+		return SyncMutationReplayDryRunObservation{}, s.wrapDBError("write_record_sync_mutation_replay_dry_run_observation", started, fmt.Errorf("insert sync mutation replay dry-run observation: %w", err))
+	}
+
+	observationID, err := insertResult.LastInsertId()
+	if err != nil {
+		return SyncMutationReplayDryRunObservation{}, s.wrapDBError("write_record_sync_mutation_replay_dry_run_observation_last_insert_id", started, fmt.Errorf("read sync mutation replay dry-run observation id: %w", err))
+	}
+	observation.ID = observationID
+
+	s.logDBOperation("write_record_sync_mutation_replay_dry_run_observation", started, nil)
+	return observation, nil
+}
+
+func (s *Store) loadSyncMutationReplayDryRunInputs(ctx context.Context, ownerKey, appID string) (Document, []SyncMutationReceipt, error) {
+	doc, err := s.GetDocument(ctx, ownerKey, appID)
+	if err != nil {
+		return Document{}, nil, err
 	}
 
 	receipts, err := s.listAcceptedSyncMutationReceipts(ctx, ownerKey, appID)
 	if err != nil {
-		return SyncMutationDryRunResult{}, err
+		return Document{}, nil, err
 	}
 
+	return doc, receipts, nil
+}
+
+func buildSyncMutationDryRunResult(doc Document, receipts []SyncMutationReceipt) (SyncMutationDryRunResult, error) {
 	snapshot, err := decodeReplaySnapshot(doc.Body)
 	if err != nil {
 		return SyncMutationDryRunResult{}, err
@@ -595,6 +691,31 @@ func (s *Store) ReplaySyncMutationReceiptsDryRun(ctx context.Context, ownerKey, 
 	result.PreviewBody = previewBody
 	result.WarningCount = len(result.Warnings)
 	return result, nil
+}
+
+func buildSyncMutationReplayDryRunObservation(doc Document, receipts []SyncMutationReceipt, result SyncMutationDryRunResult, createdAt time.Time) SyncMutationReplayDryRunObservation {
+	firstOrderedMutationID := ""
+	lastOrderedMutationID := ""
+	if len(result.OrderedMutationID) > 0 {
+		firstOrderedMutationID = result.OrderedMutationID[0]
+		lastOrderedMutationID = result.OrderedMutationID[len(result.OrderedMutationID)-1]
+	}
+
+	return SyncMutationReplayDryRunObservation{
+		OwnerKey:                         doc.OwnerKey,
+		AppID:                            doc.AppID,
+		CanonicalDocumentVersionObserved: doc.Version,
+		CanonicalDocumentHashObserved:    hashReplayObservationBytes(doc.Body),
+		ReceiptCountConsidered:           result.ConsideredCount,
+		FirstOrderedMutationID:           firstOrderedMutationID,
+		LastOrderedMutationID:            lastOrderedMutationID,
+		OrderedReceiptHighWatermark:      buildReplayReceiptHighWatermark(receipts),
+		AppliedCount:                     result.AppliedCount,
+		SkippedCount:                     result.SkippedCount,
+		WarningCount:                     result.WarningCount,
+		PreviewHash:                      hashReplayObservationBytes(result.PreviewBody),
+		CreatedAt:                        createdAt.UTC(),
+	}
 }
 
 func (s *Store) listAcceptedSyncMutationReceipts(ctx context.Context, ownerKey, appID string) ([]SyncMutationReceipt, error) {
@@ -1127,6 +1248,20 @@ func normalizeReplayDimension(value float64, minValue, maxValue int) int {
 	return rounded
 }
 
+func buildReplayReceiptHighWatermark(receipts []SyncMutationReceipt) string {
+	if len(receipts) == 0 {
+		return ""
+	}
+
+	lastReceipt := receipts[len(receipts)-1]
+	return lastReceipt.AcceptedAt.UTC().Format(time.RFC3339) + "|" + lastReceipt.CreatedAt.UTC().Format(time.RFC3339) + "|" + lastReceipt.MutationID
+}
+
+func hashReplayObservationBytes(value []byte) string {
+	sum := sha256.Sum256(value)
+	return hex.EncodeToString(sum[:])
+}
+
 func normalizeReplayShape(value string) string {
 	normalized := normalizeReplayIdentifier(value)
 	if normalized == "" {
@@ -1304,6 +1439,29 @@ func (s *Store) init(ctx context.Context) error {
 
 	_, err = s.db.ExecContext(
 		ctx,
+		`CREATE TABLE IF NOT EXISTS sync_mutation_replay_dry_run_observations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			owner_key TEXT NOT NULL,
+			app_id TEXT NOT NULL,
+			canonical_document_version_observed INTEGER NOT NULL,
+			canonical_document_hash_observed TEXT NOT NULL,
+			receipt_count_considered INTEGER NOT NULL,
+			first_ordered_mutation_id TEXT NOT NULL,
+			last_ordered_mutation_id TEXT NOT NULL,
+			ordered_receipt_high_watermark TEXT NOT NULL,
+			applied_count INTEGER NOT NULL,
+			skipped_count INTEGER NOT NULL,
+			warning_count INTEGER NOT NULL,
+			preview_hash TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		)`,
+	)
+	if err != nil {
+		return s.wrapDBError("db_init_create_sync_mutation_replay_dry_run_observations", started, fmt.Errorf("create sync_mutation_replay_dry_run_observations table: %w", err))
+	}
+
+	_, err = s.db.ExecContext(
+		ctx,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
 	)
 	if err != nil {
@@ -1340,6 +1498,14 @@ func (s *Store) init(ctx context.Context) error {
 	)
 	if err != nil {
 		return s.wrapDBError("db_init_create_sync_mutation_receipts_owner_app_created_idx", started, fmt.Errorf("create sync_mutation_receipts owner/app/created_at index: %w", err))
+	}
+
+	_, err = s.db.ExecContext(
+		ctx,
+		`CREATE INDEX IF NOT EXISTS idx_sync_mutation_replay_dry_run_observations_owner_app_created_at ON sync_mutation_replay_dry_run_observations(owner_key, app_id, created_at)`,
+	)
+	if err != nil {
+		return s.wrapDBError("db_init_create_sync_mutation_replay_dry_run_observations_owner_app_created_idx", started, fmt.Errorf("create sync_mutation_replay_dry_run_observations owner/app/created_at index: %w", err))
 	}
 
 	s.logDBOperation("db_init_create_schema", started, nil)

@@ -15,7 +15,7 @@ func TestOpenCreatesSchema(t *testing.T) {
 
 	docStore := openTestStore(t)
 
-	for _, tableName := range []string{"documents", "users", "sessions", "account_entitlements", "billing_customers", "billing_subscriptions", "sync_mutation_receipts"} {
+	for _, tableName := range []string{"documents", "users", "sessions", "account_entitlements", "billing_customers", "billing_subscriptions", "sync_mutation_receipts", "sync_mutation_replay_dry_run_observations"} {
 		var found string
 		err := docStore.db.QueryRowContext(
 			context.Background(),
@@ -1274,6 +1274,317 @@ func TestReplaySyncMutationReceiptsDryRunCreateEdgeDuplicateEndpointSemantics(t 
 	}
 }
 
+func TestRecordSyncMutationReplayDryRunObservationStoresObservationOnly(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	before := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-create", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","color":"yellow","position":{"top":"10px","left":"20px"}}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:01Z", "2026-06-01T12:00:01Z",
+		buildReplayReceiptInput("mut-self-edge", "Edge", "edge-1", "CreateEdge", `{"tabId":"tab-1","fromItemId":"item-1","toItemId":"item-1","kind":"line"}`),
+	)
+
+	beforeReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record dry-run observation: %v", err)
+	}
+
+	if observation.OwnerKey != "owner" || observation.AppID != "postbaby-web" {
+		t.Fatalf("unexpected observation scope: %+v", observation)
+	}
+	if observation.CanonicalDocumentVersionObserved != before.Version {
+		t.Fatalf("expected observed version %d, got %d", before.Version, observation.CanonicalDocumentVersionObserved)
+	}
+	if observation.ReceiptCountConsidered != 2 || observation.AppliedCount != 1 || observation.SkippedCount != 1 || observation.WarningCount != 1 {
+		t.Fatalf("unexpected observation counts: %+v", observation)
+	}
+	if observation.FirstOrderedMutationID != "mut-create" || observation.LastOrderedMutationID != "mut-self-edge" {
+		t.Fatalf("unexpected ordered mutation ids: %+v", observation)
+	}
+	if observation.OrderedReceiptHighWatermark != "2026-06-01T12:00:01Z|2026-06-01T12:00:01Z|mut-self-edge" {
+		t.Fatalf("unexpected receipt high watermark: %q", observation.OrderedReceiptHighWatermark)
+	}
+	if observation.CanonicalDocumentHashObserved == "" || observation.PreviewHash == "" {
+		t.Fatalf("expected non-empty hashes, got %+v", observation)
+	}
+
+	storedObservation := loadReplayDryRunObservationForTest(t, docStore, observation.ID)
+	if storedObservation.OwnerKey != observation.OwnerKey ||
+		storedObservation.AppID != observation.AppID ||
+		storedObservation.CanonicalDocumentVersionObserved != observation.CanonicalDocumentVersionObserved ||
+		storedObservation.CanonicalDocumentHashObserved != observation.CanonicalDocumentHashObserved ||
+		storedObservation.ReceiptCountConsidered != observation.ReceiptCountConsidered ||
+		storedObservation.FirstOrderedMutationID != observation.FirstOrderedMutationID ||
+		storedObservation.LastOrderedMutationID != observation.LastOrderedMutationID ||
+		storedObservation.OrderedReceiptHighWatermark != observation.OrderedReceiptHighWatermark ||
+		storedObservation.AppliedCount != observation.AppliedCount ||
+		storedObservation.SkippedCount != observation.SkippedCount ||
+		storedObservation.WarningCount != observation.WarningCount ||
+		storedObservation.PreviewHash != observation.PreviewHash {
+		t.Fatalf("stored observation mismatch: stored=%+v returned=%+v", storedObservation, observation)
+	}
+
+	after, err := docStore.GetDocument(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("load document after observation: %v", err)
+	}
+	if after.Version != before.Version {
+		t.Fatalf("expected dry-run observation to preserve version %d, got %d", before.Version, after.Version)
+	}
+	if string(after.Body) != string(before.Body) {
+		t.Fatalf("expected dry-run observation to preserve body, before=%s after=%s", before.Body, after.Body)
+	}
+
+	afterReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	assertReplayReceiptRowsEqual(t, beforeReceipts, afterReceipts)
+
+	if count := countReplayDryRunObservationsForTest(t, docStore, "owner", "postbaby-web"); count != 1 {
+		t.Fatalf("expected one stored observation, got %d", count)
+	}
+}
+
+func TestRecordSyncMutationReplayDryRunObservationScopeAndStability(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:01Z", "2026-06-01T12:00:09Z",
+		buildReplayReceiptInput("mut-accepted-first", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","color":"yellow","position":{"top":"10px","left":"10px"}}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:02Z", "2026-06-01T12:00:01Z",
+		buildReplayReceiptInput("mut-created-first", "Node", "item-1", "MoveNode", `{"tabId":"tab-1","position":{"top":"20px","left":"20px"}}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:02Z", "2026-06-01T12:00:05Z",
+		buildReplayReceiptInput("mut-a", "Node", "item-1", "MoveNode", `{"tabId":"tab-1","position":{"top":"30px","left":"30px"}}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:02Z", "2026-06-01T12:00:05Z",
+		buildReplayReceiptInput("mut-b", "Node", "item-1", "MoveNode", `{"tabId":"tab-1","position":{"top":"40px","left":"40px"}}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "other-owner", "postbaby-web", "2026-06-01T12:00:03Z", "2026-06-01T12:00:03Z",
+		buildReplayReceiptInput("mut-other-owner", "Node", "item-2", "CreateNode", `{"tabId":"tab-1","name":"Other","position":{"top":"50px","left":"50px"}}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "other-app", "2026-06-01T12:00:04Z", "2026-06-01T12:00:04Z",
+		buildReplayReceiptInput("mut-other-app", "Node", "item-3", "CreateNode", `{"tabId":"tab-1","name":"Elsewhere","position":{"top":"60px","left":"60px"}}`),
+	)
+
+	firstObservation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record first dry-run observation: %v", err)
+	}
+	secondObservation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record second dry-run observation: %v", err)
+	}
+
+	if firstObservation.ReceiptCountConsidered != 4 || firstObservation.AppliedCount != 4 || firstObservation.SkippedCount != 0 || firstObservation.WarningCount != 0 {
+		t.Fatalf("unexpected first observation counts: %+v", firstObservation)
+	}
+	if firstObservation.FirstOrderedMutationID != "mut-accepted-first" || firstObservation.LastOrderedMutationID != "mut-b" {
+		t.Fatalf("unexpected first observation ordering: %+v", firstObservation)
+	}
+	if firstObservation.OrderedReceiptHighWatermark != "2026-06-01T12:00:02Z|2026-06-01T12:00:05Z|mut-b" {
+		t.Fatalf("unexpected first observation watermark: %q", firstObservation.OrderedReceiptHighWatermark)
+	}
+	if secondObservation.ReceiptCountConsidered != firstObservation.ReceiptCountConsidered ||
+		secondObservation.FirstOrderedMutationID != firstObservation.FirstOrderedMutationID ||
+		secondObservation.LastOrderedMutationID != firstObservation.LastOrderedMutationID ||
+		secondObservation.OrderedReceiptHighWatermark != firstObservation.OrderedReceiptHighWatermark ||
+		secondObservation.CanonicalDocumentHashObserved != firstObservation.CanonicalDocumentHashObserved ||
+		secondObservation.PreviewHash != firstObservation.PreviewHash {
+		t.Fatalf("expected stable repeated observations, first=%+v second=%+v", firstObservation, secondObservation)
+	}
+
+	if count := countReplayDryRunObservationsForTest(t, docStore, "owner", "postbaby-web"); count != 2 {
+		t.Fatalf("expected two stored observations for owner/app, got %d", count)
+	}
+	if count := countReplayDryRunObservationsForTest(t, docStore, "other-owner", "postbaby-web"); count != 0 {
+		t.Fatalf("expected no stored observations for other owner, got %d", count)
+	}
+}
+
+func TestRecordSyncMutationReplayDryRunObservationChangesWhenReceiptsChange(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-create-1", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","color":"yellow","position":{"top":"10px","left":"20px"}}`),
+	)
+
+	firstObservation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record first observation: %v", err)
+	}
+
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:01Z", "2026-06-01T12:00:01Z",
+		buildReplayReceiptInput("mut-create-2", "Node", "item-2", "CreateNode", `{"tabId":"tab-1","name":"Second","color":"blue","position":{"top":"30px","left":"40px"}}`),
+	)
+
+	secondObservation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record second observation: %v", err)
+	}
+
+	if secondObservation.CanonicalDocumentHashObserved != firstObservation.CanonicalDocumentHashObserved {
+		t.Fatalf("expected canonical document hash to stay stable when only receipts change, first=%q second=%q", firstObservation.CanonicalDocumentHashObserved, secondObservation.CanonicalDocumentHashObserved)
+	}
+	if secondObservation.ReceiptCountConsidered != firstObservation.ReceiptCountConsidered+1 {
+		t.Fatalf("expected receipt count to increase from %d to %d, got %d", firstObservation.ReceiptCountConsidered, firstObservation.ReceiptCountConsidered+1, secondObservation.ReceiptCountConsidered)
+	}
+	if secondObservation.LastOrderedMutationID != "mut-create-2" {
+		t.Fatalf("expected last ordered mutation id mut-create-2, got %q", secondObservation.LastOrderedMutationID)
+	}
+	if secondObservation.OrderedReceiptHighWatermark != "2026-06-01T12:00:01Z|2026-06-01T12:00:01Z|mut-create-2" {
+		t.Fatalf("unexpected second observation watermark: %q", secondObservation.OrderedReceiptHighWatermark)
+	}
+	if secondObservation.PreviewHash == firstObservation.PreviewHash {
+		t.Fatalf("expected preview hash to change when accepted receipts change, hash=%q", secondObservation.PreviewHash)
+	}
+}
+
+func TestRecordSyncMutationReplayDryRunObservationChangesWhenCanonicalSnapshotChanges(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	initial := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+
+	firstObservation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record first observation: %v", err)
+	}
+
+	updated, err := docStore.PutDocument(ctx, "owner", "postbaby-web", buildReplaySnapshotBody(t, []replayTab{
+		{
+			ID:   "tab-1",
+			Name: "Main",
+			Items: []replayItem{
+				{ID: "item-1", Name: "First", Color: "yellow", Position: replayPosition{Top: "10px", Left: "20px"}},
+			},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	}), nil)
+	if err != nil {
+		t.Fatalf("update canonical document: %v", err)
+	}
+	if updated.Version <= initial.Version {
+		t.Fatalf("expected canonical document version to advance from %d, got %d", initial.Version, updated.Version)
+	}
+
+	secondObservation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record second observation: %v", err)
+	}
+
+	if firstObservation.ReceiptCountConsidered != 0 || secondObservation.ReceiptCountConsidered != 0 {
+		t.Fatalf("expected zero considered receipts, first=%+v second=%+v", firstObservation, secondObservation)
+	}
+	if secondObservation.CanonicalDocumentVersionObserved != updated.Version {
+		t.Fatalf("expected observed version %d, got %d", updated.Version, secondObservation.CanonicalDocumentVersionObserved)
+	}
+	if secondObservation.CanonicalDocumentHashObserved == firstObservation.CanonicalDocumentHashObserved {
+		t.Fatalf("expected canonical document hash to change when snapshot changes, hash=%q", secondObservation.CanonicalDocumentHashObserved)
+	}
+	if secondObservation.PreviewHash == firstObservation.PreviewHash {
+		t.Fatalf("expected preview hash to change when snapshot changes, hash=%q", secondObservation.PreviewHash)
+	}
+}
+
+func TestRecordSyncMutationReplayDryRunObservationMalformedLegacySnapshotIsStable(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	before := seedReplayDocumentBody(t, docStore, "owner", "postbaby-web", buildReplayRawSnapshotBody(t, `[
+		{"id":"tab-1","name":"Main","colorIndex":0,"gridSetting":"none"},
+		{"id":"tab-2","name":"Legacy","items":[
+			{"id":"item-missing-position","name":"No Position"},
+			{"id":"item-bad-position","name":"Bad Position","position":{"top":"bad","left":"20px"}},
+			{"id":"item-unknown-shape","name":"Odd Shape","position":{"top":"30px","left":"40px"},"shape":"blob"}
+		],"edges":[
+			{"id":"edge-missing-from","toItemId":"item-bad-position","kind":"arrow"},
+			{"id":"edge-missing-to","fromItemId":"item-unknown-shape","kind":"line"},
+			{"id":"edge-missing-node","fromItemId":"item-unknown-shape","toItemId":"ghost","kind":"arrow"},
+			{"id":"edge-self","fromItemId":"item-unknown-shape","toItemId":"item-unknown-shape","kind":"line"}
+		]}
+	]`))
+
+	firstObservation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record first malformed legacy observation: %v", err)
+	}
+	secondObservation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record second malformed legacy observation: %v", err)
+	}
+
+	if firstObservation.ReceiptCountConsidered != 0 || secondObservation.ReceiptCountConsidered != 0 {
+		t.Fatalf("expected zero considered receipts for malformed legacy snapshot, first=%+v second=%+v", firstObservation, secondObservation)
+	}
+	if secondObservation.CanonicalDocumentHashObserved != firstObservation.CanonicalDocumentHashObserved ||
+		secondObservation.PreviewHash != firstObservation.PreviewHash {
+		t.Fatalf("expected stable malformed legacy observation hashes, first=%+v second=%+v", firstObservation, secondObservation)
+	}
+
+	after, err := docStore.GetDocument(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("load malformed legacy document after observations: %v", err)
+	}
+	if after.Version != before.Version {
+		t.Fatalf("expected malformed legacy observations to preserve version %d, got %d", before.Version, after.Version)
+	}
+	if string(after.Body) != string(before.Body) {
+		t.Fatalf("expected malformed legacy observations to preserve body, before=%s after=%s", before.Body, after.Body)
+	}
+}
+
 func TestCreateInitialUserAndLookup(t *testing.T) {
 	t.Parallel()
 
@@ -1901,4 +2212,150 @@ func assertReplayWarningCodes(t *testing.T, warnings []SyncMutationDryRunWarning
 			t.Fatalf("expected warning code counts %v, got mismatch for %q in %+v", expectedCodes, code, warnings)
 		}
 	}
+}
+
+func loadReplayDryRunObservationForTest(t *testing.T, docStore *Store, observationID int64) SyncMutationReplayDryRunObservation {
+	t.Helper()
+
+	var observation SyncMutationReplayDryRunObservation
+	var createdAt string
+	err := docStore.db.QueryRowContext(
+		context.Background(),
+		`SELECT
+			id,
+			owner_key,
+			app_id,
+			canonical_document_version_observed,
+			canonical_document_hash_observed,
+			receipt_count_considered,
+			first_ordered_mutation_id,
+			last_ordered_mutation_id,
+			ordered_receipt_high_watermark,
+			applied_count,
+			skipped_count,
+			warning_count,
+			preview_hash,
+			created_at
+		FROM sync_mutation_replay_dry_run_observations
+		WHERE id = ?`,
+		observationID,
+	).Scan(
+		&observation.ID,
+		&observation.OwnerKey,
+		&observation.AppID,
+		&observation.CanonicalDocumentVersionObserved,
+		&observation.CanonicalDocumentHashObserved,
+		&observation.ReceiptCountConsidered,
+		&observation.FirstOrderedMutationID,
+		&observation.LastOrderedMutationID,
+		&observation.OrderedReceiptHighWatermark,
+		&observation.AppliedCount,
+		&observation.SkippedCount,
+		&observation.WarningCount,
+		&observation.PreviewHash,
+		&createdAt,
+	)
+	if err != nil {
+		t.Fatalf("load replay dry-run observation %d: %v", observationID, err)
+	}
+
+	observation.CreatedAt = mustParseTimestamp(createdAt)
+	return observation
+}
+
+func countReplayDryRunObservationsForTest(t *testing.T, docStore *Store, ownerKey, appID string) int64 {
+	t.Helper()
+
+	var count int64
+	err := docStore.db.QueryRowContext(
+		context.Background(),
+		`SELECT COUNT(*) FROM sync_mutation_replay_dry_run_observations WHERE owner_key = ? AND app_id = ?`,
+		ownerKey,
+		appID,
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("count replay dry-run observations: %v", err)
+	}
+	return count
+}
+
+func loadAllReplayReceiptRowsForTest(t *testing.T, docStore *Store, ownerKey, appID string) []SyncMutationReceipt {
+	t.Helper()
+
+	rows, err := docStore.db.QueryContext(
+		context.Background(),
+		`SELECT
+			id,
+			owner_key,
+			app_id,
+			mutation_id,
+			client_id,
+			device_id,
+			protocol,
+			entity_type,
+			entity_id,
+			operation_type,
+			payload_json,
+			base_revision,
+			status,
+			created_at,
+			accepted_at
+		FROM sync_mutation_receipts
+		WHERE owner_key = ? AND app_id = ?
+		ORDER BY id ASC`,
+		ownerKey,
+		appID,
+	)
+	if err != nil {
+		t.Fatalf("query replay receipt rows: %v", err)
+	}
+	defer rows.Close()
+
+	receipts := make([]SyncMutationReceipt, 0)
+	for rows.Next() {
+		receipt, scanErr := scanSyncMutationReceipt(rows)
+		if scanErr != nil {
+			t.Fatalf("scan replay receipt row: %v", scanErr)
+		}
+		receipts = append(receipts, receipt)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate replay receipt rows: %v", err)
+	}
+	return receipts
+}
+
+func assertReplayReceiptRowsEqual(t *testing.T, expected, actual []SyncMutationReceipt) {
+	t.Helper()
+
+	if len(actual) != len(expected) {
+		t.Fatalf("expected %d replay receipt rows, got %d", len(expected), len(actual))
+	}
+
+	for index := range expected {
+		if actual[index].ID != expected[index].ID ||
+			actual[index].OwnerKey != expected[index].OwnerKey ||
+			actual[index].AppID != expected[index].AppID ||
+			actual[index].MutationID != expected[index].MutationID ||
+			actual[index].ClientID != expected[index].ClientID ||
+			actual[index].DeviceID != expected[index].DeviceID ||
+			actual[index].Protocol != expected[index].Protocol ||
+			actual[index].EntityType != expected[index].EntityType ||
+			actual[index].EntityID != expected[index].EntityID ||
+			actual[index].OperationType != expected[index].OperationType ||
+			string(actual[index].Payload) != string(expected[index].Payload) ||
+			!equalInt64Pointers(actual[index].BaseRevision, expected[index].BaseRevision) ||
+			actual[index].Status != expected[index].Status ||
+			!actual[index].CreatedAt.Equal(expected[index].CreatedAt) ||
+			!actual[index].AcceptedAt.Equal(expected[index].AcceptedAt) {
+			t.Fatalf("replay receipt row %d mismatch: expected=%+v actual=%+v", index, expected[index], actual[index])
+		}
+	}
+}
+
+func equalInt64Pointers(left, right *int64) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
