@@ -4670,7 +4670,7 @@ func TestGetSyncDeltaMetadataTooManyApplicationsRequiresSnapshotRefresh(t *testi
 	assertSyncDeltaMetadataStateEqual(t, beforeState, afterState)
 }
 
-func TestGetSyncDeltaMetadataStaleSinceVersionRequiresSnapshotRefresh(t *testing.T) {
+func TestGetSyncDeltaMetadataClientVersionAheadRequiresSnapshotRefresh(t *testing.T) {
 	t.Parallel()
 
 	docStore := openTestStore(t)
@@ -4697,7 +4697,7 @@ func TestGetSyncDeltaMetadataStaleSinceVersionRequiresSnapshotRefresh(t *testing
 		t.Fatalf("get sync delta metadata: %v", err)
 	}
 
-	if !result.RequiresSnapshotRefresh || result.Reason != SyncDeltaMetadataReasonSnapshotRequiredStaleVersion {
+	if !result.RequiresSnapshotRefresh || result.Reason != SyncDeltaMetadataReasonSnapshotRequiredClientVersionAhead {
 		t.Fatalf("unexpected sync delta metadata result: %+v", result)
 	}
 

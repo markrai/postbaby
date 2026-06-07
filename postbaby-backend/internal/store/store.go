@@ -380,6 +380,7 @@ const (
 	SyncDeltaMetadataReasonUpToDate                                              = "up_to_date"
 	SyncDeltaMetadataReasonDocumentVersionChanged                                = "document_version_changed"
 	SyncDeltaMetadataReasonApplicationsAvailable                                 = "applications_available"
+	SyncDeltaMetadataReasonSnapshotRequiredClientVersionAhead                    = "snapshot_required_client_version_ahead"
 	SyncDeltaMetadataReasonSnapshotRequiredStaleVersion                          = "snapshot_required_stale_version"
 	SyncDeltaMetadataReasonSnapshotRequiredTooManyApplications                   = "snapshot_required_too_many_applications"
 	syncDeltaMetadataWarningVersionAdvancedWithoutBodyChange                     = "document_version_advanced_without_body_change"
@@ -986,7 +987,7 @@ func (s *Store) GetSyncDeltaMetadata(ctx context.Context, ownerKey, appID string
 
 	if options.SinceVersion > doc.Version {
 		result.RequiresSnapshotRefresh = true
-		result.Reason = SyncDeltaMetadataReasonSnapshotRequiredStaleVersion
+		result.Reason = SyncDeltaMetadataReasonSnapshotRequiredClientVersionAhead
 		s.logDBOperation("read_get_sync_delta_metadata", started, nil)
 		return result, nil
 	}
