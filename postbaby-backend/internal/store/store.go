@@ -971,11 +971,19 @@ func (s *Store) ApplySyncMutationReplayAuthoritativeForTestOnly(ctx context.Cont
 	}
 	recoveryEvaluation := evaluateSyncMutationReplayRecoveryAgainstState(observation, doc, receipts, dryRunResult, applications, compareEvaluation)
 
+	switch recoveryEvaluation.Status {
+	case SyncMutationReplayRecoveryStatusAlreadyAppliedRequiresIdempotentExit:
+		result.Status = SyncMutationReplayAuthoritativeApplyStatusIdempotentExitAlreadyApplied
+		return result, nil
+	case SyncMutationReplayRecoveryStatusPartialApplicationRows,
+		SyncMutationReplayRecoveryStatusApplicationRowsWithoutMatchingCanonicalState,
+		SyncMutationReplayRecoveryStatusCanonicalStateWithoutApplicationRows,
+		SyncMutationReplayRecoveryStatusBlockedSnapshotRequiresCleanup:
+		result.Status = SyncMutationReplayAuthoritativeApplyStatusAbortedRecovery
+		return result, nil
+	}
+
 	if compareEvaluation.Status != SyncMutationReplayCompareAndApplyStatusAllowed {
-		if recoveryEvaluation.Status == SyncMutationReplayRecoveryStatusAlreadyAppliedRequiresIdempotentExit {
-			result.Status = SyncMutationReplayAuthoritativeApplyStatusIdempotentExitAlreadyApplied
-			return result, nil
-		}
 		switch compareEvaluation.Status {
 		case SyncMutationReplayCompareAndApplyStatusStaleCanonicalDocument,
 			SyncMutationReplayCompareAndApplyStatusStaleReceiptSet,
