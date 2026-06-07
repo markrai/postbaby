@@ -1572,6 +1572,15 @@ func buildSyncMutationReplayAuthoritativeProgressivePreview(doc Document, receip
 				ApplicationReason: applicationReason,
 			})
 		case replayAuthoritativePolicyStatusConflict, replayAuthoritativePolicyStatusBlocked, replayAuthoritativePolicyStatusFatal:
+			diagnosticStatus, ok := MapSyncMutationReplayPolicyStatusToApplicationStatus(policyEvaluation.Status)
+			if ok {
+				preview.MutationResults = append(preview.MutationResults, SyncMutationReplayAuthoritativeMutationResult{
+					MutationID:        receipt.MutationID,
+					OperationType:     receipt.OperationType,
+					ApplicationStatus: diagnosticStatus,
+					ApplicationReason: buildSyncMutationReplayApplicationReason(policyEvaluation),
+				})
+			}
 			preview.PolicyAbort = true
 			preview.PolicyAbortMutationID = receipt.MutationID
 			preview.PolicyAbortOperationType = receipt.OperationType
