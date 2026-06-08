@@ -430,16 +430,16 @@
                 <div class="settings-modal-divider" aria-hidden="true"></div>
 
                 <section class="settings-mermaid-section" aria-labelledby="settingsMermaidTitle">
-                    <h3 id="settingsMermaidTitle" class="settings-section-title">Mermaid</h3>
+                    <h3 id="settingsMermaidTitle" class="settings-section-title">Mermaid Import</h3>
                     <p class="settings-section-copy">
-                        Import a supported Mermaid flowchart or graph. This creates ordinary Postbaby notes and edges.
+                        Turn a supported Mermaid flowchart or graph into ordinary Postbaby notes and edges. Paste Mermaid source below, then click <strong>Import Mermaid</strong> when you are ready to create notes.
                     </p>
                     <textarea
                         id="mermaidImportSource"
                         class="settings-mermaid-textarea"
                         rows="8"
                         spellcheck="false"
-                        placeholder="flowchart LR&#10;A[Start] --> B((Circle))&#10;A --- C{Decision}"
+                        placeholder="flowchart LR&#10;Idea --> Task&#10;Task --> Done"
                     ></textarea>
                     <button id="mermaidImportButton" class="modal-button settings-mermaid-button" type="button">
                         Import Mermaid

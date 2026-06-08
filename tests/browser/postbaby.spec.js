@@ -11784,6 +11784,62 @@ test.describe('Settings and Account UI', () => {
     await expectNoteVisible(page, 'Imported From Settings');
   });
 
+  test('Mermaid import from Settings creates ordinary Postbaby items locally without sync calls', async ({ page }) => {
+    const apiRequests = [];
+
+    await page.route(/\/api\/document(?:\/meta)?(?:\?.*)?$/, async (route) => {
+      apiRequests.push(route.request().url());
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json; charset=utf-8',
+        body: JSON.stringify({ ok: false })
+      });
+    });
+    await page.route(/\/api\/sync\/(?:delta|mutations)(?:\?.*)?$/, async (route) => {
+      apiRequests.push(route.request().url());
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json; charset=utf-8',
+        body: JSON.stringify({ ok: false })
+      });
+    });
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    await openSettingsImportExportTab(page);
+    await page.locator('#mermaidImportSource').fill([
+      'graph TD',
+      'Idea-->Task',
+      'Task-->Done'
+    ].join('\n'));
+
+    let tabsSnapshot = await readTabsSnapshot(page);
+    expect(tabsSnapshot[0].items || []).toHaveLength(0);
+    expect(tabsSnapshot[0].edges || []).toHaveLength(0);
+
+    await page.locator('#mermaidImportButton').click();
+
+    await expect(page.locator('#settingsModal')).toBeVisible();
+    await expect(page.locator('#mermaidImportStatus')).toContainText('Mermaid import completed.');
+    await expect(page.locator('#mermaidImportStatus')).toContainText('Created 3 notes and 2 edges.');
+    await expect(page.locator('#mermaidImportStatus')).toContainText('These are now ordinary Postbaby notes and edges.');
+    await expect(page.locator('#mermaidImportSource')).toHaveValue('');
+    await expectNoteVisible(page, 'Idea');
+    await expectNoteVisible(page, 'Task');
+    await expectNoteVisible(page, 'Done');
+
+    tabsSnapshot = await readTabsSnapshot(page);
+    expect(tabsSnapshot[0].items.map((item) => item.name)).toEqual(
+      expect.arrayContaining(['Idea', 'Task', 'Done'])
+    );
+    expect(tabsSnapshot[0].edges.map((edge) => edge.kind)).toEqual(
+      expect.arrayContaining(['arrow', 'arrow'])
+    );
+    expect(apiRequests).toEqual([]);
+  });
+
   test('Mermaid import from Settings creates ordinary Postbaby items and edges and keeps the modal open', async ({ page }) => {
     await prepareBlankPage(page);
     await seedLocalStorage(page, buildEmptySnapshot());
@@ -11800,6 +11856,7 @@ test.describe('Settings and Account UI', () => {
     await expect(page.locator('#settingsModal')).toBeVisible();
     await expect(page.locator('#mermaidImportStatus')).toContainText('Mermaid import completed.');
     await expect(page.locator('#mermaidImportStatus')).toContainText('Created 3 notes and 2 edges.');
+    await expect(page.locator('#mermaidImportStatus')).toContainText('These are now ordinary Postbaby notes and edges.');
     await expect(page.locator('#mermaidImportSource')).toHaveValue('');
     await expectNoteVisible(page, 'Source');
     await expectNoteVisible(page, 'Circle Target');
@@ -11836,6 +11893,7 @@ test.describe('Settings and Account UI', () => {
 
     await expect(page.locator('#settingsModal')).toBeVisible();
     await expect(page.locator('#mermaidImportStatus')).toContainText('Mermaid import completed.');
+    await expect(page.locator('#mermaidImportStatus')).toContainText('These are now ordinary Postbaby notes and edges.');
     await expect(page.locator('.grid-item.selected')).toHaveCount(3);
 
     await page.locator('.close-settings').click();
@@ -11860,6 +11918,7 @@ test.describe('Settings and Account UI', () => {
     await page.locator('#mermaidImportButton').click();
 
     await expect(page.locator('#mermaidImportStatus')).toContainText('Mermaid import completed.');
+    await expect(page.locator('#mermaidImportStatus')).toContainText('Review the warnings below if you want to simplify or adjust the imported shapes.');
     await expect(page.locator('#mermaidImportStatus')).toContainText('Warnings');
     await expect(page.locator('#mermaidImportStatus')).toContainText('parallelogram nodes are not supported yet');
     await expectNoteVisible(page, 'Skewed');
@@ -11882,6 +11941,7 @@ test.describe('Settings and Account UI', () => {
 
     await expect(page.locator('#settingsModal')).toBeVisible();
     await expect(page.locator('#mermaidImportStatus')).toContainText('Mermaid import failed.');
+    await expect(page.locator('#mermaidImportStatus')).toContainText('Nothing was imported. Fix the Mermaid source below and try again.');
     await expect(page.locator('#mermaidImportStatus')).toContainText('Unsupported Mermaid diagram type');
     await expect(page.locator('#mermaidImportSource')).toHaveValue([
       'sequenceDiagram',
@@ -11890,6 +11950,27 @@ test.describe('Settings and Account UI', () => {
 
     const tabsSnapshot = await readTabsSnapshot(page);
     expect(tabsSnapshot[0].items || []).toHaveLength(0);
+    expect(tabsSnapshot[0].edges || []).toHaveLength(0);
+  });
+
+  test('invalid Mermaid from Settings leaves existing notes unchanged', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildLocalSnapshot('Keep Existing Note'));
+    await page.goto('/index.html');
+
+    await openSettingsImportExportTab(page);
+    await page.locator('#mermaidImportSource').fill([
+      'sequenceDiagram',
+      'A->>B: Hello'
+    ].join('\n'));
+    await page.locator('#mermaidImportButton').click();
+
+    await expect(page.locator('#mermaidImportStatus')).toContainText('Mermaid import failed.');
+    await expect(page.locator('#mermaidImportStatus')).toContainText('Nothing was imported. Fix the Mermaid source below and try again.');
+    await expectNoteVisible(page, 'Keep Existing Note');
+
+    const tabsSnapshot = await readTabsSnapshot(page);
+    expect(tabsSnapshot[0].items.map((item) => item.name)).toEqual(['Keep Existing Note']);
     expect(tabsSnapshot[0].edges || []).toHaveLength(0);
   });
 
@@ -11909,7 +11990,7 @@ test.describe('Settings and Account UI', () => {
 
     await expect(page.locator('#settingsModal')).toBeVisible();
     await expect(page.locator('#mermaidImportStatus')).toContainText('Mermaid import failed.');
-    await expect(page.locator('#mermaidImportStatus')).toContainText('Fix the Mermaid source below and try again.');
+    await expect(page.locator('#mermaidImportStatus')).toContainText('Nothing was imported. Fix the Mermaid source below and try again.');
     await expect(page.locator('#mermaidImportStatus')).toContainText('This import is too large for one tab.');
     await expect(page.locator('#mermaidImportSource')).toHaveValue([
       'flowchart LR',
@@ -11956,6 +12037,18 @@ test.describe('Settings and Account UI', () => {
       expect.arrayContaining(['Manual Mermaid Source', 'Manual Mermaid Target', 'Manual Note After Mermaid Import'])
     );
     expect(tabsSnapshot[0].edges).toHaveLength(1);
+  });
+
+  test('Mermaid import section stays usable at narrow mobile widths', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildEmptySnapshot());
+    await page.goto('/index.html');
+
+    await openSettingsImportExportTab(page);
+    await expect(page.locator('#mermaidImportSource')).toBeVisible();
+    await page.locator('#mermaidImportButton').scrollIntoViewIfNeeded();
+    await expect(page.locator('#mermaidImportButton')).toBeVisible();
   });
 
   test('top-right controls stay compact at narrow widths', async ({ page }) => {
