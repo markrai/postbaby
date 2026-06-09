@@ -32,6 +32,7 @@
     "gridOptions": {
       "none": "Keine",
       "kanban": "Kanban-Board",
+      "importance": "Wichtigkeit",
       "eisenhower": "Eisenhower-Matrix",
       "priority": "Prioritätsmatrix",
       "smartgoals": "SMART-Ziele",

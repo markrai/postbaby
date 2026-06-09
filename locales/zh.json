@@ -32,6 +32,7 @@
     "gridOptions": {
       "none": "无",
       "kanban": "看板",
+      "importance": "重要性",
       "eisenhower": "艾森豪威尔矩阵",
       "priority": "优先级矩阵",
       "smartgoals": "SMART 目标",

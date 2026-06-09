@@ -29,6 +29,17 @@
     );
 }
 
+/* Importance Grid: Vertical Columns */
+.grid-importance {
+    background-image: repeating-linear-gradient(
+            to right,
+            var(--grid-line-soft),
+            var(--grid-line-soft) 1px,
+            transparent 1px,
+            transparent 25%
+    );
+}
+
 /* Eisenhower Matrix Grid: Using Pseudo-Elements */
 .grid-eisenhower {
     position: fixed; /* Ensure the gridUnderlay is positioned correctly */
@@ -170,6 +181,53 @@
 /* Done Section */
 .grid-labels-kanban .grid-label-kanban:nth-child(4) {
     background-color: rgba(40, 167, 69, 0.2); /* Green with 20% opacity */
+}
+
+/* Grid Labels for Importance */
+.grid-labels-importance {
+    position: fixed;
+    top: 50px;
+    left: 0;
+    width: 100%;
+    height: calc(100% - 50px);
+    display: none;
+    grid-template-columns: repeat(4, 1fr);
+    z-index: 0;
+    pointer-events: none;
+}
+
+#gridUnderlay.grid-importance ~ #gridLabels-importance {
+    display: grid;
+}
+
+.grid-label-importance {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    opacity: 0.3;
+    font-size: 18px;
+    color: var(--grid-label-text);
+    user-select: none;
+    font-family: 'Kalam', sans-serif;
+    padding-top: 30px;
+    text-shadow: var(--grid-label-text-shadow);
+    font-weight: bold;
+}
+
+.grid-labels-importance .grid-label-importance:nth-child(1) {
+    background-color: rgba(169, 169, 169, 0.2);
+}
+
+.grid-labels-importance .grid-label-importance:nth-child(2) {
+    background-color: rgba(30, 144, 255, 0.2);
+}
+
+.grid-labels-importance .grid-label-importance:nth-child(3) {
+    background-color: rgba(255, 165, 0, 0.2);
+}
+
+.grid-labels-importance .grid-label-importance:nth-child(4) {
+    background-color: rgba(255, 0, 0, 0.2);
 }
 
 /* Grid Labels for Eisenhower Matrix */

@@ -32,6 +32,7 @@
     "gridOptions": {
       "none": "Ninguna",
       "kanban": "Tablero kanban",
+      "importance": "Importancia",
       "eisenhower": "Matriz de Eisenhower",
       "priority": "Matriz de prioridades",
       "smartgoals": "Objetivos SMART",
