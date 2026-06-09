@@ -9,6 +9,10 @@
         es: {
             lang: 'es',
             file: './locales/es.json'
+        },
+        fr: {
+            lang: 'fr',
+            file: './locales/fr.json'
         }
     });
     // Keep this fallback intentionally small. Static English copy comes from the

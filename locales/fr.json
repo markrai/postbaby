@@ -1,0 +1,235 @@
+{
+  "common": {
+    "languages": {
+      "english": "Anglais",
+      "spanishPartial": "Espagnol (partiel)",
+      "frenchPartial": "Français (partiel)"
+    }
+  },
+  "settings": {
+    "trigger": "Paramètres",
+    "close": "Fermer les paramètres",
+    "title": "Paramètres",
+    "sections": "Sections des paramètres",
+    "tabs": {
+      "preferences": "Préférences",
+      "importExport": "Import et export"
+    },
+    "preferences": {
+      "darkMode": "Mode sombre",
+      "disableColorChange": "Désactiver le changement de couleur",
+      "disableNoteResize": "Désactiver le redimensionnement des notes",
+      "fullScreen": "Plein écran",
+      "corporateMode": "Mode entreprise",
+      "hideCameraRemote": "Masquer les contrôles de caméra",
+      "language": "Langue",
+      "partialLocaleNote": "Certaines zones de l'application restent en anglais.",
+      "useGrids": "Utiliser les grilles (par onglet)",
+      "defaultColor": "Couleur par défaut pour les nouveaux éléments (global)"
+    },
+    "gridOptions": {
+      "none": "Aucune",
+      "kanban": "Tableau kanban",
+      "eisenhower": "Matrice d'Eisenhower",
+      "priority": "Matrice de priorités",
+      "smartgoals": "Objectifs SMART",
+      "swot": "Analyse SWOT",
+      "calendar": "Calendrier",
+      "nowlater": "Maintenant et plus tard",
+      "week": "Semaine"
+    },
+    "recovery": {
+      "title": "Récupération (développement uniquement)",
+      "body": "Contrôles temporaires de récupération par défilement uniquement pour déboguer les notes hors écran sans modifier les positions enregistrées.",
+      "showAll": "Afficher toutes les notes",
+      "jumpNewest": "Aller à la note la plus récente",
+      "jumpLastEdited": "Aller à la dernière note modifiée"
+    },
+    "questionsComments": "Questions/commentaires :",
+    "staticNote": "Remarque : cette version statique enregistre les notes uniquement dans ce navigateur sur cet appareil. La connexion au compte, la synchronisation cloud, la facturation et la récupération multi-appareils ne sont pas disponibles dans ce mode. Si vous effacez les données du site ou utilisez un autre navigateur/appareil, ces notes peuvent devenir indisponibles.",
+    "actions": {
+      "exportData": "Exporter les données",
+      "importData": "Importer les données",
+      "importMermaid": "Importer Mermaid"
+    },
+    "mermaid": {
+      "title": "Import Mermaid",
+      "descriptionBeforeAction": "Convertissez un flowchart ou graph Mermaid compatible en notes et connexions Postbaby ordinaires. Collez le code Mermaid ci-dessous, puis cliquez sur",
+      "descriptionAfterAction": "lorsque vous souhaitez créer les notes.",
+      "placeholder": "flowchart LR\nIdea --> Task\nTask --> Done"
+    },
+    "toasts": {
+      "loadDataInputMissing": "Erreur : impossible de trouver l'entrée pour charger les données.",
+      "noFileSelected": "Aucun fichier sélectionné.",
+      "importedLocallyReloading": "Importé localement. Rechargement en cours...",
+      "importCanceled": "Import annulé.",
+      "importedAndSyncedReloading": "Importé et synchronisé. Rechargement en cours...",
+      "importedLocalSignInAgain": "Importé localement. Reconnectez-vous pour synchroniser cette sauvegarde. Rechargement en cours...",
+      "importedLocalReconnect": "Importé localement. Reconnectez-vous pour synchroniser cette sauvegarde. Rechargement en cours...",
+      "importedLocalServerAvailable": "Importé localement. Postbaby synchronisera cette sauvegarde lorsque le serveur sera disponible. Rechargement en cours...",
+      "invalidFileFormat": "Impossible de charger les données : le format du fichier n'est pas valide.",
+      "fileReadFailed": "Impossible de lire le fichier.",
+      "dataSavedSuccessfully": "Données enregistrées avec succès."
+    }
+  },
+  "shortcuts": {
+    "trigger": "Raccourcis clavier",
+    "close": "Fermer les raccourcis clavier",
+    "title": "Raccourcis",
+    "desktop": {
+      "create": {
+        "action": "créer :",
+        "prefix": "n ou",
+        "gesture": "clic droit sur le canevas"
+      },
+      "changeColor": {
+        "action": "changer la couleur :",
+        "gesture": "clic simple sur l'élément"
+      },
+      "editItem": {
+        "action": "modifier l'élément :",
+        "gesture": "double-clic sur l'élément"
+      },
+      "deleteItem": {
+        "action": "supprimer l'élément :",
+        "gesture": "clic droit sur l'élément ou glisser vers le rouleau"
+      },
+      "nextShape": {
+        "action": "forme suivante :",
+        "gesture": "ctrl + clic droit sur l'élément"
+      },
+      "previousShape": {
+        "action": "forme précédente :",
+        "gesture": "shift + ctrl + clic droit sur l'élément"
+      },
+      "clearCurrentTab": {
+        "action": "vider l'onglet actuel :",
+        "keys": "c"
+      },
+      "deleteAllTabs": {
+        "action": "supprimer tous les onglets :",
+        "keys": "ctrl+c"
+      },
+      "jumpTabs": {
+        "action": "changer d'onglet :",
+        "keys": "touches 1 à 9"
+      },
+      "toggleGrids": {
+        "action": "alterner les grilles :",
+        "keys": "g"
+      },
+      "selectPanMode": {
+        "action": "mode sélection / défilement :",
+        "gesture": "sélecteur main/sélection (en haut à droite)"
+      },
+      "emptyCanvasDrag": {
+        "action": "glisser sur canevas vide :",
+        "gesture": "cadre de sélection en mode sélection / défilement en mode main"
+      },
+      "drawLine": {
+        "action": "tracer une ligne :",
+        "gesture": "shift + glisser"
+      },
+      "drawArrow": {
+        "action": "tracer une flèche :",
+        "gesture": "ctrl + glisser"
+      },
+      "panCanvas": {
+        "action": "déplacer le canevas :",
+        "gesture": "molette, défilement du trackpad, shift + molette, glisser avec bouton central ou espace + glisser"
+      },
+      "zoomCanvas": {
+        "action": "zoomer sur le canevas :",
+        "gesture": "ctrl/cmd + molette ou contrôles de caméra"
+      },
+      "resetFitView": {
+        "action": "réinitialiser / ajuster la vue :",
+        "prefix": "0 / f ou",
+        "gesture": "contrôles de caméra"
+      },
+      "settings": {
+        "action": "paramètres :",
+        "gesture": "cliquez sur le bouton Paramètres (en haut à droite)"
+      }
+    },
+    "mobile": {
+      "create": {
+        "action": "créer :",
+        "gesture": "appui long sur le canevas"
+      },
+      "edit": {
+        "action": "modifier :",
+        "gesture": "double appui sur l'élément ou l'onglet"
+      },
+      "delete": {
+        "action": "supprimer :",
+        "gesture": "appui long sur l'élément ou l'onglet"
+      },
+      "changeColor": {
+        "action": "changer la couleur :",
+        "gesture": "appui simple sur l'élément ou l'onglet"
+      },
+      "navigateCanvas": {
+        "action": "naviguer sur le canevas :",
+        "gesture": "pincement / défilement à deux doigts ou contrôles de caméra"
+      },
+      "selectPanMode": {
+        "action": "mode sélection ou défilement :",
+        "gesture": "utilisez le sélecteur main/sélection (en haut à droite)"
+      },
+      "settings": {
+        "action": "paramètres :",
+        "gesture": "appuyez sur le bouton Paramètres (en haut à droite)"
+      }
+    }
+  },
+  "mermaid": {
+    "status": {
+      "completedTitle": "Import Mermaid terminé.",
+      "failedTitle": "Échec de l'import Mermaid.",
+      "createdSummary": "{notes} et {edges} créés.",
+      "warningsSummary": "Consultez les avertissements ci-dessous si vous souhaitez simplifier ou ajuster les formes importées.",
+      "ordinarySummary": "Ce sont désormais des notes et connexions Postbaby ordinaires.",
+      "validationFailedMessage": "Rien n'a été importé. Corrigez le code Mermaid ci-dessous et réessayez.",
+      "unexpectedFailedMessage": "Rien n'a été importé. Une erreur inattendue a empêché l'import Mermaid."
+    },
+    "groups": {
+      "errors": "Erreurs",
+      "warnings": "Avertissements"
+    },
+    "count": {
+      "note": {
+        "one": "{count} note",
+        "other": "{count} notes"
+      },
+      "edge": {
+        "one": "{count} connexion",
+        "other": "{count} connexions"
+      }
+    },
+    "issue": {
+      "linePrefix": "Ligne {line} : {message}",
+      "unknown": "Problème d'import Mermaid inconnu."
+    },
+    "issues": {
+      "unexpectedMermaidImportError": "Erreur inattendue lors de l'import Mermaid.",
+      "unsupportedDiagramType": "Type de diagramme Mermaid non pris en charge : \"{diagramType}\". Seuls flowchart/graph TD, TB et LR sont pris en charge.",
+      "invalidDiagramHeader": "Le code Mermaid doit commencer par flowchart/graph TD, TB ou LR.",
+      "invalidNodeReference": "Les références de nœud ne doivent pas être vides.",
+      "nodeLabelTooLong": "L'étiquette du nœud dépasse {maxChars} caractères.",
+      "unsupportedNodeShape": "Les nœuds parallélogramme Mermaid ne sont pas encore pris en charge et ont été normalisés vers la forme Postbaby par défaut.",
+      "unsupportedNodeSyntax": "Syntaxe de nœud Mermaid non prise en charge : {syntax}",
+      "conflictingNodeLabel": "Le nœud \"{nodeId}\" a été défini avec plusieurs étiquettes. Conservation de la première étiquette non vide : \"{label}\".",
+      "conflictingNodeShape": "Le nœud \"{nodeId}\" a été défini avec plusieurs formes. Conservation de la correspondance de forme Mermaid antérieure : \"{shape}\".",
+      "unsupportedEdgeSyntax": "Syntaxe de connexion Mermaid non prise en charge : {syntax}",
+      "invalidSource": "Le code Mermaid doit être du texte.",
+      "ignoredMermaidStatement": "Instruction Mermaid {statementType} non prise en charge ignorée.",
+      "missingDiagramHeader": "Le code Mermaid doit inclure un en-tête flowchart/graph pris en charge.",
+      "missingActiveTab": "Postbaby n'a pas d'onglet actif pour créer le graphe.",
+      "missingActiveTabRecord": "L'enregistrement de l'onglet actif est introuvable pour créer le graphe.",
+      "missingActiveGrid": "Le conteneur de grille actif n'est pas disponible pour créer le graphe.",
+      "tabItemLimitExceeded": "Cet import est trop volumineux pour un seul onglet.",
+      "tabEdgeLimitExceeded": "Cet import est trop volumineux pour un seul onglet."
+    }
+  }
+}

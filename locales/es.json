@@ -2,7 +2,8 @@
   "common": {
     "languages": {
       "english": "Inglés",
-      "spanishPartial": "Español (parcial)"
+      "spanishPartial": "Español (parcial)",
+      "frenchPartial": "Francés (parcial)"
     }
   },
   "settings": {
