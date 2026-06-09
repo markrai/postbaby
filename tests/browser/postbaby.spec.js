@@ -942,7 +942,17 @@ async function readWorkspaceScroll(page) {
   });
 }
 
+async function waitForPostbabyViewportTestHooks(page) {
+  await page.waitForFunction(() => (
+    typeof window.postbabyGetCameraForTest === 'function'
+    && typeof window.postbabySetCameraForTest === 'function'
+    && typeof window.postbabyGetCanvasModeForTest === 'function'
+    && typeof window.postbabySetCanvasModeForTest === 'function'
+  ));
+}
+
 async function readCamera(page, tabId = null) {
+  await waitForPostbabyViewportTestHooks(page);
   return page.evaluate((resolvedTabId) => {
     if (typeof window.postbabyGetCameraForTest !== 'function') {
       throw new Error('postbabyGetCameraForTest is not available.');
@@ -952,6 +962,7 @@ async function readCamera(page, tabId = null) {
 }
 
 async function setCamera(page, camera, tabId = null) {
+  await waitForPostbabyViewportTestHooks(page);
   return page.evaluate(({ nextCamera, resolvedTabId }) => {
     if (typeof window.postbabySetCameraForTest !== 'function') {
       throw new Error('postbabySetCameraForTest is not available.');
@@ -964,6 +975,7 @@ async function setCamera(page, camera, tabId = null) {
 }
 
 async function readCanvasMode(page) {
+  await waitForPostbabyViewportTestHooks(page);
   return page.evaluate(() => {
     if (typeof window.postbabyGetCanvasModeForTest !== 'function') {
       throw new Error('postbabyGetCanvasModeForTest is not available.');
@@ -973,6 +985,7 @@ async function readCanvasMode(page) {
 }
 
 async function setCanvasMode(page, mode) {
+  await waitForPostbabyViewportTestHooks(page);
   return page.evaluate((nextMode) => {
     if (typeof window.postbabySetCanvasModeForTest !== 'function') {
       throw new Error('postbabySetCanvasModeForTest is not available.');
@@ -1004,6 +1017,7 @@ async function centerCameraOnWorldPoint(page, x, y, tabId = null) {
 }
 
 async function resetWorkspaceScroll(page) {
+  await waitForPostbabyViewportTestHooks(page);
   await page.evaluate(() => {
     if (typeof window.postbabyResetCameraForTest === 'function') {
       window.postbabyResetCameraForTest();
@@ -1020,6 +1034,7 @@ async function resetWorkspaceScroll(page) {
 }
 
 async function scrollWorkspaceTo(page, left, top) {
+  await waitForPostbabyViewportTestHooks(page);
   await page.evaluate((position) => {
     if (typeof window.postbabySetCameraForTest === 'function') {
       window.postbabySetCameraForTest({
@@ -11124,6 +11139,39 @@ test.describe('Settings and Account UI', () => {
     await page.locator('#shortcutsTriggerButton').click();
     await expect(page.locator('#shortcutsModal .modal-title')).toHaveText('Shortcuts');
     await expect(page.locator('#shortcutsModal .desktop-shortcuts .shortcut-action').first()).toHaveText('create new:');
+  });
+
+  test('pseudo locale fetch failure falls back to English and resets the selector', async ({ page }) => {
+    await page.addInitScript(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = function (input, init) {
+        const requestUrl = typeof input === 'string'
+          ? input
+          : (input && typeof input.url === 'string' ? input.url : '');
+        const resolvedUrl = new URL(requestUrl, window.location.href);
+        if (resolvedUrl.pathname === '/locales/pseudo.json') {
+          return Promise.resolve(new Response('pseudo unavailable', {
+            status: 503,
+            headers: {
+              'Content-Type': 'text/plain'
+            }
+          }));
+        }
+        return originalFetch(input, init);
+      };
+    });
+
+    await prepareBlankPage(page);
+    await page.goto('/index.html');
+
+    await openSettingsModal(page);
+    await page.selectOption('#localeSelect', 'pseudo');
+
+    await expect.poll(async () => page.evaluate(() => document.documentElement.lang)).toBe('en');
+    await expect(page.locator('#settingsModal .modal-title')).toHaveText('Settings');
+    await expect(page.locator('#settingsPreferencesPanel [data-i18n="settings.preferences.darkMode"]')).toHaveText('Dark Mode');
+    await expect(page.locator('#localeSelect')).toHaveValue('en');
+    await expect.poll(async () => page.evaluate((storageKey) => window.localStorage.getItem(storageKey), LOCALE_STORAGE_KEY)).toBe('en');
   });
 
   test('Recovery debug flag reveals the development-only recovery section in Settings', async ({ page }) => {
