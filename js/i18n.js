@@ -17,6 +17,10 @@
         zh: {
             lang: 'zh-CN',
             file: './locales/zh.json'
+        },
+        de: {
+            lang: 'de',
+            file: './locales/de.json'
         }
     });
     // Keep this fallback intentionally small. Static English copy comes from the
