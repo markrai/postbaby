@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -51,6 +52,11 @@ const (
 	replayWarningUnknownOperation     = "unknown_operation"
 	replayWarningMissingEntityID      = "missing_entity_id"
 	replayWarningSelfEdge             = "self_edge"
+
+	DefaultSyncMutationReplayObservationRetention     = 720 * time.Hour
+	DefaultSyncMutationReplayReceiptRetention         = 2160 * time.Hour
+	DefaultSyncMutationReplayRetainedObservationCount = 5
+	DefaultSyncMutationReplayRetainedReceiptCount     = 100
 )
 
 var replayItemShapeSet = map[string]struct{}{
@@ -176,6 +182,53 @@ type SyncMutationReplayApplication struct {
 type SyncMutationReplayApplicationResult struct {
 	Application SyncMutationReplayApplication
 	Duplicate   bool
+}
+
+type SyncMutationReplayDiagnostics struct {
+	OwnerKey                   string
+	AppID                      string
+	ReceiptCount               int64
+	ReceiptOldestCreatedAt     *time.Time
+	ReceiptNewestCreatedAt     *time.Time
+	ReceiptOldestAcceptedAt    *time.Time
+	ReceiptNewestAcceptedAt    *time.Time
+	ReceiptPayloadBytes        int64
+	ObservationCount           int64
+	ObservationOldestCreatedAt *time.Time
+	ObservationNewestCreatedAt *time.Time
+	LatestObservation          *SyncMutationReplayDryRunObservation
+	ApplicationCount           int64
+	ApplicationOldestCreatedAt *time.Time
+	ApplicationNewestCreatedAt *time.Time
+	ApplicationStatusCounts    map[string]int64
+	DBFileBytes                *int64
+}
+
+type SyncMutationReplayCompactOptions struct {
+	Now                      time.Time
+	ObservationRetention     time.Duration
+	ReceiptRetention         time.Duration
+	RetainedObservationCount int
+	RetainedReceiptCount     int
+	Execute                  bool
+}
+
+type SyncMutationReplayCompactResult struct {
+	OwnerKey                        string
+	AppID                           string
+	Execute                         bool
+	ObservationRetention            time.Duration
+	ReceiptRetention                time.Duration
+	ObservationCutoff               time.Time
+	ReceiptCutoff                   time.Time
+	RetainedObservationCount        int
+	RetainedReceiptCount            int
+	ProtectedReceiptCount           int
+	RetainedApplicationCount        int64
+	CandidateObservationDeleteCount int64
+	CandidateReceiptDeleteCount     int64
+	DeletedObservationCount         int64
+	DeletedReceiptCount             int64
 }
 
 type SyncMutationReplayCompareAndApplyPreconditions struct {
@@ -759,6 +812,273 @@ func (s *Store) CountSyncMutationReceipts(ctx context.Context, ownerKey, appID s
 
 	s.logDBOperation("count_sync_mutation_receipts", started, nil)
 	return count, nil
+}
+
+func (s *Store) GetSyncMutationReplayDiagnostics(ctx context.Context, ownerKey, appID string) (SyncMutationReplayDiagnostics, error) {
+	started := time.Now()
+	ctx, cancel := withDBTimeout(ctx)
+	defer cancel()
+
+	result := SyncMutationReplayDiagnostics{
+		OwnerKey:                ownerKey,
+		AppID:                   appID,
+		ApplicationStatusCounts: map[string]int64{},
+	}
+
+	var receiptOldestCreatedAt sql.NullString
+	var receiptNewestCreatedAt sql.NullString
+	var receiptOldestAcceptedAt sql.NullString
+	var receiptNewestAcceptedAt sql.NullString
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT
+			COUNT(*),
+			MIN(created_at),
+			MAX(created_at),
+			MIN(accepted_at),
+			MAX(accepted_at),
+			COALESCE(SUM(LENGTH(payload_json)), 0)
+		FROM sync_mutation_receipts
+		WHERE owner_key = ? AND app_id = ?`,
+		ownerKey,
+		appID,
+	).Scan(
+		&result.ReceiptCount,
+		&receiptOldestCreatedAt,
+		&receiptNewestCreatedAt,
+		&receiptOldestAcceptedAt,
+		&receiptNewestAcceptedAt,
+		&result.ReceiptPayloadBytes,
+	); err != nil {
+		return SyncMutationReplayDiagnostics{}, s.wrapDBError("read_sync_mutation_replay_diagnostics_receipts", started, fmt.Errorf("summarize sync mutation receipts: %w", err))
+	}
+
+	parsedReceiptOldestCreatedAt, err := parseNullableTimestamp(receiptOldestCreatedAt)
+	if err != nil {
+		return SyncMutationReplayDiagnostics{}, s.wrapDBError("read_sync_mutation_replay_diagnostics_receipts", started, err)
+	}
+	parsedReceiptNewestCreatedAt, err := parseNullableTimestamp(receiptNewestCreatedAt)
+	if err != nil {
+		return SyncMutationReplayDiagnostics{}, s.wrapDBError("read_sync_mutation_replay_diagnostics_receipts", started, err)
+	}
+	parsedReceiptOldestAcceptedAt, err := parseNullableTimestamp(receiptOldestAcceptedAt)
+	if err != nil {
+		return SyncMutationReplayDiagnostics{}, s.wrapDBError("read_sync_mutation_replay_diagnostics_receipts", started, err)
+	}
+	parsedReceiptNewestAcceptedAt, err := parseNullableTimestamp(receiptNewestAcceptedAt)
+	if err != nil {
+		return SyncMutationReplayDiagnostics{}, s.wrapDBError("read_sync_mutation_replay_diagnostics_receipts", started, err)
+	}
+	result.ReceiptOldestCreatedAt = parsedReceiptOldestCreatedAt
+	result.ReceiptNewestCreatedAt = parsedReceiptNewestCreatedAt
+	result.ReceiptOldestAcceptedAt = parsedReceiptOldestAcceptedAt
+	result.ReceiptNewestAcceptedAt = parsedReceiptNewestAcceptedAt
+
+	var observationOldestCreatedAt sql.NullString
+	var observationNewestCreatedAt sql.NullString
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*), MIN(created_at), MAX(created_at)
+		FROM sync_mutation_replay_dry_run_observations
+		WHERE owner_key = ? AND app_id = ?`,
+		ownerKey,
+		appID,
+	).Scan(&result.ObservationCount, &observationOldestCreatedAt, &observationNewestCreatedAt); err != nil {
+		return SyncMutationReplayDiagnostics{}, s.wrapDBError("read_sync_mutation_replay_diagnostics_observations", started, fmt.Errorf("summarize sync mutation replay observations: %w", err))
+	}
+
+	parsedObservationOldestCreatedAt, err := parseNullableTimestamp(observationOldestCreatedAt)
+	if err != nil {
+		return SyncMutationReplayDiagnostics{}, s.wrapDBError("read_sync_mutation_replay_diagnostics_observations", started, err)
+	}
+	parsedObservationNewestCreatedAt, err := parseNullableTimestamp(observationNewestCreatedAt)
+	if err != nil {
+		return SyncMutationReplayDiagnostics{}, s.wrapDBError("read_sync_mutation_replay_diagnostics_observations", started, err)
+	}
+	result.ObservationOldestCreatedAt = parsedObservationOldestCreatedAt
+	result.ObservationNewestCreatedAt = parsedObservationNewestCreatedAt
+
+	latestObservation, found, err := getLatestSyncMutationReplayDryRunObservationFromQuerier(ctx, s.db, ownerKey, appID)
+	if err != nil {
+		return SyncMutationReplayDiagnostics{}, s.wrapDBError("read_sync_mutation_replay_diagnostics_latest_observation", started, fmt.Errorf("load latest sync mutation replay observation: %w", err))
+	}
+	if found {
+		result.LatestObservation = &latestObservation
+	}
+
+	var applicationOldestCreatedAt sql.NullString
+	var applicationNewestCreatedAt sql.NullString
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*), MIN(created_at), MAX(created_at)
+		FROM sync_mutation_replay_applications
+		WHERE owner_key = ? AND app_id = ?`,
+		ownerKey,
+		appID,
+	).Scan(&result.ApplicationCount, &applicationOldestCreatedAt, &applicationNewestCreatedAt); err != nil {
+		return SyncMutationReplayDiagnostics{}, s.wrapDBError("read_sync_mutation_replay_diagnostics_applications", started, fmt.Errorf("summarize sync mutation replay applications: %w", err))
+	}
+
+	parsedApplicationOldestCreatedAt, err := parseNullableTimestamp(applicationOldestCreatedAt)
+	if err != nil {
+		return SyncMutationReplayDiagnostics{}, s.wrapDBError("read_sync_mutation_replay_diagnostics_applications", started, err)
+	}
+	parsedApplicationNewestCreatedAt, err := parseNullableTimestamp(applicationNewestCreatedAt)
+	if err != nil {
+		return SyncMutationReplayDiagnostics{}, s.wrapDBError("read_sync_mutation_replay_diagnostics_applications", started, err)
+	}
+	result.ApplicationOldestCreatedAt = parsedApplicationOldestCreatedAt
+	result.ApplicationNewestCreatedAt = parsedApplicationNewestCreatedAt
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT application_status, COUNT(*)
+		FROM sync_mutation_replay_applications
+		WHERE owner_key = ? AND app_id = ?
+		GROUP BY application_status
+		ORDER BY application_status ASC`,
+		ownerKey,
+		appID,
+	)
+	if err != nil {
+		return SyncMutationReplayDiagnostics{}, s.wrapDBError("read_sync_mutation_replay_diagnostics_application_statuses", started, fmt.Errorf("summarize sync mutation replay application statuses: %w", err))
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var status string
+		var count int64
+		if err := rows.Scan(&status, &count); err != nil {
+			return SyncMutationReplayDiagnostics{}, s.wrapDBError("read_sync_mutation_replay_diagnostics_application_statuses_scan", started, fmt.Errorf("scan sync mutation replay application status count: %w", err))
+		}
+		result.ApplicationStatusCounts[status] = count
+	}
+	if err := rows.Err(); err != nil {
+		return SyncMutationReplayDiagnostics{}, s.wrapDBError("read_sync_mutation_replay_diagnostics_application_statuses_rows", started, fmt.Errorf("iterate sync mutation replay application status counts: %w", err))
+	}
+
+	if info, err := os.Stat(s.dbPath); err == nil && !info.IsDir() {
+		dbFileBytes := info.Size()
+		result.DBFileBytes = &dbFileBytes
+	}
+
+	s.logDBOperation("read_sync_mutation_replay_diagnostics", started, nil)
+	return result, nil
+}
+
+func (s *Store) CompactSyncMutationReplayArtifacts(ctx context.Context, ownerKey, appID string, options SyncMutationReplayCompactOptions) (SyncMutationReplayCompactResult, error) {
+	started := time.Now()
+	normalizedOptions, err := normalizeSyncMutationReplayCompactOptions(options)
+	if err != nil {
+		return SyncMutationReplayCompactResult{}, err
+	}
+
+	result := SyncMutationReplayCompactResult{
+		OwnerKey:             ownerKey,
+		AppID:                appID,
+		Execute:              normalizedOptions.Execute,
+		ObservationRetention: normalizedOptions.ObservationRetention,
+		ReceiptRetention:     normalizedOptions.ReceiptRetention,
+		ObservationCutoff:    normalizedOptions.Now.Add(-normalizedOptions.ObservationRetention),
+		ReceiptCutoff:        normalizedOptions.Now.Add(-normalizedOptions.ReceiptRetention),
+	}
+
+	ctx, cancel := withDBTimeout(ctx)
+	defer cancel()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return SyncMutationReplayCompactResult{}, s.wrapDBError("write_begin_sync_mutation_replay_compact", started, fmt.Errorf("begin sync mutation replay compaction transaction: %w", err))
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	observations, err := listSyncMutationReplayDryRunObservationsFromQuerier(ctx, tx, ownerKey, appID)
+	if err != nil {
+		return SyncMutationReplayCompactResult{}, s.wrapDBError("read_sync_mutation_replay_compact_observations", started, fmt.Errorf("load sync mutation replay observations for compaction: %w", err))
+	}
+	receipts, err := listSyncMutationReceiptRowsForCompact(ctx, tx, ownerKey, appID)
+	if err != nil {
+		return SyncMutationReplayCompactResult{}, s.wrapDBError("read_sync_mutation_replay_compact_receipts", started, fmt.Errorf("load sync mutation receipts for compaction: %w", err))
+	}
+	applications, err := listSyncMutationReplayApplicationsFromQuerier(ctx, tx, ownerKey, appID)
+	if err != nil {
+		return SyncMutationReplayCompactResult{}, s.wrapDBError("read_sync_mutation_replay_compact_applications", started, fmt.Errorf("load sync mutation replay applications for compaction: %w", err))
+	}
+	result.RetainedApplicationCount = int64(len(applications))
+
+	referencedObservationIDs := make(map[int64]struct{})
+	applicationMutationIDs := make(map[string]struct{})
+	for _, application := range applications {
+		applicationMutationIDs[application.MutationID] = struct{}{}
+		if application.ReplayObservationID != nil {
+			referencedObservationIDs[*application.ReplayObservationID] = struct{}{}
+		}
+	}
+
+	retainedObservationIDs := make(map[int64]struct{})
+	retainedObservations := make([]SyncMutationReplayDryRunObservation, 0, len(observations))
+	observationDeleteIDs := make([]int64, 0)
+	for index, observation := range observations {
+		retain := index < normalizedOptions.RetainedObservationCount || !observation.CreatedAt.Before(result.ObservationCutoff)
+		if _, referenced := referencedObservationIDs[observation.ID]; referenced {
+			retain = true
+		}
+		if retain {
+			retainedObservationIDs[observation.ID] = struct{}{}
+			retainedObservations = append(retainedObservations, observation)
+			continue
+		}
+		observationDeleteIDs = append(observationDeleteIDs, observation.ID)
+	}
+	result.RetainedObservationCount = len(retainedObservationIDs)
+
+	latestReceiptIDs := latestSyncMutationReceiptIDs(receipts, normalizedOptions.RetainedReceiptCount)
+	observationProtectedReceiptIDs := syncMutationReceiptIDsProtectedByObservations(receipts, retainedObservations)
+	result.ProtectedReceiptCount = len(observationProtectedReceiptIDs)
+	receiptDeleteIDs := make([]int64, 0)
+	for _, receipt := range receipts {
+		if !receipt.AcceptedAt.Before(result.ReceiptCutoff) {
+			continue
+		}
+		if _, retain := latestReceiptIDs[receipt.ID]; retain {
+			continue
+		}
+		if _, retain := applicationMutationIDs[receipt.MutationID]; retain {
+			continue
+		}
+		if _, retain := observationProtectedReceiptIDs[receipt.ID]; retain {
+			continue
+		}
+		receiptDeleteIDs = append(receiptDeleteIDs, receipt.ID)
+	}
+	result.RetainedReceiptCount = len(receipts) - len(receiptDeleteIDs)
+	result.CandidateObservationDeleteCount = int64(len(observationDeleteIDs))
+	result.CandidateReceiptDeleteCount = int64(len(receiptDeleteIDs))
+
+	if normalizedOptions.Execute {
+		deletedObservations, err := deleteSyncMutationReplayObservationRowsByID(ctx, tx, ownerKey, appID, observationDeleteIDs)
+		if err != nil {
+			return SyncMutationReplayCompactResult{}, s.wrapDBError("write_sync_mutation_replay_compact_observations", started, fmt.Errorf("delete sync mutation replay observations: %w", err))
+		}
+		deletedReceipts, err := deleteSyncMutationReceiptRowsByID(ctx, tx, ownerKey, appID, receiptDeleteIDs)
+		if err != nil {
+			return SyncMutationReplayCompactResult{}, s.wrapDBError("write_sync_mutation_replay_compact_receipts", started, fmt.Errorf("delete sync mutation receipts: %w", err))
+		}
+		result.DeletedObservationCount = deletedObservations
+		result.DeletedReceiptCount = deletedReceipts
+	}
+
+	if err := tx.Commit(); err != nil {
+		return SyncMutationReplayCompactResult{}, s.wrapDBError("write_commit_sync_mutation_replay_compact", started, fmt.Errorf("commit sync mutation replay compaction transaction: %w", err))
+	}
+	committed = true
+	s.logDBOperation("write_sync_mutation_replay_compact", started, nil)
+
+	return result, nil
 }
 
 func MapSyncMutationReplayPolicyStatusToApplicationStatus(policyStatus string) (string, bool) {
@@ -1413,6 +1733,13 @@ type syncMutationReplayQuerier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
+type syncMutationReceiptRowForCompact struct {
+	ID         int64
+	MutationID string
+	CreatedAt  time.Time
+	AcceptedAt time.Time
+}
+
 func loadReplayDocumentFromQuerier(ctx context.Context, querier syncMutationReplayQuerier, ownerKey, appID string) (Document, error) {
 	return scanDocument(querier.QueryRowContext(
 		ctx,
@@ -1469,6 +1796,48 @@ func listAcceptedSyncMutationReceiptsFromQuerier(ctx context.Context, querier sy
 	return receipts, nil
 }
 
+func listSyncMutationReceiptRowsForCompact(ctx context.Context, querier syncMutationReplayQuerier, ownerKey, appID string) ([]syncMutationReceiptRowForCompact, error) {
+	rows, err := querier.QueryContext(
+		ctx,
+		`SELECT id, mutation_id, created_at, accepted_at
+		FROM sync_mutation_receipts
+		WHERE owner_key = ? AND app_id = ? AND status = ?
+		ORDER BY accepted_at ASC, created_at ASC, mutation_id ASC`,
+		ownerKey,
+		appID,
+		SyncMutationReceiptStatusAccepted,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	receipts := make([]syncMutationReceiptRowForCompact, 0)
+	for rows.Next() {
+		var receipt syncMutationReceiptRowForCompact
+		var createdAt string
+		var acceptedAt string
+		if err := rows.Scan(&receipt.ID, &receipt.MutationID, &createdAt, &acceptedAt); err != nil {
+			return nil, err
+		}
+		parsedCreatedAt, err := time.Parse(time.RFC3339, createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse sync mutation receipt created_at: %w", err)
+		}
+		parsedAcceptedAt, err := time.Parse(time.RFC3339, acceptedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse sync mutation receipt accepted_at: %w", err)
+		}
+		receipt.CreatedAt = parsedCreatedAt.UTC()
+		receipt.AcceptedAt = parsedAcceptedAt.UTC()
+		receipts = append(receipts, receipt)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return receipts, nil
+}
+
 func listSyncMutationReplayApplicationsFromQuerier(ctx context.Context, querier syncMutationReplayQuerier, ownerKey, appID string) ([]SyncMutationReplayApplication, error) {
 	rows, err := querier.QueryContext(
 		ctx,
@@ -1508,6 +1877,83 @@ func listSyncMutationReplayApplicationsFromQuerier(ctx context.Context, querier 
 		return nil, err
 	}
 	return applications, nil
+}
+
+func listSyncMutationReplayDryRunObservationsFromQuerier(ctx context.Context, querier syncMutationReplayQuerier, ownerKey, appID string) ([]SyncMutationReplayDryRunObservation, error) {
+	rows, err := querier.QueryContext(
+		ctx,
+		`SELECT
+			id,
+			owner_key,
+			app_id,
+			canonical_document_version_observed,
+			canonical_document_hash_observed,
+			receipt_count_considered,
+			first_ordered_mutation_id,
+			last_ordered_mutation_id,
+			ordered_receipt_high_watermark,
+			applied_count,
+			skipped_count,
+			warning_count,
+			preview_hash,
+			created_at
+		FROM sync_mutation_replay_dry_run_observations
+		WHERE owner_key = ? AND app_id = ?
+		ORDER BY created_at DESC, id DESC`,
+		ownerKey,
+		appID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	observations := make([]SyncMutationReplayDryRunObservation, 0)
+	for rows.Next() {
+		observation, scanErr := scanSyncMutationReplayDryRunObservation(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		observations = append(observations, observation)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return observations, nil
+}
+
+func getLatestSyncMutationReplayDryRunObservationFromQuerier(ctx context.Context, querier syncMutationReplayQuerier, ownerKey, appID string) (SyncMutationReplayDryRunObservation, bool, error) {
+	observation, err := scanSyncMutationReplayDryRunObservation(querier.QueryRowContext(
+		ctx,
+		`SELECT
+			id,
+			owner_key,
+			app_id,
+			canonical_document_version_observed,
+			canonical_document_hash_observed,
+			receipt_count_considered,
+			first_ordered_mutation_id,
+			last_ordered_mutation_id,
+			ordered_receipt_high_watermark,
+			applied_count,
+			skipped_count,
+			warning_count,
+			preview_hash,
+			created_at
+		FROM sync_mutation_replay_dry_run_observations
+		WHERE owner_key = ? AND app_id = ?
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1`,
+		ownerKey,
+		appID,
+	))
+	if err != nil {
+		if errors.Is(err, ErrSyncMutationReplayDryRunObservationNotFound) {
+			return SyncMutationReplayDryRunObservation{}, false, nil
+		}
+		return SyncMutationReplayDryRunObservation{}, false, err
+	}
+	return observation, true, nil
 }
 
 func filterCommittedSyncDeltaApplications(applications []SyncMutationReplayApplication) []SyncMutationReplayApplication {
@@ -2869,6 +3315,127 @@ func summarizeReplayReceiptOrdering(receipts []SyncMutationReceipt) (int, string
 	return count, receipts[0].MutationID, receipts[count-1].MutationID, buildReplayReceiptHighWatermark(receipts)
 }
 
+func normalizeSyncMutationReplayCompactOptions(options SyncMutationReplayCompactOptions) (SyncMutationReplayCompactOptions, error) {
+	if options.ObservationRetention < 0 {
+		return SyncMutationReplayCompactOptions{}, fmt.Errorf("compact sync mutation replay artifacts: observation retention must be non-negative")
+	}
+	if options.ReceiptRetention < 0 {
+		return SyncMutationReplayCompactOptions{}, fmt.Errorf("compact sync mutation replay artifacts: receipt retention must be non-negative")
+	}
+	if options.RetainedObservationCount < 0 {
+		return SyncMutationReplayCompactOptions{}, fmt.Errorf("compact sync mutation replay artifacts: retained observation count must be non-negative")
+	}
+	if options.RetainedReceiptCount < 0 {
+		return SyncMutationReplayCompactOptions{}, fmt.Errorf("compact sync mutation replay artifacts: retained receipt count must be non-negative")
+	}
+	if options.Now.IsZero() {
+		options.Now = time.Now().UTC()
+	} else {
+		options.Now = options.Now.UTC()
+	}
+	if options.ObservationRetention == 0 {
+		options.ObservationRetention = DefaultSyncMutationReplayObservationRetention
+	}
+	if options.ReceiptRetention == 0 {
+		options.ReceiptRetention = DefaultSyncMutationReplayReceiptRetention
+	}
+	if options.RetainedObservationCount == 0 {
+		options.RetainedObservationCount = DefaultSyncMutationReplayRetainedObservationCount
+	}
+	if options.RetainedReceiptCount == 0 {
+		options.RetainedReceiptCount = DefaultSyncMutationReplayRetainedReceiptCount
+	}
+	return options, nil
+}
+
+func latestSyncMutationReceiptIDs(receipts []syncMutationReceiptRowForCompact, retainedCount int) map[int64]struct{} {
+	result := make(map[int64]struct{})
+	if retainedCount <= 0 {
+		return result
+	}
+	start := len(receipts) - retainedCount
+	if start < 0 {
+		start = 0
+	}
+	for _, receipt := range receipts[start:] {
+		result[receipt.ID] = struct{}{}
+	}
+	return result
+}
+
+func syncMutationReceiptIDsProtectedByObservations(receipts []syncMutationReceiptRowForCompact, observations []SyncMutationReplayDryRunObservation) map[int64]struct{} {
+	protected := make(map[int64]struct{})
+	for _, observation := range observations {
+		if observation.ReceiptCountConsidered <= 0 || observation.OrderedReceiptHighWatermark == "" {
+			continue
+		}
+		watermarkIndex := -1
+		for index, receipt := range receipts {
+			if buildSyncMutationReceiptRowHighWatermark(receipt) == observation.OrderedReceiptHighWatermark {
+				watermarkIndex = index
+				break
+			}
+		}
+		if watermarkIndex < 0 || watermarkIndex+1 < observation.ReceiptCountConsidered {
+			continue
+		}
+		if observation.FirstOrderedMutationID != "" && receipts[0].MutationID != observation.FirstOrderedMutationID {
+			continue
+		}
+		if observation.LastOrderedMutationID != "" && receipts[watermarkIndex].MutationID != observation.LastOrderedMutationID {
+			continue
+		}
+		for index := 0; index < observation.ReceiptCountConsidered; index++ {
+			protected[receipts[index].ID] = struct{}{}
+		}
+	}
+	return protected
+}
+
+func buildSyncMutationReceiptRowHighWatermark(receipt syncMutationReceiptRowForCompact) string {
+	return receipt.AcceptedAt.UTC().Format(time.RFC3339) + "|" + receipt.CreatedAt.UTC().Format(time.RFC3339) + "|" + receipt.MutationID
+}
+
+func deleteSyncMutationReplayObservationRowsByID(ctx context.Context, tx *sql.Tx, ownerKey, appID string, ids []int64) (int64, error) {
+	return deleteSyncMutationReplayRowsByID(ctx, tx, `DELETE FROM sync_mutation_replay_dry_run_observations WHERE owner_key = ? AND app_id = ? AND id IN (`, ownerKey, appID, ids)
+}
+
+func deleteSyncMutationReceiptRowsByID(ctx context.Context, tx *sql.Tx, ownerKey, appID string, ids []int64) (int64, error) {
+	return deleteSyncMutationReplayRowsByID(ctx, tx, `DELETE FROM sync_mutation_receipts WHERE owner_key = ? AND app_id = ? AND id IN (`, ownerKey, appID, ids)
+}
+
+func deleteSyncMutationReplayRowsByID(ctx context.Context, tx *sql.Tx, queryPrefix, ownerKey, appID string, ids []int64) (int64, error) {
+	const chunkSize = 400
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	var total int64
+	for start := 0; start < len(ids); start += chunkSize {
+		end := start + chunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[start:end]
+		placeholders := strings.TrimRight(strings.Repeat("?,", len(chunk)), ",")
+		args := make([]any, 0, 2+len(chunk))
+		args = append(args, ownerKey, appID)
+		for _, id := range chunk {
+			args = append(args, id)
+		}
+		execResult, err := tx.ExecContext(ctx, queryPrefix+placeholders+")", args...)
+		if err != nil {
+			return 0, err
+		}
+		rowsAffected, err := execResult.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		total += rowsAffected
+	}
+	return total, nil
+}
+
 func hashReplayObservationBytes(value []byte) string {
 	sum := sha256.Sum256(value)
 	return hex.EncodeToString(sum[:])
@@ -3734,6 +4301,18 @@ func isLockedError(err error) bool {
 		return false
 	}
 	return strings.Contains(strings.ToLower(err.Error()), "database is locked")
+}
+
+func parseNullableTimestamp(value sql.NullString) (*time.Time, error) {
+	if !value.Valid {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, value.String)
+	if err != nil {
+		return nil, fmt.Errorf("parse timestamp %q: %w", value.String, err)
+	}
+	parsed = parsed.UTC()
+	return &parsed, nil
 }
 
 func mustParseTimestamp(value string) time.Time {

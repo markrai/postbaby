@@ -4749,6 +4749,215 @@ func TestRecordSyncMutationReplayDryRunObservationDoesNotCreateReplayApplication
 	}
 }
 
+func TestGetSyncMutationReplayDiagnosticsSummarizesOperatorState(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	doc := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-a", "Node", "item-a", "CreateNode", `{"tabId":"tab-1","name":"A","position":{"top":"10px","left":"20px"}}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:01Z", "2026-06-01T12:00:01Z",
+		buildReplayReceiptInput("mut-b", "Node", "item-b", "CreateNode", `{"tabId":"tab-1","name":"B","position":{"top":"10px","left":"20px"}}`),
+	)
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record dry-run observation: %v", err)
+	}
+	hashBefore := hashReplayObservationBytes(doc.Body)
+	if _, err := docStore.RecordSyncMutationReplayApplicationInert(ctx, "owner", "postbaby-web", SyncMutationReplayApplicationInput{
+		MutationID:                     "mut-a",
+		ApplicationStatus:              SyncMutationReplayApplicationStatusApplied,
+		ApplicationReason:              "policy_allowed",
+		CanonicalDocumentVersionBefore: doc.Version,
+		CanonicalDocumentHashBefore:    hashBefore,
+		ReplayObservationID:            &observation.ID,
+	}); err != nil {
+		t.Fatalf("record replay application: %v", err)
+	}
+	if _, err := docStore.RecordSyncMutationReplayApplicationInert(ctx, "owner", "postbaby-web", SyncMutationReplayApplicationInput{
+		MutationID:                     "mut-b",
+		ApplicationStatus:              SyncMutationReplayApplicationStatusSkipped,
+		ApplicationReason:              "policy_skip_missing_tab",
+		CanonicalDocumentVersionBefore: doc.Version,
+		CanonicalDocumentHashBefore:    hashBefore,
+		ReplayObservationID:            &observation.ID,
+	}); err != nil {
+		t.Fatalf("record skipped replay application: %v", err)
+	}
+
+	diagnostics, err := docStore.GetSyncMutationReplayDiagnostics(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("get sync mutation replay diagnostics: %v", err)
+	}
+
+	if diagnostics.ReceiptCount != 2 || diagnostics.ObservationCount != 1 || diagnostics.ApplicationCount != 2 {
+		t.Fatalf("unexpected diagnostics counts: %+v", diagnostics)
+	}
+	if diagnostics.ReceiptPayloadBytes <= 0 || diagnostics.DBFileBytes == nil || *diagnostics.DBFileBytes <= 0 {
+		t.Fatalf("expected payload bytes and db file bytes, got %+v", diagnostics)
+	}
+	if diagnostics.LatestObservation == nil || diagnostics.LatestObservation.ID != observation.ID {
+		t.Fatalf("expected latest observation %d, got %+v", observation.ID, diagnostics.LatestObservation)
+	}
+	if diagnostics.ApplicationStatusCounts[SyncMutationReplayApplicationStatusApplied] != 1 ||
+		diagnostics.ApplicationStatusCounts[SyncMutationReplayApplicationStatusSkipped] != 1 {
+		t.Fatalf("unexpected application status counts: %+v", diagnostics.ApplicationStatusCounts)
+	}
+	if diagnostics.ReceiptOldestAcceptedAt == nil || diagnostics.ReceiptNewestAcceptedAt == nil ||
+		diagnostics.ObservationNewestCreatedAt == nil || diagnostics.ApplicationNewestCreatedAt == nil {
+		t.Fatalf("expected timestamp summaries, got %+v", diagnostics)
+	}
+}
+
+func TestCompactSyncMutationReplayArtifactsDryRunIsReadOnly(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	seedOldReplayReceiptsForCompaction(t, docStore, "owner", "postbaby-web", 105)
+	beforeReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	beforeObservationCount := countReplayDryRunObservationsForTest(t, docStore, "owner", "postbaby-web")
+
+	result, err := docStore.CompactSyncMutationReplayArtifacts(ctx, "owner", "postbaby-web", SyncMutationReplayCompactOptions{
+		Now:     time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC),
+		Execute: false,
+	})
+	if err != nil {
+		t.Fatalf("dry-run compact sync mutation replay artifacts: %v", err)
+	}
+
+	afterReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	afterObservationCount := countReplayDryRunObservationsForTest(t, docStore, "owner", "postbaby-web")
+	assertReplayReceiptRowsEqual(t, beforeReceipts, afterReceipts)
+	if beforeObservationCount != afterObservationCount {
+		t.Fatalf("expected dry-run to preserve observations, before=%d after=%d", beforeObservationCount, afterObservationCount)
+	}
+	if result.CandidateReceiptDeleteCount != 5 || result.DeletedReceiptCount != 0 || result.Execute {
+		t.Fatalf("unexpected dry-run compaction result: %+v", result)
+	}
+}
+
+func TestCompactSyncMutationReplayArtifactsExecuteDeletesEligibleRows(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	seedOldReplayReceiptsForCompaction(t, docStore, "owner", "postbaby-web", 105)
+
+	result, err := docStore.CompactSyncMutationReplayArtifacts(ctx, "owner", "postbaby-web", SyncMutationReplayCompactOptions{
+		Now:     time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC),
+		Execute: true,
+	})
+	if err != nil {
+		t.Fatalf("compact sync mutation replay artifacts: %v", err)
+	}
+
+	afterReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	if len(afterReceipts) != DefaultSyncMutationReplayRetainedReceiptCount {
+		t.Fatalf("expected retained receipt count %d, got %d", DefaultSyncMutationReplayRetainedReceiptCount, len(afterReceipts))
+	}
+	if result.CandidateReceiptDeleteCount != 5 || result.DeletedReceiptCount != 5 || !result.Execute {
+		t.Fatalf("unexpected executed compaction result: %+v", result)
+	}
+}
+
+func TestCompactSyncMutationReplayArtifactsProtectsReferencedRows(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	doc := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	observations := make([]SyncMutationReplayDryRunObservation, 0, 7)
+	for index := 0; index < 7; index++ {
+		observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+		if err != nil {
+			t.Fatalf("record observation %d: %v", index, err)
+		}
+		createdAt := time.Date(2026, 1, 1, 12, index, 0, 0, time.UTC).Format(time.RFC3339)
+		setReplayObservationCreatedAtForTest(t, docStore, observation.ID, createdAt)
+		observation.CreatedAt = mustParseTimestamp(createdAt)
+		observations = append(observations, observation)
+	}
+	seedOldReplayReceiptsForCompaction(t, docStore, "owner", "postbaby-web", 105)
+	hashBefore := hashReplayObservationBytes(doc.Body)
+	if _, err := docStore.RecordSyncMutationReplayApplicationInert(ctx, "owner", "postbaby-web", SyncMutationReplayApplicationInput{
+		MutationID:                     "mut-000",
+		ApplicationStatus:              SyncMutationReplayApplicationStatusApplied,
+		ApplicationReason:              "policy_allowed",
+		CanonicalDocumentVersionBefore: doc.Version,
+		CanonicalDocumentHashBefore:    hashBefore,
+		ReplayObservationID:            &observations[0].ID,
+	}); err != nil {
+		t.Fatalf("record referenced replay application: %v", err)
+	}
+
+	result, err := docStore.CompactSyncMutationReplayArtifacts(ctx, "owner", "postbaby-web", SyncMutationReplayCompactOptions{
+		Now:     time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC),
+		Execute: true,
+	})
+	if err != nil {
+		t.Fatalf("compact sync mutation replay artifacts: %v", err)
+	}
+
+	afterObservations := loadAllReplayDryRunObservationsForTest(t, docStore, "owner", "postbaby-web")
+	afterReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	if len(afterObservations) != 6 {
+		t.Fatalf("expected referenced observation plus latest five to remain, got %+v", afterObservations)
+	}
+	if len(afterReceipts) != 101 {
+		t.Fatalf("expected application-linked receipt plus latest hundred to remain, got %d", len(afterReceipts))
+	}
+	if result.DeletedObservationCount != 1 || result.DeletedReceiptCount != 4 {
+		t.Fatalf("unexpected protected compaction result: %+v", result)
+	}
+	if afterObservations[0].ID != observations[0].ID {
+		t.Fatalf("expected referenced oldest observation to be retained, got %+v", afterObservations)
+	}
+	if afterReceipts[0].MutationID != "mut-000" {
+		t.Fatalf("expected application-linked old receipt to be retained, got first receipt %+v", afterReceipts[0])
+	}
+}
+
 func TestBlockedPolicyResultDoesNotBecomeReplayApplicationRecord(t *testing.T) {
 	t.Parallel()
 
@@ -5379,6 +5588,19 @@ func insertAcceptedReplayReceipt(t *testing.T, docStore *Store, ownerKey, appID,
 	}
 }
 
+func seedOldReplayReceiptsForCompaction(t *testing.T, docStore *Store, ownerKey, appID string, count int) {
+	t.Helper()
+
+	start := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	for index := 0; index < count; index++ {
+		timestamp := start.Add(time.Duration(index) * time.Second).Format(time.RFC3339)
+		mutationID := fmt.Sprintf("mut-%03d", index)
+		insertAcceptedReplayReceipt(t, docStore, ownerKey, appID, timestamp, timestamp,
+			buildReplayReceiptInput(mutationID, "Node", fmt.Sprintf("item-%03d", index), "CreateNode", `{"tabId":"tab-1","name":"X","position":{"top":"10px","left":"20px"}}`),
+		)
+	}
+}
+
 func countReplayItemsByID(tab *replayTab, itemID string) int {
 	count := 0
 	for _, item := range tab.Items {
@@ -5713,6 +5935,20 @@ func setReplayReceiptAcceptedAndCreatedAtForTest(t *testing.T, docStore *Store, 
 	)
 	if err != nil {
 		t.Fatalf("update replay receipt timestamps: %v", err)
+	}
+}
+
+func setReplayObservationCreatedAtForTest(t *testing.T, docStore *Store, observationID int64, createdAt string) {
+	t.Helper()
+
+	_, err := docStore.db.ExecContext(
+		context.Background(),
+		`UPDATE sync_mutation_replay_dry_run_observations SET created_at = ? WHERE id = ?`,
+		createdAt,
+		observationID,
+	)
+	if err != nil {
+		t.Fatalf("update replay observation created_at: %v", err)
 	}
 }
 

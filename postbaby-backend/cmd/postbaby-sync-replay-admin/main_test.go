@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"postbaby-backend/internal/store"
 
@@ -1090,6 +1091,223 @@ func TestRunApplyStaleObservationRequiresFreshObservationBeforeSuccess(t *testin
 	assertReplayAdminReceiptsAndObservationsEqual(t, beforeSecondState, afterSecondState)
 }
 
+func TestRunObserveJSONRecordsObservation(t *testing.T) {
+	t.Setenv(envEnableInternalSyncReplayCLI, "1")
+	t.Setenv(envDeploymentMode, "selfhosted")
+
+	fixture := createReplayPreflightFixture(t, replayPreflightFixtureOptions{})
+	beforeState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+
+	exitCode := run([]string{
+		commandModeObserve,
+		"--db", fixture.dbPath,
+		"--owner-key", fixture.ownerKey,
+		"--app-id", fixture.appID,
+	}, stdout, stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected observe success, got exit code %d stderr=%q", exitCode, stderr.String())
+	}
+
+	result := decodeObserveResult(t, stdout.String())
+	if result.Status != operatorStatusRecorded || result.Observation == nil {
+		t.Fatalf("unexpected observe result: %+v", result)
+	}
+	if result.Observation.ID <= fixture.observationID || result.Observation.ReceiptCountConsidered != len(beforeState.Receipts) {
+		t.Fatalf("unexpected recorded observation summary: %+v", result.Observation)
+	}
+	if !strings.Contains(stderr.String(), "mode=observe") || !strings.Contains(stderr.String(), "status="+operatorStatusRecorded) {
+		t.Fatalf("unexpected observe audit line: %q", stderr.String())
+	}
+
+	afterState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	if beforeState.DocumentVersion != afterState.DocumentVersion || beforeState.DocumentBody != afterState.DocumentBody {
+		t.Fatalf("observe changed canonical document\nbefore=%+v\nafter=%+v", beforeState, afterState)
+	}
+	if !reflect.DeepEqual(beforeState.Receipts, afterState.Receipts) || !reflect.DeepEqual(beforeState.Applications, afterState.Applications) {
+		t.Fatalf("observe changed receipts/applications\nbefore=%+v\nafter=%+v", beforeState, afterState)
+	}
+	if len(afterState.Observations) != len(beforeState.Observations)+1 {
+		t.Fatalf("expected one new observation, before=%+v after=%+v", beforeState.Observations, afterState.Observations)
+	}
+}
+
+func TestRunDiagnoseTextDoesNotMutateState(t *testing.T) {
+	t.Setenv(envEnableInternalSyncReplayCLI, "1")
+	t.Setenv(envDeploymentMode, "selfhosted")
+
+	fixture := createReplayPreflightFixture(t, replayPreflightFixtureOptions{})
+	beforeState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+
+	exitCode := run([]string{
+		commandModeDiagnose,
+		"--db", fixture.dbPath,
+		"--owner-key", fixture.ownerKey,
+		"--app-id", fixture.appID,
+		"--output", "text",
+		"--verbose",
+	}, stdout, stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected diagnose success, got exit code %d stderr=%q", exitCode, stderr.String())
+	}
+
+	text := stdout.String()
+	if !strings.Contains(text, "status="+operatorStatusOK) ||
+		!strings.Contains(text, "receipt_count=1") ||
+		!strings.Contains(text, "observation_count=1") ||
+		!strings.Contains(text, "application_count=0") ||
+		!strings.Contains(text, "application_status_counts=") {
+		t.Fatalf("unexpected diagnose text output: %q", text)
+	}
+	if !strings.Contains(stderr.String(), "mode=diagnose") || !strings.Contains(stderr.String(), "status="+operatorStatusOK) {
+		t.Fatalf("unexpected diagnose audit line: %q", stderr.String())
+	}
+	afterState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	assertReplayAdminStateEqual(t, beforeState, afterState)
+}
+
+func TestRunObserveRefusesInCloudModeBeforeStoreOpen(t *testing.T) {
+	t.Setenv(envEnableInternalSyncReplayCLI, "1")
+	t.Setenv(envDeploymentMode, "cloud")
+
+	fixture := createReplayPreflightFixture(t, replayPreflightFixtureOptions{})
+	spyHolder := &replayAdminStoreSpy{}
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+
+	exitCode := runWithDeps(makeReplayAdminCommandDeps(t, spyHolder, nil), []string{
+		commandModeObserve,
+		"--db", fixture.dbPath,
+		"--owner-key", fixture.ownerKey,
+		"--app-id", fixture.appID,
+	}, stdout, stderr)
+	if exitCode != 1 {
+		t.Fatalf("expected observe cloud refusal, got exit code %d stderr=%q", exitCode, stderr.String())
+	}
+
+	result := decodeObserveResult(t, stdout.String())
+	if result.Status != operatorStatusRefusedCloud {
+		t.Fatalf("unexpected observe result: %+v", result)
+	}
+	if spyHolder.store != nil {
+		t.Fatalf("expected cloud refusal before store open")
+	}
+}
+
+func TestRunCompactDryRunJSONDoesNotMutateState(t *testing.T) {
+	t.Setenv(envEnableInternalSyncReplayCLI, "1")
+	t.Setenv(envDeploymentMode, "selfhosted")
+
+	fixture := createReplayCompactionFixture(t, 105)
+	beforeState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+
+	exitCode := run([]string{
+		commandModeCompact,
+		"--db", fixture.dbPath,
+		"--owner-key", fixture.ownerKey,
+		"--app-id", fixture.appID,
+	}, stdout, stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected compact dry-run success, got exit code %d stderr=%q", exitCode, stderr.String())
+	}
+
+	result := decodeCompactResult(t, stdout.String())
+	if result.Status != operatorStatusDryRun || result.Execute || result.CandidateReceiptDeleteCount != 5 || result.DeletedReceiptCount != 0 {
+		t.Fatalf("unexpected compact dry-run result: %+v", result)
+	}
+	if !strings.Contains(stderr.String(), "mode=compact") || !strings.Contains(stderr.String(), "status="+operatorStatusDryRun) {
+		t.Fatalf("unexpected compact audit line: %q", stderr.String())
+	}
+	afterState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	assertReplayAdminStateEqual(t, beforeState, afterState)
+}
+
+func TestRunCompactExecuteRequiresCompactGateBeforeStoreOpen(t *testing.T) {
+	t.Setenv(envEnableInternalSyncReplayCLI, "1")
+	t.Setenv(envEnableInternalSyncReplayCompact, "")
+	t.Setenv(envDeploymentMode, "selfhosted")
+
+	fixture := createReplayCompactionFixture(t, 105)
+	spyHolder := &replayAdminStoreSpy{}
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+
+	exitCode := runWithDeps(makeReplayAdminCommandDeps(t, spyHolder, nil), buildCompactExecuteArgs(fixture), stdout, stderr)
+	if exitCode != 1 {
+		t.Fatalf("expected compact gate refusal, got exit code %d stderr=%q", exitCode, stderr.String())
+	}
+
+	result := decodeCompactResult(t, stdout.String())
+	if result.Status != operatorStatusRefusedCompactDisabled {
+		t.Fatalf("unexpected compact result: %+v", result)
+	}
+	if spyHolder.store != nil {
+		t.Fatalf("expected compact gate refusal before store open")
+	}
+}
+
+func TestRunCompactExecuteRequiresConfirmationBeforeStoreOpen(t *testing.T) {
+	t.Setenv(envEnableInternalSyncReplayCLI, "1")
+	t.Setenv(envEnableInternalSyncReplayCompact, "1")
+	t.Setenv(envDeploymentMode, "selfhosted")
+
+	fixture := createReplayCompactionFixture(t, 105)
+	spyHolder := &replayAdminStoreSpy{}
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+
+	exitCode := runWithDeps(makeReplayAdminCommandDeps(t, spyHolder, nil), []string{
+		commandModeCompact,
+		"--db", fixture.dbPath,
+		"--owner-key", fixture.ownerKey,
+		"--app-id", fixture.appID,
+		"--execute",
+	}, stdout, stderr)
+	if exitCode != 2 {
+		t.Fatalf("expected compact confirmation failure, got exit code %d stderr=%q", exitCode, stderr.String())
+	}
+
+	result := decodeCompactResult(t, stdout.String())
+	if result.Status != operatorStatusInvalidConfirmation ||
+		!containsString(result.Reasons, "missing_delete_confirmation") ||
+		!containsString(result.Reasons, "missing_confirm_owner_key") ||
+		!containsString(result.Reasons, "missing_confirm_app_id") {
+		t.Fatalf("unexpected compact confirmation result: %+v", result)
+	}
+	if spyHolder.store != nil {
+		t.Fatalf("expected compact confirmation failure before store open")
+	}
+}
+
+func TestRunCompactExecuteDeletesEligibleRows(t *testing.T) {
+	t.Setenv(envEnableInternalSyncReplayCLI, "1")
+	t.Setenv(envEnableInternalSyncReplayCompact, "1")
+	t.Setenv(envDeploymentMode, "selfhosted")
+
+	fixture := createReplayCompactionFixture(t, 105)
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+
+	exitCode := run(buildCompactExecuteArgs(fixture), stdout, stderr)
+	if exitCode != 0 {
+		t.Fatalf("expected compact execute success, got exit code %d stderr=%q", exitCode, stderr.String())
+	}
+
+	result := decodeCompactResult(t, stdout.String())
+	if result.Status != operatorStatusCompacted || !result.Execute || result.DeletedReceiptCount != 5 {
+		t.Fatalf("unexpected compact execute result: %+v", result)
+	}
+	afterState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	if len(afterState.Receipts) != 100 {
+		t.Fatalf("expected 100 retained receipts, got %+v", afterState.Receipts)
+	}
+}
+
 func TestRunPreflightRejectsUnsupportedOutputFormat(t *testing.T) {
 	fixture := createReplayPreflightFixture(t, replayPreflightFixtureOptions{})
 	stdout := &bytes.Buffer{}
@@ -1673,6 +1891,18 @@ func (s *countingReplayAdminStore) Close() error {
 	return s.inner.Close()
 }
 
+func (s *countingReplayAdminStore) RecordSyncMutationReplayDryRunObservation(ctx context.Context, ownerKey, appID string) (store.SyncMutationReplayDryRunObservation, error) {
+	return s.inner.RecordSyncMutationReplayDryRunObservation(ctx, ownerKey, appID)
+}
+
+func (s *countingReplayAdminStore) GetSyncMutationReplayDiagnostics(ctx context.Context, ownerKey, appID string) (store.SyncMutationReplayDiagnostics, error) {
+	return s.inner.GetSyncMutationReplayDiagnostics(ctx, ownerKey, appID)
+}
+
+func (s *countingReplayAdminStore) CompactSyncMutationReplayArtifacts(ctx context.Context, ownerKey, appID string, options store.SyncMutationReplayCompactOptions) (store.SyncMutationReplayCompactResult, error) {
+	return s.inner.CompactSyncMutationReplayArtifacts(ctx, ownerKey, appID, options)
+}
+
 func (s *countingReplayAdminStore) EvaluateSyncMutationReplayCompareAndApplyPreconditions(ctx context.Context, ownerKey, appID string, observationID int64) (store.SyncMutationReplayCompareAndApplyEvaluation, error) {
 	return s.inner.EvaluateSyncMutationReplayCompareAndApplyPreconditions(ctx, ownerKey, appID, observationID)
 }
@@ -1793,6 +2023,75 @@ func createReplayPreflightFixture(t *testing.T, options replayPreflightFixtureOp
 		observationID:       observation.ID,
 		observationIDString: strconv.FormatInt(observation.ID, 10),
 		mutationIDs:         mutationIDs,
+	}
+}
+
+func createReplayCompactionFixture(t *testing.T, receiptCount int) replayPreflightFixture {
+	t.Helper()
+
+	dbPath := filepath.Join(t.TempDir(), "postbaby-sync-replay-admin-compact.db")
+	sqliteStore, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open compact fixture store: %v", err)
+	}
+
+	ownerKey := "owner"
+	appID := "postbaby-web"
+	if _, err := sqliteStore.PutDocument(context.Background(), ownerKey, appID, buildReplaySnapshotBodyForCommand(t, false), nil); err != nil {
+		t.Fatalf("seed compact fixture document: %v", err)
+	}
+
+	mutationIDs := make([]string, 0, receiptCount)
+	receiptInputs := make([]store.SyncMutationReceiptInput, 0, receiptCount)
+	for index := 0; index < receiptCount; index++ {
+		mutationID := "mut-compact-" + strconv.Itoa(index)
+		entityID := "item-compact-" + strconv.Itoa(index)
+		mutationIDs = append(mutationIDs, mutationID)
+		receiptInputs = append(receiptInputs, buildReplayReceiptInputForCommand(mutationID, "Node", entityID, "CreateNode", `{"tabId":"tab-1","name":"Compact","position":{"top":"10px","left":"20px"}}`))
+	}
+	if _, err := sqliteStore.AcceptSyncMutationReceipts(context.Background(), ownerKey, appID, receiptInputs); err != nil {
+		t.Fatalf("accept compact fixture receipts: %v", err)
+	}
+	if err := sqliteStore.Close(); err != nil {
+		t.Fatalf("close compact fixture store: %v", err)
+	}
+
+	setReplayReceiptTimestampsForCommand(t, dbPath, ownerKey, appID, mutationIDs)
+
+	return replayPreflightFixture{
+		dbPath:      dbPath,
+		ownerKey:    ownerKey,
+		appID:       appID,
+		mutationIDs: mutationIDs,
+	}
+}
+
+func setReplayReceiptTimestampsForCommand(t *testing.T, dbPath, ownerKey, appID string, mutationIDs []string) {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw sqlite connection for receipt timestamp update: %v", err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("close raw sqlite receipt timestamp connection: %v", err)
+		}
+	}()
+
+	start := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	for index, mutationID := range mutationIDs {
+		timestamp := start.Add(time.Duration(index) * time.Second).Format(time.RFC3339)
+		if _, err := db.Exec(
+			`UPDATE sync_mutation_receipts SET accepted_at = ?, created_at = ? WHERE owner_key = ? AND app_id = ? AND mutation_id = ?`,
+			timestamp,
+			timestamp,
+			ownerKey,
+			appID,
+			mutationID,
+		); err != nil {
+			t.Fatalf("update compact fixture receipt timestamp: %v", err)
+		}
 	}
 }
 
@@ -2153,6 +2452,19 @@ func buildApplyArgs(fixture replayPreflightFixture) []string {
 	}
 }
 
+func buildCompactExecuteArgs(fixture replayPreflightFixture) []string {
+	return []string{
+		commandModeCompact,
+		"--db", fixture.dbPath,
+		"--owner-key", fixture.ownerKey,
+		"--confirm-owner-key", fixture.ownerKey,
+		"--app-id", fixture.appID,
+		"--confirm-app-id", fixture.appID,
+		"--execute",
+		"--i-understand-this-deletes-replay-artifacts",
+	}
+}
+
 func removeFlagValue(args []string, flagName string) []string {
 	result := make([]string, 0, len(args))
 	for index := 0; index < len(args); index++ {
@@ -2203,6 +2515,36 @@ func decodeApplyResult(t *testing.T, output string) applyResult {
 	var result applyResult
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatalf("decode apply result %q: %v", output, err)
+	}
+	return result
+}
+
+func decodeObserveResult(t *testing.T, output string) observeResult {
+	t.Helper()
+
+	var result observeResult
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode observe result %q: %v", output, err)
+	}
+	return result
+}
+
+func decodeDiagnoseResult(t *testing.T, output string) diagnoseResult {
+	t.Helper()
+
+	var result diagnoseResult
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode diagnose result %q: %v", output, err)
+	}
+	return result
+}
+
+func decodeCompactResult(t *testing.T, output string) compactResult {
+	t.Helper()
+
+	var result compactResult
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode compact result %q: %v", output, err)
 	}
 	return result
 }
