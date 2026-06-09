@@ -9,6 +9,7 @@ const TIMESTAMP = '2026-05-13T12:00:00.000Z';
 const TEST_BASE_URL = 'http://127.0.0.1:4173';
 const EDGE_ARM_DELAY_MS = 1000;
 const EDGE_ARROW_TARGET_INSET = 2;
+const LOCAL_TAB_CAMERA_STATES_STORAGE_KEY = 'postbabyLocalTabCameraStates';
 const MIN_CANVAS_COORD = -100000;
 const MAX_CANVAS_COORD = 100000;
 const DEFAULT_CAMERA = { x: 0, y: 0, zoom: 1 };
@@ -645,6 +646,29 @@ async function getLocalStorageValues(page, keys, scopeKey = PRIMARY_RECORD_ID) {
     requestedKeys: keys,
     targetScopeKey: normalizeScopeKey(scopeKey)
   });
+}
+
+async function getCurrentStorageScopeKey(page) {
+  try {
+    const debugState = await page.evaluate(() => (
+      typeof window.postbabyDebugSync === 'function'
+        ? window.postbabyDebugSync()
+        : null
+    ));
+    if (debugState && typeof debugState.storageScopeKey === 'string' && debugState.storageScopeKey.trim()) {
+      return debugState.storageScopeKey.trim();
+    }
+  } catch (error) {
+  }
+
+  return PRIMARY_RECORD_ID;
+}
+
+async function readStoredTabCameraStates(page, scopeKey = null) {
+  const resolvedScopeKey = scopeKey || await getCurrentStorageScopeKey(page);
+  const values = await getLocalStorageValues(page, [LOCAL_TAB_CAMERA_STATES_STORAGE_KEY], resolvedScopeKey);
+  const rawValue = values[LOCAL_TAB_CAMERA_STATES_STORAGE_KEY];
+  return rawValue ? JSON.parse(rawValue) : null;
 }
 
 async function openSettingsModal(page) {
@@ -4756,7 +4780,7 @@ test.describe('Static behavior', () => {
     expect(helperResult.clampedZoomHigh).toBe(MAX_ZOOM);
   });
 
-  test('camera state stays per-tab and memory-only while canvas mode persists browser-locally across reloads', async ({ page }) => {
+  test('camera state stays per-tab and persists browser-locally across reloads while canvas mode also persists', async ({ page }) => {
     await prepareBlankPage(page);
     await seedLocalStorage(page, buildEmptySnapshot());
     await page.goto('/index.html');
@@ -4775,9 +4799,10 @@ test.describe('Static behavior', () => {
     }
 
     expect(await readCamera(page, newestTabId)).toEqual(DEFAULT_CAMERA);
+    await setCamera(page, { x: 96, y: 144, zoom: 0.8 }, newestTabId);
+    expect(await readCamera(page, newestTabId)).toEqual({ x: 96, y: 144, zoom: 0.8 });
     await page.locator('.tab[data-tab-id="tab-1"]').click();
     expect(await readCamera(page, 'tab-1')).toEqual({ x: 420, y: 360, zoom: 1.75 });
-
     const tabsSnapshot = await readTabsSnapshot(page);
     expect(JSON.stringify(tabsSnapshot)).not.toContain('"camera"');
     expect(JSON.stringify(tabsSnapshot)).not.toContain('"viewport"');
@@ -4785,10 +4810,134 @@ test.describe('Static behavior', () => {
     expect(JSON.stringify(tabsSnapshot)).not.toContain('"zoom"');
     expect(JSON.stringify(tabsSnapshot)).not.toContain('"canvasMode"');
     expect(await page.evaluate(() => window.localStorage.getItem('postbabyCanvasMode'))).toBe('pan');
+    await expect.poll(async () => readStoredTabCameraStates(page)).toEqual({
+      'tab-1': { x: 420, y: 360, zoom: 1.75 },
+      [newestTabId]: { x: 96, y: 144, zoom: 0.8 }
+    });
 
     await page.reload();
-    expect(await readCamera(page)).toEqual(DEFAULT_CAMERA);
+    expect(await readCamera(page, 'tab-1')).toEqual({ x: 420, y: 360, zoom: 1.75 });
+    expect(await readCamera(page, newestTabId)).toEqual({ x: 96, y: 144, zoom: 0.8 });
     expect(await readCanvasMode(page)).toBe('pan');
+  });
+
+  test('camera-only movement stays browser-local and out of snapshot sync payloads and PB-SYNC outbox', async ({ page }) => {
+    const capturedSaveBodies = [];
+    const capturedMutationBodies = [];
+    const localSnapshot = addDurableCloudSyncMetadata(
+      buildEmptySnapshot({ hasRunBefore: true, theme: 'light', syncVersion: 6 }),
+      {
+        pending: false,
+        revision: 6,
+        lastCloudUploadedAt: TIMESTAMP
+      }
+    );
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerSnapshotPayload(buildEmptySnapshot({ hasRunBefore: true, theme: 'light' }), 6),
+      onSave: async (requestBody) => {
+        capturedSaveBodies.push(requestBody);
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            version: 7,
+            updatedAt: TIMESTAMP
+          }
+        };
+      },
+      onMutations: async (requestBody) => {
+        capturedMutationBodies.push(requestBody);
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            appId: 'postbaby-web',
+            results: (requestBody.mutations || []).map((mutation) => ({
+              mutationId: mutation.mutationId,
+              status: 'accepted',
+              acceptedAt: TIMESTAMP
+            }))
+          }
+        };
+      }
+    });
+    await page.goto('/index.html');
+
+    await setCamera(page, { x: 180, y: 240, zoom: 1.6 });
+    await page.waitForTimeout(250);
+
+    const debugAfterCameraOnlyMove = await page.evaluate(() => window.postbabyDebugSync());
+    expect(debugAfterCameraOnlyMove.syncDirty).toBe(false);
+    expect(debugAfterCameraOnlyMove.durablePendingCloudUpload).toBe(false);
+    expect(debugAfterCameraOnlyMove.mutationOutbox.totalCount).toBe(0);
+    expect(debugAfterCameraOnlyMove.mutationOutbox.pendingCount).toBe(0);
+    expect(debugAfterCameraOnlyMove.mutationOutbox.serverPendingCount).toBe(0);
+    expect(capturedSaveBodies).toHaveLength(0);
+    expect(capturedMutationBodies).toHaveLength(0);
+
+    await page.locator('#syncStatusButton').click();
+    await page.locator('#syncNowButton').click();
+
+    await expect.poll(() => capturedSaveBodies.length).toBe(1);
+    await expect.poll(async () => {
+      const state = await page.evaluate(() => window.postbabyDebugSync());
+      return state.syncStoredVersion;
+    }).toBe(7);
+
+    expect(Object.prototype.hasOwnProperty.call(capturedSaveBodies[0].data, LOCAL_TAB_CAMERA_STATES_STORAGE_KEY)).toBe(false);
+    expect(JSON.parse(capturedSaveBodies[0].data.tabs)[0]).not.toHaveProperty('camera');
+    expect(JSON.stringify(capturedSaveBodies[0].data)).not.toContain('"viewport"');
+    expect(capturedMutationBodies).toHaveLength(0);
+  });
+
+  test('malformed browser-local camera state falls back safely and tab deletion prunes stored entries', async ({ page }) => {
+    const localSnapshot = buildEmptySnapshot();
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await seedLocalStorage(page, {
+      [LOCAL_TAB_CAMERA_STATES_STORAGE_KEY]: '{"tab-1":'
+    });
+    await seedLocalStorage(page, {
+      [LOCAL_TAB_CAMERA_STATES_STORAGE_KEY]: '{"tab-1":'
+    }, 'owner-scope');
+    await page.goto('/index.html');
+
+    expect(await readCamera(page)).toEqual(DEFAULT_CAMERA);
+    const activeScopeKey = await getCurrentStorageScopeKey(page);
+    await expect.poll(async () => {
+      const values = await getLocalStorageValues(page, [LOCAL_TAB_CAMERA_STATES_STORAGE_KEY], activeScopeKey);
+      return values[LOCAL_TAB_CAMERA_STATES_STORAGE_KEY];
+    }).toBeNull();
+
+    await setCamera(page, { x: 420, y: 360, zoom: 1.75 });
+    await page.click('#addTab');
+    const newestTabId = await page.locator('#tabBar .tab[data-tab-id]').last().getAttribute('data-tab-id');
+    if (!newestTabId) {
+      throw new Error('New tab id was not available.');
+    }
+    await setCamera(page, { x: 90, y: 150, zoom: 0.75 }, newestTabId);
+    await expect.poll(async () => readStoredTabCameraStates(page)).toEqual({
+      'tab-1': { x: 420, y: 360, zoom: 1.75 },
+      [newestTabId]: { x: 90, y: 150, zoom: 0.75 }
+    });
+
+    expect(await page.evaluate((tabId) => {
+      if (typeof window.postbabyDeleteTabForTest !== 'function') {
+        throw new Error('postbabyDeleteTabForTest is not available.');
+      }
+      return window.postbabyDeleteTabForTest(tabId);
+    }, newestTabId)).toBe(true);
+    expect((await readTabsSnapshot(page)).map((tab) => tab.id)).toEqual(['tab-1']);
+
+    await expect.poll(async () => readStoredTabCameraStates(page)).toEqual({
+      'tab-1': { x: 420, y: 360, zoom: 1.75 }
+    });
   });
 
   test('space-drag pan and Shift+wheel horizontal pan update camera without mutating stored note positions', async ({ page }) => {
