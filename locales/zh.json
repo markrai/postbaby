@@ -1,0 +1,236 @@
+{
+  "common": {
+    "languages": {
+      "english": "英语",
+      "spanishPartial": "西班牙语（部分）",
+      "frenchPartial": "法语（部分）",
+      "chinesePartial": "中文（部分）"
+    }
+  },
+  "settings": {
+    "trigger": "设置",
+    "close": "关闭设置",
+    "title": "设置",
+    "sections": "设置部分",
+    "tabs": {
+      "preferences": "偏好设置",
+      "importExport": "导入与导出"
+    },
+    "preferences": {
+      "darkMode": "深色模式",
+      "disableColorChange": "禁用颜色更改",
+      "disableNoteResize": "禁用便签大小调整",
+      "fullScreen": "全屏",
+      "corporateMode": "企业模式",
+      "hideCameraRemote": "隐藏画布视图控件",
+      "language": "语言",
+      "partialLocaleNote": "应用的某些区域仍为英文。",
+      "useGrids": "使用网格（按标签页设置）",
+      "defaultColor": "新元素的默认颜色（全局）"
+    },
+    "gridOptions": {
+      "none": "无",
+      "kanban": "看板",
+      "eisenhower": "艾森豪威尔矩阵",
+      "priority": "优先级矩阵",
+      "smartgoals": "SMART 目标",
+      "swot": "SWOT 分析",
+      "calendar": "日历",
+      "nowlater": "现在与稍后",
+      "week": "周"
+    },
+    "recovery": {
+      "title": "恢复（仅限开发）",
+      "body": "临时的仅滚动恢复控件，用于调试屏幕外便签，且不会更改已保存的位置。",
+      "showAll": "显示所有便签",
+      "jumpNewest": "跳转到最新便签",
+      "jumpLastEdited": "跳转到最后编辑的便签"
+    },
+    "questionsComments": "问题/意见：",
+    "staticNote": "注意：此静态版本只会将便签保存在此设备上的这个浏览器中。在此模式下，无法使用账户登录、云同步、计费和跨设备恢复。清除站点数据或改用其他浏览器/设备后，这些便签可能无法再访问。",
+    "actions": {
+      "exportData": "导出数据",
+      "importData": "导入数据",
+      "importMermaid": "导入 Mermaid"
+    },
+    "mermaid": {
+      "title": "导入 Mermaid",
+      "descriptionBeforeAction": "将受支持的 Mermaid flowchart 或 graph 转换为普通的 Postbaby 便签和连线。请在下方粘贴 Mermaid 代码，准备好后点击",
+      "descriptionAfterAction": "来创建便签。",
+      "placeholder": "flowchart LR\nIdea --> Task\nTask --> Done"
+    },
+    "toasts": {
+      "loadDataInputMissing": "错误：找不到用于加载数据的输入项。",
+      "noFileSelected": "未选择文件。",
+      "importedLocallyReloading": "已在本地导入。正在重新加载...",
+      "importCanceled": "导入已取消。",
+      "importedAndSyncedReloading": "已导入并同步。正在重新加载...",
+      "importedLocalSignInAgain": "已在本地导入。请重新登录以同步此备份。正在重新加载...",
+      "importedLocalReconnect": "已在本地导入。请重新连接以同步此备份。正在重新加载...",
+      "importedLocalServerAvailable": "已在本地导入。服务器可用时 Postbaby 将同步此备份。正在重新加载...",
+      "invalidFileFormat": "数据加载失败：文件格式无效。",
+      "fileReadFailed": "文件读取失败。",
+      "dataSavedSuccessfully": "数据保存成功。"
+    }
+  },
+  "shortcuts": {
+    "trigger": "键盘快捷键",
+    "close": "关闭键盘快捷键",
+    "title": "快捷键",
+    "desktop": {
+      "create": {
+        "action": "新建元素：",
+        "prefix": "n 或",
+        "gesture": "在画布上右键单击"
+      },
+      "changeColor": {
+        "action": "更改颜色：",
+        "gesture": "单击元素"
+      },
+      "editItem": {
+        "action": "编辑项目：",
+        "gesture": "双击元素"
+      },
+      "deleteItem": {
+        "action": "删除项目：",
+        "gesture": "右键单击元素或拖到卫生纸卷"
+      },
+      "nextShape": {
+        "action": "下一个形状：",
+        "gesture": "ctrl + 右键单击元素"
+      },
+      "previousShape": {
+        "action": "上一个形状：",
+        "gesture": "shift + ctrl + 右键单击元素"
+      },
+      "clearCurrentTab": {
+        "action": "清空当前标签页：",
+        "keys": "c"
+      },
+      "deleteAllTabs": {
+        "action": "删除所有标签页：",
+        "keys": "ctrl+c"
+      },
+      "jumpTabs": {
+        "action": "跳转到标签页：",
+        "keys": "数字键 1-9"
+      },
+      "toggleGrids": {
+        "action": "切换网格：",
+        "keys": "g"
+      },
+      "selectPanMode": {
+        "action": "选择/平移模式：",
+        "gesture": "手形/选择切换按钮（右上角）"
+      },
+      "emptyCanvasDrag": {
+        "action": "在空白画布上拖动：",
+        "gesture": "选择模式下框选 / 手形模式下平移"
+      },
+      "drawLine": {
+        "action": "画线：",
+        "gesture": "shift + 鼠标拖动"
+      },
+      "drawArrow": {
+        "action": "画箭头：",
+        "gesture": "ctrl + 鼠标拖动"
+      },
+      "panCanvas": {
+        "action": "平移画布：",
+        "gesture": "鼠标滚轮、触控板滚动、shift + 滚轮、中键拖动，或空格 + 拖动"
+      },
+      "zoomCanvas": {
+        "action": "缩放画布：",
+        "gesture": "ctrl/cmd + 滚轮或视图控件"
+      },
+      "resetFitView": {
+        "action": "重置/适应视图：",
+        "prefix": "0 / f 或",
+        "gesture": "视图控件"
+      },
+      "settings": {
+        "action": "设置：",
+        "gesture": "点击设置按钮（右上角）"
+      }
+    },
+    "mobile": {
+      "create": {
+        "action": "新建元素：",
+        "gesture": "在画布上长按"
+      },
+      "edit": {
+        "action": "编辑：",
+        "gesture": "双击元素或标签页"
+      },
+      "delete": {
+        "action": "删除：",
+        "gesture": "长按元素或标签页"
+      },
+      "changeColor": {
+        "action": "更改颜色：",
+        "gesture": "点按一次元素或标签页"
+      },
+      "navigateCanvas": {
+        "action": "移动画布视图：",
+        "gesture": "双指捏合/平移，或使用视图控件"
+      },
+      "selectPanMode": {
+        "action": "选择或平移模式：",
+        "gesture": "使用手形/选择切换（右上角）"
+      },
+      "settings": {
+        "action": "设置：",
+        "gesture": "点按设置按钮（右上角）"
+      }
+    }
+  },
+  "mermaid": {
+    "status": {
+      "completedTitle": "Mermaid 导入已完成。",
+      "failedTitle": "Mermaid 导入失败。",
+      "createdSummary": "已创建 {notes} 和 {edges}。",
+      "warningsSummary": "如需简化或调整导入的形状，请查看下方的警告。",
+      "ordinarySummary": "现在它们是普通的 Postbaby 便签和连线。",
+      "validationFailedMessage": "未导入任何内容。请修正下方的 Mermaid 代码并重试。",
+      "unexpectedFailedMessage": "未导入任何内容。意外错误导致 Mermaid 导入失败。"
+    },
+    "groups": {
+      "errors": "错误",
+      "warnings": "警告"
+    },
+    "count": {
+      "note": {
+        "one": "{count} 条便签",
+        "other": "{count} 条便签"
+      },
+      "edge": {
+        "one": "{count} 条连线",
+        "other": "{count} 条连线"
+      }
+    },
+    "issue": {
+      "linePrefix": "第 {line} 行：{message}",
+      "unknown": "Mermaid 导入出现未知问题。"
+    },
+    "issues": {
+      "unexpectedMermaidImportError": "Mermaid 导入出现意外错误。",
+      "unsupportedDiagramType": "不支持的 Mermaid 图表类型：\"{diagramType}\"。仅支持 flowchart/graph TD、TB 和 LR。",
+      "invalidDiagramHeader": "Mermaid 代码必须以 flowchart/graph TD、TB 或 LR 开头。",
+      "invalidNodeReference": "节点引用不得为空。",
+      "nodeLabelTooLong": "节点标签超过 {maxChars} 个字符。",
+      "unsupportedNodeShape": "暂不支持 Mermaid 平行四边形节点，已将其规范化为 Postbaby 默认形状。",
+      "unsupportedNodeSyntax": "不支持的 Mermaid 节点语法：{syntax}",
+      "conflictingNodeLabel": "节点 \"{nodeId}\" 定义了多个标签。将保留第一个非空标签 \"{label}\"。",
+      "conflictingNodeShape": "节点 \"{nodeId}\" 定义了多个形状。将保留较早的 Mermaid 兼容形状映射 \"{shape}\"。",
+      "unsupportedEdgeSyntax": "不支持的 Mermaid 连线语法：{syntax}",
+      "invalidSource": "Mermaid 代码必须是文本。",
+      "ignoredMermaidStatement": "已忽略不支持的 Mermaid {statementType} 语句。",
+      "missingDiagramHeader": "Mermaid 代码必须包含受支持的 flowchart/graph 头部。",
+      "missingActiveTab": "Postbaby 没有可用于创建图表的活动标签页。",
+      "missingActiveTabRecord": "找不到可用于创建图表的活动标签页记录。",
+      "missingActiveGrid": "无法使用活动网格容器来创建图表。",
+      "tabItemLimitExceeded": "此导入内容太大，无法放入一个标签页。",
+      "tabEdgeLimitExceeded": "此导入内容太大，无法放入一个标签页。"
+    }
+  }
+}

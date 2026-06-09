@@ -13,6 +13,10 @@
         fr: {
             lang: 'fr',
             file: './locales/fr.json'
+        },
+        zh: {
+            lang: 'zh-CN',
+            file: './locales/zh.json'
         }
     });
     // Keep this fallback intentionally small. Static English copy comes from the

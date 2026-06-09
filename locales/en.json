@@ -3,7 +3,8 @@
     "languages": {
       "english": "English",
       "spanishPartial": "Español (partial)",
-      "frenchPartial": "Français (partial)"
+      "frenchPartial": "Français (partial)",
+      "chinesePartial": "中文 (partial)"
     }
   },
   "settings": {
