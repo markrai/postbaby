@@ -11143,6 +11143,21 @@ test.describe('Settings and Account UI', () => {
     await expect(page.locator('#shortcutsModal .desktop-shortcuts .shortcut-action').first()).toHaveText('create new:');
   });
 
+  test('Language selector options stay in their native language labels', async ({ page }) => {
+    await prepareBlankPage(page);
+    await page.goto('/index.html');
+
+    await openSettingsModal(page);
+    await page.selectOption('#localeSelect', 'es');
+    await expect.poll(async () => page.evaluate(() => document.documentElement.lang)).toBe('es');
+
+    await expect(page.locator('#localeSelect option[value="en"]')).toHaveText('English');
+    await expect(page.locator('#localeSelect option[value="es"]')).toHaveText('Español (parcial)');
+    await expect(page.locator('#localeSelect option[value="fr"]')).toHaveText('Français (partiel)');
+    await expect(page.locator('#localeSelect option[value="zh"]')).toHaveText('中文（部分）');
+    await expect(page.locator('#localeSelect option[value="de"]')).toHaveText('Deutsch (teilweise)');
+  });
+
   test('Settings and Shortcuts can switch to French and back to English', async ({ page }) => {
     await prepareBlankPage(page);
     await page.goto('/index.html');

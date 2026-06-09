@@ -15,7 +15,7 @@
     "sections": "Einstellungsbereiche",
     "tabs": {
       "preferences": "Voreinstellungen",
-      "importExport": "Import & Export"
+      "importExport": "Import und Export"
     },
     "preferences": {
       "darkMode": "Dunkler Modus",
@@ -23,7 +23,7 @@
       "disableNoteResize": "Größenänderung von Notizen deaktivieren",
       "fullScreen": "Vollbild",
       "corporateMode": "Unternehmensmodus",
-      "hideCameraRemote": "Kamerasteuerung ausblenden",
+      "hideCameraRemote": "Ansichtssteuerung ausblenden",
       "language": "Sprache",
       "partialLocaleNote": "Einige Bereiche der App sind noch auf Englisch.",
       "useGrids": "Raster verwenden (pro Tab)",
@@ -37,18 +37,18 @@
       "smartgoals": "SMART-Ziele",
       "swot": "SWOT-Analyse",
       "calendar": "Kalender",
-      "nowlater": "Jetzt & Später",
+      "nowlater": "Jetzt & später",
       "week": "Woche"
     },
     "recovery": {
-      "title": "Wiederherstellung (nur Entwicklung)",
-      "body": "Temporäre, nur scrollbasierte Wiederherstellungssteuerungen zum Debuggen von Notizen außerhalb des Bildschirms, ohne gespeicherte Positionen zu ändern.",
+      "title": "Wiederherstellung (nur für Entwicklung)",
+      "body": "Temporäre, nur scrollbasierte Wiederherstellungssteuerung zum Debuggen von Notizen außerhalb des Bildschirms, ohne gespeicherte Positionen zu ändern.",
       "showAll": "Alle Notizen anzeigen",
       "jumpNewest": "Zur neuesten Notiz springen",
       "jumpLastEdited": "Zur zuletzt bearbeiteten Notiz springen"
     },
     "questionsComments": "Fragen/Kommentare:",
-    "staticNote": "Hinweis: Diese statische Version speichert Notizen nur in diesem Browser auf diesem Gerät. Kontoanmeldung, Cloud-Synchronisierung, Abrechnung und geräteübergreifende Wiederherstellung sind in diesem Modus nicht verfügbar. Wenn Sie Websitedaten löschen oder einen anderen Browser/ein anderes Gerät verwenden, können diese Notizen nicht mehr verfügbar sein.",
+    "staticNote": "Hinweis: Diese statische Version speichert Notizen nur in diesem Browser auf diesem Gerät. Kontoanmeldung, Cloud-Synchronisierung, Abrechnung und geräteübergreifende Wiederherstellung sind in diesem Modus nicht verfügbar. Wenn Sie Website-Daten löschen oder einen anderen Browser/ein anderes Gerät verwenden, sind diese Notizen möglicherweise nicht mehr verfügbar.",
     "actions": {
       "exportData": "Daten exportieren",
       "importData": "Daten importieren",
@@ -56,8 +56,8 @@
     },
     "mermaid": {
       "title": "Mermaid-Import",
-      "descriptionBeforeAction": "Wandeln Sie ein unterstütztes Mermaid-flowchart oder -graph in gewöhnliche Postbaby-Notizen und Verbindungen um. Fügen Sie unten Mermaid-Code ein und klicken Sie dann auf",
-      "descriptionAfterAction": "wenn Sie bereit sind, Notizen zu erstellen.",
+      "descriptionBeforeAction": "Wandeln Sie unterstützten Mermaid-Code vom Typ flowchart oder graph in normale Postbaby-Notizen und Verbindungen um. Fügen Sie unten Mermaid-Code ein und klicken Sie dann auf",
+      "descriptionAfterAction": "wenn Sie die Notizen erstellen möchten.",
       "placeholder": "flowchart LR\nIdea --> Task\nTask --> Done"
     },
     "toasts": {
@@ -66,10 +66,10 @@
       "importedLocallyReloading": "Lokal importiert. Wird neu geladen...",
       "importCanceled": "Import abgebrochen.",
       "importedAndSyncedReloading": "Importiert und synchronisiert. Wird neu geladen...",
-      "importedLocalSignInAgain": "Lokal importiert. Melden Sie sich erneut an, um dieses Backup zu synchronisieren. Wird neu geladen...",
-      "importedLocalReconnect": "Lokal importiert. Stellen Sie die Verbindung wieder her, um dieses Backup zu synchronisieren. Wird neu geladen...",
-      "importedLocalServerAvailable": "Lokal importiert. Postbaby synchronisiert dieses Backup, sobald der Server verfügbar ist. Wird neu geladen...",
-      "invalidFileFormat": "Daten konnten nicht geladen werden: Ungültiges Dateiformat.",
+      "importedLocalSignInAgain": "Lokal importiert. Melden Sie sich erneut an, um diese Sicherung zu synchronisieren. Wird neu geladen...",
+      "importedLocalReconnect": "Lokal importiert. Stellen Sie die Verbindung wieder her, um diese Sicherung zu synchronisieren. Wird neu geladen...",
+      "importedLocalServerAvailable": "Lokal importiert. Postbaby synchronisiert diese Sicherung, sobald der Server verfügbar ist. Wird neu geladen...",
+      "invalidFileFormat": "Daten konnten nicht geladen werden: ungültiges Dateiformat.",
       "fileReadFailed": "Datei konnte nicht gelesen werden.",
       "dataSavedSuccessfully": "Daten erfolgreich gespeichert."
     }
@@ -86,7 +86,7 @@
       },
       "changeColor": {
         "action": "Farbe ändern:",
-        "gesture": "Einmalklick auf Element"
+        "gesture": "Einfachklick auf Element"
       },
       "editItem": {
         "action": "Element bearbeiten:",
@@ -94,7 +94,7 @@
       },
       "deleteItem": {
         "action": "Element löschen:",
-        "gesture": "Rechtsklick auf Element oder auf Toilettenrolle ziehen"
+        "gesture": "Rechtsklick auf Element oder zur Toilettenrolle ziehen"
       },
       "nextShape": {
         "action": "nächste Form:",
@@ -113,7 +113,7 @@
         "keys": "ctrl+c"
       },
       "jumpTabs": {
-        "action": "Tabs wechseln:",
+        "action": "zu Tabs springen:",
         "keys": "Tasten 1–9"
       },
       "toggleGrids": {
@@ -121,12 +121,12 @@
         "keys": "g"
       },
       "selectPanMode": {
-        "action": "Auswahl-/Schwenkmodus:",
+        "action": "Auswahl-/Handmodus:",
         "gesture": "Hand-/Auswahl-Umschalter (oben rechts)"
       },
       "emptyCanvasDrag": {
         "action": "Ziehen auf leerer Leinwand:",
-        "gesture": "Auswahlrahmen im Auswahlmodus / Schwenken im Handmodus"
+        "gesture": "Auswahlrahmen im Auswahlmodus / Ansicht im Handmodus verschieben"
       },
       "drawLine": {
         "action": "Linie zeichnen:",
@@ -137,17 +137,17 @@
         "gesture": "Strg + Ziehen"
       },
       "panCanvas": {
-        "action": "Leinwand schwenken:",
-        "gesture": "Mausrad, Trackpad-Scrollen, Umschalt + Rad, Mittelklick-Ziehen oder Leertaste + Ziehen"
+        "action": "Leinwand verschieben:",
+        "gesture": "Mausrad, Trackpad-Scrollen, Umschalt + Mausrad, Ziehen mit mittlerer Maustaste oder Leertaste + Ziehen"
       },
       "zoomCanvas": {
         "action": "Leinwand zoomen:",
-        "gesture": "Strg/Cmd + Rad oder Kamerasteuerung"
+        "gesture": "Strg/Cmd + Mausrad oder Ansichtssteuerung"
       },
       "resetFitView": {
         "action": "Ansicht zurücksetzen / anpassen:",
         "prefix": "0 / f oder",
-        "gesture": "Kamerasteuerung"
+        "gesture": "Ansichtssteuerung"
       },
       "settings": {
         "action": "Einstellungen:",
@@ -157,7 +157,7 @@
     "mobile": {
       "create": {
         "action": "neu erstellen:",
-        "gesture": "Langer Druck auf die Leinwand"
+        "gesture": "Langes Drücken auf die Leinwand"
       },
       "edit": {
         "action": "bearbeiten:",
@@ -165,18 +165,18 @@
       },
       "delete": {
         "action": "löschen:",
-        "gesture": "Langer Druck auf Element oder Tab"
+        "gesture": "Langes Drücken auf Element oder Tab"
       },
       "changeColor": {
         "action": "Farbe ändern:",
-        "gesture": "Einmal tippen auf Element oder Tab"
+        "gesture": "Einmal auf Element oder Tab tippen"
       },
       "navigateCanvas": {
-        "action": "Leinwand navigieren:",
-        "gesture": "Zwei-Finger-Zoom / Schwenken oder Kamerasteuerung"
+        "action": "Leinwandansicht bewegen:",
+        "gesture": "Zwei-Finger-Zoom / Verschieben oder Ansichtssteuerung"
       },
       "selectPanMode": {
-        "action": "Auswahl- oder Schwenkmodus:",
+        "action": "Auswahl- oder Handmodus:",
         "gesture": "Hand-/Auswahl-Umschalter verwenden (oben rechts)"
       },
       "settings": {
@@ -189,9 +189,9 @@
     "status": {
       "completedTitle": "Mermaid-Import abgeschlossen.",
       "failedTitle": "Mermaid-Import fehlgeschlagen.",
-      "createdSummary": "{notes} und {edges} erstellt.",
+      "createdSummary": "Erstellt: {notes} und {edges}.",
       "warningsSummary": "Prüfen Sie die Warnungen unten, wenn Sie die importierten Formen vereinfachen oder anpassen möchten.",
-      "ordinarySummary": "Dies sind jetzt gewöhnliche Postbaby-Notizen und Verbindungen.",
+      "ordinarySummary": "Dies sind jetzt normale Postbaby-Notizen und Verbindungen.",
       "validationFailedMessage": "Es wurde nichts importiert. Korrigieren Sie den Mermaid-Code unten und versuchen Sie es erneut.",
       "unexpectedFailedMessage": "Es wurde nichts importiert. Ein unerwarteter Fehler hat den Mermaid-Import verhindert."
     },
@@ -211,27 +211,27 @@
     },
     "issue": {
       "linePrefix": "Zeile {line}: {message}",
-      "unknown": "Unbekanntes Mermaid-Importproblem."
+      "unknown": "Unbekanntes Problem beim Mermaid-Import."
     },
     "issues": {
-      "unexpectedMermaidImportError": "Unerwarteter Mermaid-Importfehler.",
-      "unsupportedDiagramType": "Nicht unterstützter Mermaid-Diagrammtyp \"{diagramType}\". Es werden nur flowchart/graph TD, TB und LR unterstützt.",
+      "unexpectedMermaidImportError": "Unerwarteter Fehler beim Mermaid-Import.",
+      "unsupportedDiagramType": "Nicht unterstützter Mermaid-Diagrammtyp \"{diagramType}\". Nur flowchart/graph TD, TB und LR werden unterstützt.",
       "invalidDiagramHeader": "Mermaid-Code muss mit flowchart/graph TD, TB oder LR beginnen.",
       "invalidNodeReference": "Knotenreferenzen dürfen nicht leer sein.",
       "nodeLabelTooLong": "Knotenbeschriftung überschreitet {maxChars} Zeichen.",
-      "unsupportedNodeShape": "Mermaid-Parallelogramm-Knoten werden noch nicht unterstützt und wurden auf die Standard-Postbaby-Form normalisiert.",
+      "unsupportedNodeShape": "Mermaid-Parallelogramm-Knoten werden noch nicht unterstützt und wurden auf die Standardform von Postbaby normalisiert.",
       "unsupportedNodeSyntax": "Nicht unterstützte Mermaid-Knotensyntax: {syntax}",
       "conflictingNodeLabel": "Knoten \"{nodeId}\" wurde mit mehreren Beschriftungen definiert. Die erste nicht leere Beschriftung \"{label}\" wird beibehalten.",
       "conflictingNodeShape": "Knoten \"{nodeId}\" wurde mit mehreren Formen definiert. Die frühere Mermaid-kompatible Formzuordnung \"{shape}\" wird beibehalten.",
       "unsupportedEdgeSyntax": "Nicht unterstützte Mermaid-Verbindungssyntax: {syntax}",
       "invalidSource": "Mermaid-Code muss Text sein.",
-      "ignoredMermaidStatement": "Nicht unterstützte Mermaid-{statementType}-Anweisung wird ignoriert.",
+      "ignoredMermaidStatement": "Nicht unterstützte Mermaid-{statementType}-Anweisung wurde ignoriert.",
       "missingDiagramHeader": "Mermaid-Code muss einen unterstützten flowchart/graph-Header enthalten.",
       "missingActiveTab": "Postbaby hat keinen aktiven Tab für die Diagrammerstellung.",
       "missingActiveTabRecord": "Der Datensatz des aktiven Tabs für die Diagrammerstellung wurde nicht gefunden.",
       "missingActiveGrid": "Der aktive Rastercontainer ist für die Diagrammerstellung nicht verfügbar.",
-      "tabItemLimitExceeded": "Dieser Import ist für einen Tab zu groß.",
-      "tabEdgeLimitExceeded": "Dieser Import ist für einen Tab zu groß."
+      "tabItemLimitExceeded": "Dieser Import ist zu groß für einen einzelnen Tab.",
+      "tabEdgeLimitExceeded": "Dieser Import ist zu groß für einen einzelnen Tab."
     }
   }
 }
