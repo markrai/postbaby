@@ -6,6 +6,10 @@
             lang: 'en',
             file: './locales/en.json'
         },
+        es: {
+            lang: 'es',
+            file: './locales/es.json'
+        },
         pseudo: {
             lang: 'en-xa',
             file: './locales/pseudo.json'

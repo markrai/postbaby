@@ -2,6 +2,7 @@
   "common": {
     "languages": {
       "english": "[Eenglish]",
+      "spanishPartial": "[Espaañool (paartiiaal)]",
       "pseudo": "[Pseuudo]"
     }
   },
@@ -22,6 +23,7 @@
       "corporateMode": "[Coorpooraate Moode]",
       "hideCameraRemote": "[Hiide Caameeraa Reemoote]",
       "language": "[Laanguuaage]",
+      "partialLocaleNote": "[Soome aapp aareeaas aare stiill Eengliish.]",
       "useGrids": "[Uuse Griids (Taab Speeciifiic)]",
       "defaultColor": "[Deefaauult Cooloor foor Neew Iteems (Gloobaal)]"
     },

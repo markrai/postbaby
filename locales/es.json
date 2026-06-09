@@ -1,0 +1,235 @@
+{
+  "common": {
+    "languages": {
+      "english": "Inglés",
+      "spanishPartial": "Español (parcial)",
+      "pseudo": "Pseudo"
+    }
+  },
+  "settings": {
+    "trigger": "Configuración",
+    "close": "Cerrar modal de configuración",
+    "title": "Configuración",
+    "sections": "Secciones de configuración",
+    "tabs": {
+      "preferences": "Preferencias",
+      "importExport": "Importar y exportar"
+    },
+    "preferences": {
+      "darkMode": "Modo oscuro",
+      "disableColorChange": "Desactivar cambio de color",
+      "disableNoteResize": "Desactivar cambio de tamaño de notas",
+      "fullScreen": "Pantalla completa",
+      "corporateMode": "Modo corporativo",
+      "hideCameraRemote": "Ocultar control remoto de cámara",
+      "language": "Idioma",
+      "partialLocaleNote": "Algunas áreas de la aplicación todavía están en inglés.",
+      "useGrids": "Usar cuadrículas (según la pestaña)",
+      "defaultColor": "Color predeterminado para elementos nuevos (global)"
+    },
+    "gridOptions": {
+      "none": "Ninguna",
+      "kanban": "Tablero Kanban",
+      "eisenhower": "Matriz de Eisenhower",
+      "priority": "Matriz de prioridades",
+      "smartgoals": "Objetivos SMART",
+      "swot": "Análisis SWOT",
+      "calendar": "Calendario",
+      "nowlater": "Ahora y después",
+      "week": "Semana"
+    },
+    "recovery": {
+      "title": "Recuperación (solo desarrollo)",
+      "body": "Controles temporales de recuperación solo por desplazamiento para depurar notas fuera de pantalla sin cambiar las posiciones guardadas.",
+      "showAll": "Mostrar todas las notas",
+      "jumpNewest": "Ir a la más reciente",
+      "jumpLastEdited": "Ir a la última editada"
+    },
+    "questionsComments": "Preguntas/comentarios:",
+    "staticNote": "Nota: Esta versión estática guarda notas solo en este navegador y en este dispositivo. El inicio de sesión de cuenta, la sincronización en la nube, la facturación y la recuperación entre dispositivos no están disponibles en este modo. Borrar los datos del sitio o usar otro navegador/dispositivo puede hacer que estas notas dejen de estar disponibles.",
+    "actions": {
+      "exportData": "Exportar datos",
+      "importData": "Importar datos",
+      "importMermaid": "Importar Mermaid"
+    },
+    "mermaid": {
+      "title": "Importación de Mermaid",
+      "descriptionBeforeAction": "Convierte un flowchart o graph compatible de Mermaid en notas y conexiones normales de Postbaby. Pega el contenido Mermaid abajo y luego haz clic en",
+      "descriptionAfterAction": "cuando estés listo para crear notas.",
+      "placeholder": "flowchart LR\nIdea --> Task\nTask --> Done"
+    },
+    "toasts": {
+      "loadDataInputMissing": "Error: No se pudo encontrar la entrada para cargar datos.",
+      "noFileSelected": "No se seleccionó ningún archivo.",
+      "importedLocallyReloading": "Importado localmente. Recargando...",
+      "importCanceled": "Importación cancelada.",
+      "importedAndSyncedReloading": "Importado y sincronizado. Recargando...",
+      "importedLocalSignInAgain": "Importado localmente. Vuelve a iniciar sesión para sincronizar esta copia de seguridad. Recargando...",
+      "importedLocalReconnect": "Importado localmente. Vuelve a conectarte para sincronizar esta copia de seguridad. Recargando...",
+      "importedLocalServerAvailable": "Importado localmente. Postbaby sincronizará esta copia de seguridad cuando el servidor esté disponible. Recargando...",
+      "invalidFileFormat": "No se pudieron cargar los datos: formato de archivo no válido.",
+      "fileReadFailed": "No se pudo leer el archivo.",
+      "dataSavedSuccessfully": "Datos guardados correctamente."
+    }
+  },
+  "shortcuts": {
+    "trigger": "Atajos de teclado",
+    "close": "Cerrar atajos",
+    "title": "Atajos",
+    "desktop": {
+      "create": {
+        "action": "crear nuevo:",
+        "prefix": "n o",
+        "gesture": "clic derecho en el lienzo"
+      },
+      "changeColor": {
+        "action": "cambiar color:",
+        "gesture": "un clic en el elemento"
+      },
+      "editItem": {
+        "action": "editar elemento:",
+        "gesture": "doble clic en el elemento"
+      },
+      "deleteItem": {
+        "action": "eliminar elemento:",
+        "gesture": "clic derecho en el elemento o arrastrarlo al rollo de papel higiénico"
+      },
+      "nextShape": {
+        "action": "siguiente forma:",
+        "gesture": "ctrl + clic derecho en el elemento"
+      },
+      "previousShape": {
+        "action": "forma anterior:",
+        "gesture": "shift + ctrl + clic derecho en el elemento"
+      },
+      "clearCurrentTab": {
+        "action": "limpiar pestaña actual:",
+        "keys": "c"
+      },
+      "deleteAllTabs": {
+        "action": "eliminar todas las pestañas:",
+        "keys": "ctrl+c"
+      },
+      "jumpTabs": {
+        "action": "ir a pestañas:",
+        "keys": "teclas 1-9"
+      },
+      "toggleGrids": {
+        "action": "cambiar entre cuadrículas:",
+        "keys": "g"
+      },
+      "selectPanMode": {
+        "action": "modo seleccionar / desplazar:",
+        "gesture": "selector mano/selección (arriba a la derecha)"
+      },
+      "emptyCanvasDrag": {
+        "action": "arrastre en lienzo vacío:",
+        "gesture": "marco de selección en modo selección / desplazamiento en modo mano"
+      },
+      "drawLine": {
+        "action": "dibujar línea:",
+        "gesture": "shift + arrastre con ratón"
+      },
+      "drawArrow": {
+        "action": "dibujar flecha:",
+        "gesture": "ctrl + arrastre con ratón"
+      },
+      "panCanvas": {
+        "action": "desplazar lienzo:",
+        "gesture": "rueda del ratón, desplazamiento del trackpad, shift + rueda, arrastre con botón central o espacio + arrastre"
+      },
+      "zoomCanvas": {
+        "action": "zoom del lienzo:",
+        "gesture": "ctrl/cmd + rueda o controles de cámara"
+      },
+      "resetFitView": {
+        "action": "restablecer / ajustar vista:",
+        "prefix": "0 / f o",
+        "gesture": "controles de cámara"
+      },
+      "settings": {
+        "action": "configuración:",
+        "gesture": "haz clic en el botón de configuración (arriba a la derecha)"
+      }
+    },
+    "mobile": {
+      "create": {
+        "action": "crear nuevo:",
+        "gesture": "mantén pulsado en el lienzo"
+      },
+      "edit": {
+        "action": "editar:",
+        "gesture": "doble toque en el elemento o la pestaña"
+      },
+      "delete": {
+        "action": "eliminar:",
+        "gesture": "mantén pulsado en el elemento o la pestaña"
+      },
+      "changeColor": {
+        "action": "cambiar color:",
+        "gesture": "un toque en el elemento o la pestaña"
+      },
+      "navigateCanvas": {
+        "action": "moverse por el lienzo:",
+        "gesture": "pellizcar / desplazar con dos dedos o controles de cámara"
+      },
+      "selectPanMode": {
+        "action": "modo seleccionar o desplazar:",
+        "gesture": "usa el selector mano/selección (arriba a la derecha)"
+      },
+      "settings": {
+        "action": "configuración:",
+        "gesture": "toca el botón de configuración (arriba a la derecha)"
+      }
+    }
+  },
+  "mermaid": {
+    "status": {
+      "completedTitle": "Importación de Mermaid completada.",
+      "failedTitle": "Importación de Mermaid fallida.",
+      "createdSummary": "Se crearon {notes} y {edges}.",
+      "warningsSummary": "Revisa las advertencias abajo si quieres simplificar o ajustar las formas importadas.",
+      "ordinarySummary": "Ahora son notas y conexiones normales de Postbaby.",
+      "validationFailedMessage": "No se importó nada. Corrige el contenido Mermaid abajo e inténtalo de nuevo.",
+      "unexpectedFailedMessage": "No se importó nada. Un error inesperado impidió la importación de Mermaid."
+    },
+    "groups": {
+      "errors": "Errores",
+      "warnings": "Advertencias"
+    },
+    "count": {
+      "note": {
+        "one": "{count} nota",
+        "other": "{count} notas"
+      },
+      "edge": {
+        "one": "{count} conexión",
+        "other": "{count} conexiones"
+      }
+    },
+    "issue": {
+      "linePrefix": "Línea {line}: {message}",
+      "unknown": "Problema desconocido de importación de Mermaid."
+    },
+    "issues": {
+      "unexpectedMermaidImportError": "Error inesperado de importación de Mermaid.",
+      "unsupportedDiagramType": "Tipo de diagrama Mermaid no compatible \"{diagramType}\". Solo se admiten flowchart/graph TD, TB y LR.",
+      "invalidDiagramHeader": "El contenido Mermaid debe comenzar con flowchart/graph TD, TB o LR.",
+      "invalidNodeReference": "Las referencias de nodo no deben estar vacías.",
+      "nodeLabelTooLong": "La etiqueta del nodo supera los {maxChars} caracteres.",
+      "unsupportedNodeShape": "Los nodos de paralelogramo de Mermaid todavía no son compatibles y se normalizaron a la forma predeterminada de Postbaby.",
+      "unsupportedNodeSyntax": "Sintaxis de nodo Mermaid no compatible: {syntax}",
+      "conflictingNodeLabel": "El nodo \"{nodeId}\" se definió con varias etiquetas. Se conserva la primera etiqueta no vacía \"{label}\".",
+      "conflictingNodeShape": "El nodo \"{nodeId}\" se definió con varias formas. Se conserva la asignación de forma compatible con Mermaid anterior \"{shape}\".",
+      "unsupportedEdgeSyntax": "Sintaxis de conexión Mermaid no compatible: {syntax}",
+      "invalidSource": "El contenido Mermaid debe ser una cadena.",
+      "ignoredMermaidStatement": "Se ignoró la instrucción Mermaid {statementType} no compatible.",
+      "missingDiagramHeader": "El contenido Mermaid debe incluir un encabezado flowchart/graph compatible.",
+      "missingActiveTab": "Postbaby no tiene una pestaña activa para crear el grafo.",
+      "missingActiveTabRecord": "No se pudo encontrar el registro de la pestaña activa para crear el grafo.",
+      "missingActiveGrid": "El contenedor de cuadrícula activo no está disponible para crear el grafo.",
+      "tabItemLimitExceeded": "Esta importación es demasiado grande para una sola pestaña.",
+      "tabEdgeLimitExceeded": "Esta importación es demasiado grande para una sola pestaña."
+    }
+  }
+}

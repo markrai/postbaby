@@ -11141,6 +11141,44 @@ test.describe('Settings and Account UI', () => {
     await expect(page.locator('#shortcutsModal .desktop-shortcuts .shortcut-action').first()).toHaveText('create new:');
   });
 
+  test('Settings and Shortcuts can switch to Spanish and back to English', async ({ page }) => {
+    await prepareBlankPage(page);
+    await page.goto('/index.html');
+
+    await openSettingsModal(page);
+    await expect(page.locator('#settingsModal .modal-title')).toHaveText('Settings');
+    await expect(page.locator('#settingsPreferencesPanel [data-i18n="settings.preferences.darkMode"]')).toHaveText('Dark Mode');
+
+    await page.selectOption('#localeSelect', 'es');
+    await expect.poll(async () => page.evaluate(() => document.documentElement.lang)).toBe('es');
+    await expect(page.locator('#settingsModal .modal-title')).toHaveText('Configuración');
+    await expect(page.locator('#settingsPreferencesPanel [data-i18n="settings.preferences.darkMode"]')).toHaveText('Modo oscuro');
+    await expect(page.locator('#localePartialNote')).toHaveText('Algunas áreas de la aplicación todavía están en inglés.');
+
+    await page.locator('.close-settings').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+
+    await page.locator('#shortcutsTriggerButton').click();
+    await expect(page.locator('#shortcutsModal')).toBeVisible();
+    await expect(page.locator('#shortcutsModal .modal-title')).toHaveText('Atajos');
+    await expect(page.locator('#shortcutsModal .desktop-shortcuts .shortcut-action').first()).toHaveText('crear nuevo:');
+
+    await page.locator('.close-shortcuts').click();
+    await expect(page.locator('#shortcutsModal')).toBeHidden();
+
+    await openSettingsModal(page);
+    await page.selectOption('#localeSelect', 'en');
+    await expect.poll(async () => page.evaluate(() => document.documentElement.lang)).toBe('en');
+    await expect(page.locator('#settingsModal .modal-title')).toHaveText('Settings');
+    await expect(page.locator('#settingsPreferencesPanel [data-i18n="settings.preferences.darkMode"]')).toHaveText('Dark Mode');
+    await expect(page.locator('#localePartialNote')).toHaveText('Some app areas are still English.');
+
+    await page.locator('.close-settings').click();
+    await page.locator('#shortcutsTriggerButton').click();
+    await expect(page.locator('#shortcutsModal .modal-title')).toHaveText('Shortcuts');
+    await expect(page.locator('#shortcutsModal .desktop-shortcuts .shortcut-action').first()).toHaveText('create new:');
+  });
+
   test('pseudo locale fetch failure falls back to English and resets the selector', async ({ page }) => {
     await page.addInitScript(() => {
       const originalFetch = window.fetch.bind(window);

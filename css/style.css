@@ -1321,6 +1321,14 @@ h1 {
     max-width: 190px;
 }
 
+.settings-helper-note {
+    margin: -2px 0 10px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--text-muted);
+    text-align: left;
+}
+
 /* The Modal (background) */
 .modal {
     display: none;

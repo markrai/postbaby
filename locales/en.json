@@ -2,6 +2,7 @@
   "common": {
     "languages": {
       "english": "English",
+      "spanishPartial": "Español (partial)",
       "pseudo": "Pseudo"
     }
   },
@@ -22,6 +23,7 @@
       "corporateMode": "Corporate Mode",
       "hideCameraRemote": "Hide Camera Remote",
       "language": "Language",
+      "partialLocaleNote": "Some app areas are still English.",
       "useGrids": "Use Grids (Tab Specific)",
       "defaultColor": "Default Color for New Items (Global)"
     },
