@@ -70,7 +70,6 @@ const SYNC_HASH_STORAGE_KEYS = [
   'theme',
   'disableColorChange',
   'disableNoteResize',
-  'hideInstructions',
   'hideCameraControls',
   'corporateMode',
   'defaultColorEnabled',
@@ -4009,7 +4008,6 @@ test.describe('Static behavior', () => {
     const localSnapshot = Object.assign(
       buildLocalSnapshot('Export Sized Note', { theme: 'dark' }),
       {
-        hideInstructions: 'true',
         corporateMode: 'false',
         defaultColorEnabled: 'true',
         defaultColor: '#112233'
@@ -4021,7 +4019,6 @@ test.describe('Static behavior', () => {
       'defaultColor',
       'defaultColorEnabled',
       'hasRunBefore',
-      'hideInstructions',
       'tabs',
       'theme'
     ];

@@ -179,6 +179,26 @@
     <!-- Tab Content -->
     <div id="tabContent">
         <!-- Tab panes will be dynamically inserted here -->
+        <button
+            type="button"
+            id="shortcutsTriggerButton"
+            class="shortcuts-trigger-button"
+            aria-label="Keyboard shortcuts"
+            title="Keyboard shortcuts"
+        >
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shortcuts-trigger-icon" aria-hidden="true">
+                <path d="M10 8h.01"/>
+                <path d="M12 12h.01"/>
+                <path d="M14 8h.01"/>
+                <path d="M16 12h.01"/>
+                <path d="M18 8h.01"/>
+                <path d="M6 8h.01"/>
+                <path d="M7 16h10"/>
+                <path d="M8 12h.01"/>
+                <rect width="20" height="16" x="2" y="4" rx="2"/>
+            </svg>
+        </button>
+        <img src="./img/tp.png" alt="trash" id="trash" class="trash" draggable="false">
     </div>
 
     <div id="cameraControls" class="camera-controls" aria-label="Canvas navigation controls" hidden>
@@ -191,62 +211,119 @@
     <!-- Version Information (text set by js/version.js) -->
     <div class="version"></div>
 
-    <!-- Desktop Shortcuts -->
-    <div class="desktop-shortcuts">
-        <br>
-        create new: n or <i>right-click on canvas</i>
-        <br>
-        change color: <i>single-click item</i>
-        <br>
-        edit item: <i>double-click item</i>
-        <br>
-        delete item: <i>right-click item or drag to toilet-roll</i>
-        <br>
-        next shape: <i>ctrl + right-click item</i>
-        <br>
-        previous shape: <i>shift + ctrl + right-click item</i>
-        <br>
-        clear current tab: <i>c</i>
-        <br>
-        delete all tabs: <i>ctrl+c</i>
-        <br>
-        jump tabs: <i>keys 1-9</i>
-        <br>
-        toggle between grids: <i>g</i>
-        <br>
-        select / pan mode: <i>hand/select toggle (top-right)</i>
-        <br>
-        empty-canvas drag: <i>marquee in select mode / pan in hand mode</i>
-        <br>
-        draw line: <i>shift + mouse-drag</i>
-        <br>
-        draw arrow: <i>ctrl + mouse-drag</i>
-        <br>
-        pan canvas: <i>mouse wheel, trackpad scroll, shift + wheel, middle-drag, or space + drag</i>
-        <br>
-        zoom canvas: <i>ctrl/cmd + wheel or camera controls</i>
-        <br>
-        reset / fit view: <i>0 / f or camera controls</i>
-        <br>
-        settings: <i>click the settings button (top-right)</i>
-    </div>
+    <!-- Shortcuts Modal -->
+    <div id="shortcutsModal" class="modal shortcuts-modal">
+        <div class="modal-content shortcuts-modal-content">
+            <span class="close-shortcuts" tabindex="0" aria-label="Close Shortcuts">&times;</span>
+            <p class="modal-title">Shortcuts</p>
+            <div class="shortcuts-modal-body">
+                <div class="desktop-shortcuts">
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">create new:</div>
+                        <div class="shortcut-keys">n or <i>right-click on canvas</i></div>
+                    </div>
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">change color:</div>
+                        <div class="shortcut-keys"><i>single-click item</i></div>
+                    </div>
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">edit item:</div>
+                        <div class="shortcut-keys"><i>double-click item</i></div>
+                    </div>
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">delete item:</div>
+                        <div class="shortcut-keys"><i>right-click item or drag to toilet-roll</i></div>
+                    </div>
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">next shape:</div>
+                        <div class="shortcut-keys"><i>ctrl + right-click item</i></div>
+                    </div>
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">previous shape:</div>
+                        <div class="shortcut-keys"><i>shift + ctrl + right-click item</i></div>
+                    </div>
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">clear current tab:</div>
+                        <div class="shortcut-keys">c</div>
+                    </div>
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">delete all tabs:</div>
+                        <div class="shortcut-keys">ctrl+c</div>
+                    </div>
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">jump tabs:</div>
+                        <div class="shortcut-keys">keys 1-9</div>
+                    </div>
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">toggle between grids:</div>
+                        <div class="shortcut-keys">g</div>
+                    </div>
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">select / pan mode:</div>
+                        <div class="shortcut-keys"><i>hand/select toggle (top-right)</i></div>
+                    </div>
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">empty-canvas drag:</div>
+                        <div class="shortcut-keys"><i>marquee in select mode / pan in hand mode</i></div>
+                    </div>
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">draw line:</div>
+                        <div class="shortcut-keys"><i>shift + mouse-drag</i></div>
+                    </div>
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">draw arrow:</div>
+                        <div class="shortcut-keys"><i>ctrl + mouse-drag</i></div>
+                    </div>
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">pan canvas:</div>
+                        <div class="shortcut-keys"><i>mouse wheel, trackpad scroll, shift + wheel, middle-drag, or space + drag</i></div>
+                    </div>
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">zoom canvas:</div>
+                        <div class="shortcut-keys"><i>ctrl/cmd + wheel or camera controls</i></div>
+                    </div>
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">reset / fit view:</div>
+                        <div class="shortcut-keys">0 / f or <i>camera controls</i></div>
+                    </div>
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">settings:</div>
+                        <div class="shortcut-keys"><i>click the settings button (top-right)</i></div>
+                    </div>
+                </div>
 
-    <!-- Mobile Shortcuts -->
-    <div class="mobile-shortcuts">
-        <br>
-        create new: <i> long-press on canvas</i>
-        <br>
-        edit: <i> double-tap on item or tab</i>
-        <br>
-        delete:<i> long-press on item or tab</i>
-        <br>
-        change color:<i> single tap on item or tab</i>
-        <br>
-        navigate canvas: <i>two-finger pinch / pan or camera controls</i>
-        <br>
-        select or pan mode: <i>use the hand/select toggle (top-right)</i>
-        <br>
-        settings: <i>tap the settings button (top-right)</i>
+                <div class="mobile-shortcuts">
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">create new:</div>
+                        <div class="shortcut-keys"><i>long-press on canvas</i></div>
+                    </div>
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">edit:</div>
+                        <div class="shortcut-keys"><i>double-tap on item or tab</i></div>
+                    </div>
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">delete:</div>
+                        <div class="shortcut-keys"><i>long-press on item or tab</i></div>
+                    </div>
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">change color:</div>
+                        <div class="shortcut-keys"><i>single tap on item or tab</i></div>
+                    </div>
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">navigate canvas:</div>
+                        <div class="shortcut-keys"><i>two-finger pinch / pan or camera controls</i></div>
+                    </div>
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">select or pan mode:</div>
+                        <div class="shortcut-keys"><i>use the hand/select toggle (top-right)</i></div>
+                    </div>
+                    <div class="shortcut-row">
+                        <div class="shortcut-action">settings:</div>
+                        <div class="shortcut-keys"><i>tap the settings button (top-right)</i></div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Delete Confirmation Modal -->
@@ -336,15 +413,6 @@
                     <span>Corporate Mode</span>
                     <label class="switch">
                         <input type="checkbox" id="toggleLogo">
-                        <span class="slider round"></span>
-                    </label>
-                </div>
-
-                <!-- Hide Instructions -->
-                <div class="settings-option">
-                    <span>Hide Instructions</span>
-                    <label class="switch">
-                        <input type="checkbox" id="toggleInstructions">
                         <span class="slider round"></span>
                     </label>
                 </div>
@@ -595,9 +663,6 @@
     </div>
 
     
-
-    <!-- Trash Icon -->
-    <img src="./img/tp.png" alt="trash" id="trash" class="trash" draggable="false">
 
     <!-- Scripts -->
     <script src="./runtime-config.js"></script>

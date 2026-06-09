@@ -34,20 +34,18 @@
         top: 0;
     }
 
-    .desktop-shortcuts {
+    .shortcuts-trigger-icon {
+        width: 24px;
+        height: 24px;
+    }
+
+    .shortcuts-modal-body .desktop-shortcuts {
         display: none;
     }
 
-    .mobile-shortcuts {
+    .shortcuts-modal-body .mobile-shortcuts {
         display: block;
-        position: fixed;
-        bottom: 10px;
-        left: 10px;
-        color: var(--text-muted);
         font-size: 12px;
-        opacity: 0.8;
-        font-family: 'Kalam', sans-serif;
-        z-index: -1;
     }
 
     .top-app-controls {
@@ -106,17 +104,13 @@
         /* Adjusts horizontal positioning */
         bottom: 20px;
         /* Adjusts vertical positioning */
-        /* Ensures visibility on top of other elements */
-        pointer-events: auto;
-        /* Allows items to be dragged over it */
-        z-index: 1;
+        pointer-events: none;
+        z-index: 0;
     }
 
     .trash.active {
         transform: none;
         opacity: 1;
-        pointer-events: auto;
-        z-index: -1;
     }
 
     .grid-container {
@@ -228,7 +222,7 @@
         font-size: 14px; /* Even smaller font on very small screens */
     }
 
-    .desktop-shortcuts {
+    .shortcuts-modal-body .desktop-shortcuts {
         display: none;
-    }    
+    }
 }

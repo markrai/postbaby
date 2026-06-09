@@ -1,3 +1,18 @@
+# v2.1.2 (6/8/2026)
+- Keyboard shortcut help moved from the bottom-left corner into a Shortcuts modal, opened by a keyboard icon.
+- Removed the Hide Instructions setting; shortcut reference is always available from the icon.
+- Fixed canvas stacking so notes render above the shortcut trigger and trash controls.
+
+# v2.1.1 (6/7/2026)
+- Import supported Mermaid flowcharts and graphs from Settings (Import & Export) to create Postbaby notes and edges.
+- Mermaid adapter parses a supported flowchart/graph subset (TD, TB, LR) with clear import status, errors, and warnings.
+
+# v2.1.0 (6/6/2026)
+- Infinite canvas with pan/zoom camera (replaces the old workspace scroll model).
+- Select and pan (hand) modes, with move/selection toggle and grab-handle polish.
+- On-screen camera controls, optional hide for the camera remote, and keyboard shortcuts to recenter the view.
+- Grid layer stacks under notes so the canvas reads correctly at any zoom.
+
 # v2.0.0 (5/16/2026) (first unified release)
 - Unified the browser-local and self-hosted codepaths into one repo.
 - Self-hosted Docker is now a Go + SQLite deployment on port `8080` with required `/app/data` persistence and first-run `/setup`.
