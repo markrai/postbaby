@@ -1,3 +1,11 @@
+# v2.2.1 (6/9/2026)
+- Importance grid added: four-column layout with Low, Medium, High, and Critical categories.
+
+# v2.2.0 (6/9/2026)
+- Language selector in Settings with partial locales for Spanish, French, German, and Chinese.
+- Settings modal, Shortcuts modal, import/export toasts, and Mermaid import chrome now use the i18n layer.
+- Selected language is stored in browser-local storage; English remains the default fallback.
+
 # v2.1.2 (6/8/2026)
 - Keyboard shortcut help moved from the bottom-left corner into a Shortcuts modal, opened by a keyboard icon.
 - Removed the Hide Instructions setting; shortcut reference is always available from the icon.

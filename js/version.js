@@ -1,5 +1,5 @@
 /** Single source of truth for the app build version (shown in the UI). */
-const POSTBABY_VERSION = '2.1.2';
+const POSTBABY_VERSION = '2.2.1';
 
 window.POSTBABY_VERSION = POSTBABY_VERSION;
 
