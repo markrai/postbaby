@@ -1,7 +1,7 @@
 // sw.js
 
 <<<<<<< HEAD
-const PUBLIC_JS_REVISION = 'a1f3128e096a';
+const PUBLIC_JS_REVISION = 'b9c2a1ead4e4';
 =======
 const PUBLIC_JS_REVISION = 'ca15540baf6a';
 >>>>>>> fe10c3af5664144e9b70117ad18593197687cb7d

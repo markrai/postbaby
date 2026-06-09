@@ -148,7 +148,7 @@
             </span>
         </button>
         <button type="button" id="settingsButton" class="top-app-control-button top-app-settings-button"
-            aria-label="Settings" title="Settings">
+            aria-label="Settings" title="Settings" data-i18n-aria-label="settings.trigger" data-i18n-title="settings.trigger">
             <span class="top-app-control-icon" aria-hidden="true">
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
@@ -185,6 +185,8 @@
             class="shortcuts-trigger-button"
             aria-label="Keyboard shortcuts"
             title="Keyboard shortcuts"
+            data-i18n-aria-label="shortcuts.trigger"
+            data-i18n-title="shortcuts.trigger"
         >
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shortcuts-trigger-icon" aria-hidden="true">
                 <path d="M10 8h.01"/>
@@ -214,112 +216,118 @@
     <!-- Shortcuts Modal -->
     <div id="shortcutsModal" class="modal shortcuts-modal">
         <div class="modal-content shortcuts-modal-content">
-            <span class="close-shortcuts" tabindex="0" aria-label="Close Shortcuts">&times;</span>
-            <p class="modal-title">Shortcuts</p>
+            <span class="close-shortcuts" tabindex="0" aria-label="Close Shortcuts" data-i18n-aria-label="shortcuts.close">&times;</span>
+            <p class="modal-title" data-i18n="shortcuts.title">Shortcuts</p>
             <div class="shortcuts-modal-body">
                 <div class="desktop-shortcuts">
                     <div class="shortcut-row">
-                        <div class="shortcut-action">create new:</div>
-                        <div class="shortcut-keys">n or <i>right-click on canvas</i></div>
+                        <div class="shortcut-action" data-i18n="shortcuts.desktop.create.action">create new:</div>
+                        <div class="shortcut-keys">
+                            <span data-i18n="shortcuts.desktop.create.prefix">n or</span>
+                            <i data-i18n="shortcuts.desktop.create.gesture">right-click on canvas</i>
+                        </div>
                     </div>
                     <div class="shortcut-row">
-                        <div class="shortcut-action">change color:</div>
-                        <div class="shortcut-keys"><i>single-click item</i></div>
+                        <div class="shortcut-action" data-i18n="shortcuts.desktop.changeColor.action">change color:</div>
+                        <div class="shortcut-keys"><i data-i18n="shortcuts.desktop.changeColor.gesture">single-click item</i></div>
                     </div>
                     <div class="shortcut-row">
-                        <div class="shortcut-action">edit item:</div>
-                        <div class="shortcut-keys"><i>double-click item</i></div>
+                        <div class="shortcut-action" data-i18n="shortcuts.desktop.editItem.action">edit item:</div>
+                        <div class="shortcut-keys"><i data-i18n="shortcuts.desktop.editItem.gesture">double-click item</i></div>
                     </div>
                     <div class="shortcut-row">
-                        <div class="shortcut-action">delete item:</div>
-                        <div class="shortcut-keys"><i>right-click item or drag to toilet-roll</i></div>
+                        <div class="shortcut-action" data-i18n="shortcuts.desktop.deleteItem.action">delete item:</div>
+                        <div class="shortcut-keys"><i data-i18n="shortcuts.desktop.deleteItem.gesture">right-click item or drag to toilet-roll</i></div>
                     </div>
                     <div class="shortcut-row">
-                        <div class="shortcut-action">next shape:</div>
-                        <div class="shortcut-keys"><i>ctrl + right-click item</i></div>
+                        <div class="shortcut-action" data-i18n="shortcuts.desktop.nextShape.action">next shape:</div>
+                        <div class="shortcut-keys"><i data-i18n="shortcuts.desktop.nextShape.gesture">ctrl + right-click item</i></div>
                     </div>
                     <div class="shortcut-row">
-                        <div class="shortcut-action">previous shape:</div>
-                        <div class="shortcut-keys"><i>shift + ctrl + right-click item</i></div>
+                        <div class="shortcut-action" data-i18n="shortcuts.desktop.previousShape.action">previous shape:</div>
+                        <div class="shortcut-keys"><i data-i18n="shortcuts.desktop.previousShape.gesture">shift + ctrl + right-click item</i></div>
                     </div>
                     <div class="shortcut-row">
-                        <div class="shortcut-action">clear current tab:</div>
-                        <div class="shortcut-keys">c</div>
+                        <div class="shortcut-action" data-i18n="shortcuts.desktop.clearCurrentTab.action">clear current tab:</div>
+                        <div class="shortcut-keys" data-i18n="shortcuts.desktop.clearCurrentTab.keys">c</div>
                     </div>
                     <div class="shortcut-row">
-                        <div class="shortcut-action">delete all tabs:</div>
-                        <div class="shortcut-keys">ctrl+c</div>
+                        <div class="shortcut-action" data-i18n="shortcuts.desktop.deleteAllTabs.action">delete all tabs:</div>
+                        <div class="shortcut-keys" data-i18n="shortcuts.desktop.deleteAllTabs.keys">ctrl+c</div>
                     </div>
                     <div class="shortcut-row">
-                        <div class="shortcut-action">jump tabs:</div>
-                        <div class="shortcut-keys">keys 1-9</div>
+                        <div class="shortcut-action" data-i18n="shortcuts.desktop.jumpTabs.action">jump tabs:</div>
+                        <div class="shortcut-keys" data-i18n="shortcuts.desktop.jumpTabs.keys">keys 1-9</div>
                     </div>
                     <div class="shortcut-row">
-                        <div class="shortcut-action">toggle between grids:</div>
-                        <div class="shortcut-keys">g</div>
+                        <div class="shortcut-action" data-i18n="shortcuts.desktop.toggleGrids.action">toggle between grids:</div>
+                        <div class="shortcut-keys" data-i18n="shortcuts.desktop.toggleGrids.keys">g</div>
                     </div>
                     <div class="shortcut-row">
-                        <div class="shortcut-action">select / pan mode:</div>
-                        <div class="shortcut-keys"><i>hand/select toggle (top-right)</i></div>
+                        <div class="shortcut-action" data-i18n="shortcuts.desktop.selectPanMode.action">select / pan mode:</div>
+                        <div class="shortcut-keys"><i data-i18n="shortcuts.desktop.selectPanMode.gesture">hand/select toggle (top-right)</i></div>
                     </div>
                     <div class="shortcut-row">
-                        <div class="shortcut-action">empty-canvas drag:</div>
-                        <div class="shortcut-keys"><i>marquee in select mode / pan in hand mode</i></div>
+                        <div class="shortcut-action" data-i18n="shortcuts.desktop.emptyCanvasDrag.action">empty-canvas drag:</div>
+                        <div class="shortcut-keys"><i data-i18n="shortcuts.desktop.emptyCanvasDrag.gesture">marquee in select mode / pan in hand mode</i></div>
                     </div>
                     <div class="shortcut-row">
-                        <div class="shortcut-action">draw line:</div>
-                        <div class="shortcut-keys"><i>shift + mouse-drag</i></div>
+                        <div class="shortcut-action" data-i18n="shortcuts.desktop.drawLine.action">draw line:</div>
+                        <div class="shortcut-keys"><i data-i18n="shortcuts.desktop.drawLine.gesture">shift + mouse-drag</i></div>
                     </div>
                     <div class="shortcut-row">
-                        <div class="shortcut-action">draw arrow:</div>
-                        <div class="shortcut-keys"><i>ctrl + mouse-drag</i></div>
+                        <div class="shortcut-action" data-i18n="shortcuts.desktop.drawArrow.action">draw arrow:</div>
+                        <div class="shortcut-keys"><i data-i18n="shortcuts.desktop.drawArrow.gesture">ctrl + mouse-drag</i></div>
                     </div>
                     <div class="shortcut-row">
-                        <div class="shortcut-action">pan canvas:</div>
-                        <div class="shortcut-keys"><i>mouse wheel, trackpad scroll, shift + wheel, middle-drag, or space + drag</i></div>
+                        <div class="shortcut-action" data-i18n="shortcuts.desktop.panCanvas.action">pan canvas:</div>
+                        <div class="shortcut-keys"><i data-i18n="shortcuts.desktop.panCanvas.gesture">mouse wheel, trackpad scroll, shift + wheel, middle-drag, or space + drag</i></div>
                     </div>
                     <div class="shortcut-row">
-                        <div class="shortcut-action">zoom canvas:</div>
-                        <div class="shortcut-keys"><i>ctrl/cmd + wheel or camera controls</i></div>
+                        <div class="shortcut-action" data-i18n="shortcuts.desktop.zoomCanvas.action">zoom canvas:</div>
+                        <div class="shortcut-keys"><i data-i18n="shortcuts.desktop.zoomCanvas.gesture">ctrl/cmd + wheel or camera controls</i></div>
                     </div>
                     <div class="shortcut-row">
-                        <div class="shortcut-action">reset / fit view:</div>
-                        <div class="shortcut-keys">0 / f or <i>camera controls</i></div>
+                        <div class="shortcut-action" data-i18n="shortcuts.desktop.resetFitView.action">reset / fit view:</div>
+                        <div class="shortcut-keys">
+                            <span data-i18n="shortcuts.desktop.resetFitView.prefix">0 / f or</span>
+                            <i data-i18n="shortcuts.desktop.resetFitView.gesture">camera controls</i>
+                        </div>
                     </div>
                     <div class="shortcut-row">
-                        <div class="shortcut-action">settings:</div>
-                        <div class="shortcut-keys"><i>click the settings button (top-right)</i></div>
+                        <div class="shortcut-action" data-i18n="shortcuts.desktop.settings.action">settings:</div>
+                        <div class="shortcut-keys"><i data-i18n="shortcuts.desktop.settings.gesture">click the settings button (top-right)</i></div>
                     </div>
                 </div>
 
                 <div class="mobile-shortcuts">
                     <div class="shortcut-row">
-                        <div class="shortcut-action">create new:</div>
-                        <div class="shortcut-keys"><i>long-press on canvas</i></div>
+                        <div class="shortcut-action" data-i18n="shortcuts.mobile.create.action">create new:</div>
+                        <div class="shortcut-keys"><i data-i18n="shortcuts.mobile.create.gesture">long-press on canvas</i></div>
                     </div>
                     <div class="shortcut-row">
-                        <div class="shortcut-action">edit:</div>
-                        <div class="shortcut-keys"><i>double-tap on item or tab</i></div>
+                        <div class="shortcut-action" data-i18n="shortcuts.mobile.edit.action">edit:</div>
+                        <div class="shortcut-keys"><i data-i18n="shortcuts.mobile.edit.gesture">double-tap on item or tab</i></div>
                     </div>
                     <div class="shortcut-row">
-                        <div class="shortcut-action">delete:</div>
-                        <div class="shortcut-keys"><i>long-press on item or tab</i></div>
+                        <div class="shortcut-action" data-i18n="shortcuts.mobile.delete.action">delete:</div>
+                        <div class="shortcut-keys"><i data-i18n="shortcuts.mobile.delete.gesture">long-press on item or tab</i></div>
                     </div>
                     <div class="shortcut-row">
-                        <div class="shortcut-action">change color:</div>
-                        <div class="shortcut-keys"><i>single tap on item or tab</i></div>
+                        <div class="shortcut-action" data-i18n="shortcuts.mobile.changeColor.action">change color:</div>
+                        <div class="shortcut-keys"><i data-i18n="shortcuts.mobile.changeColor.gesture">single tap on item or tab</i></div>
                     </div>
                     <div class="shortcut-row">
-                        <div class="shortcut-action">navigate canvas:</div>
-                        <div class="shortcut-keys"><i>two-finger pinch / pan or camera controls</i></div>
+                        <div class="shortcut-action" data-i18n="shortcuts.mobile.navigateCanvas.action">navigate canvas:</div>
+                        <div class="shortcut-keys"><i data-i18n="shortcuts.mobile.navigateCanvas.gesture">two-finger pinch / pan or camera controls</i></div>
                     </div>
                     <div class="shortcut-row">
-                        <div class="shortcut-action">select or pan mode:</div>
-                        <div class="shortcut-keys"><i>use the hand/select toggle (top-right)</i></div>
+                        <div class="shortcut-action" data-i18n="shortcuts.mobile.selectPanMode.action">select or pan mode:</div>
+                        <div class="shortcut-keys"><i data-i18n="shortcuts.mobile.selectPanMode.gesture">use the hand/select toggle (top-right)</i></div>
                     </div>
                     <div class="shortcut-row">
-                        <div class="shortcut-action">settings:</div>
-                        <div class="shortcut-keys"><i>tap the settings button (top-right)</i></div>
+                        <div class="shortcut-action" data-i18n="shortcuts.mobile.settings.action">settings:</div>
+                        <div class="shortcut-keys"><i data-i18n="shortcuts.mobile.settings.gesture">tap the settings button (top-right)</i></div>
                     </div>
                 </div>
             </div>
@@ -339,9 +347,9 @@
     <!-- Settings Modal -->
     <div id="settingsModal" class="modal">
         <div class="modal-content">
-            <span class="close-settings" tabindex="0" aria-label="Close Settings Modal">&times;</span>
-            <p class="modal-title">Settings</p>
-            <div class="settings-tabs" role="tablist" aria-label="Settings Sections">
+            <span class="close-settings" tabindex="0" aria-label="Close Settings Modal" data-i18n-aria-label="settings.close">&times;</span>
+            <p class="modal-title" data-i18n="settings.title">Settings</p>
+            <div class="settings-tabs" role="tablist" aria-label="Settings Sections" data-i18n-aria-label="settings.sections">
                 <button
                     id="settingsTabPreferences"
                     class="settings-tab-button"
@@ -350,6 +358,7 @@
                     aria-selected="true"
                     aria-controls="settingsPreferencesPanel"
                     data-settings-tab-button="preferences"
+                    data-i18n="settings.tabs.preferences"
                 >
                     Preferences
                 </button>
@@ -361,6 +370,7 @@
                     aria-selected="false"
                     aria-controls="settingsImportExportPanel"
                     data-settings-tab-button="import-export"
+                    data-i18n="settings.tabs.importExport"
                     tabindex="-1"
                 >
                     Import &amp; Export
@@ -376,7 +386,7 @@
             >
                 <!-- Dark Mode -->
                 <div class="settings-option">
-                    <span>Dark Mode</span>
+                    <span class="settings-option-label" data-i18n="settings.preferences.darkMode">Dark Mode</span>
                     <label class="switch">
                         <input type="checkbox" id="toggleDarkMode">
                         <span class="slider round"></span>
@@ -384,7 +394,7 @@
                 </div>
 
                 <div class="settings-option">
-                    <span>Disable Color Change</span>
+                    <span class="settings-option-label" data-i18n="settings.preferences.disableColorChange">Disable Color Change</span>
                     <label class="switch">
                         <input type="checkbox" id="toggleDisableColorChange">
                         <span class="slider round"></span>
@@ -392,7 +402,7 @@
                 </div>
 
                 <div class="settings-option">
-                    <span>Disable Note Resize</span>
+                    <span class="settings-option-label" data-i18n="settings.preferences.disableNoteResize">Disable Note Resize</span>
                     <label class="switch">
                         <input type="checkbox" id="toggleDisableNoteResize">
                         <span class="slider round"></span>
@@ -401,7 +411,7 @@
 
                 <!-- Full Screen -->
                 <div class="settings-option">
-                    <span>Full Screen</span>
+                    <span class="settings-option-label" data-i18n="settings.preferences.fullScreen">Full Screen</span>
                     <label class="switch">
                         <input type="checkbox" id="toggleFullscreen">
                         <span class="slider round"></span>
@@ -410,7 +420,7 @@
 
                 <!-- Corporate Mode -->
                 <div class="settings-option">
-                    <span>Corporate Mode</span>
+                    <span class="settings-option-label" data-i18n="settings.preferences.corporateMode">Corporate Mode</span>
                     <label class="switch">
                         <input type="checkbox" id="toggleLogo">
                         <span class="slider round"></span>
@@ -419,32 +429,40 @@
 
                 <!-- Hide Camera Remote -->
                 <div class="settings-option">
-                    <span>Hide Camera Remote</span>
+                    <span class="settings-option-label" data-i18n="settings.preferences.hideCameraRemote">Hide Camera Remote</span>
                     <label class="switch">
                         <input type="checkbox" id="toggleHideCameraControls">
                         <span class="slider round"></span>
                     </label>
                 </div>
 
+                <div class="settings-option">
+                    <span class="settings-option-label" data-i18n="settings.preferences.language">Language</span>
+                    <select id="localeSelect" class="settings-select">
+                        <option value="en" data-i18n="common.languages.english">English</option>
+                        <option value="pseudo" data-i18n="common.languages.pseudo">Pseudo</option>
+                    </select>
+                </div>
+
                 <!-- Use Grids Dropdown -->
                 <div class="settings-option">
-                    <span>Use Grids (Tab Specific)</span>
-                    <select id="useGrids">
-                        <option value="none">None</option>
-                        <option value="kanban">Kanban Board</option>
-                        <option value="eisenhower">Eisenhower Matrix</option>
-                        <option value="priority">Priority Matrix</option>
-                        <option value="smartgoals">SMART Goals</option>
-                        <option value="swot">SWOT Analysis</option>
-                        <option value="calendar">Calendar</option>
-                        <option value="nowlater">Now & Later</option>
-                        <option value="week">Week</option>
+                    <span class="settings-option-label" data-i18n="settings.preferences.useGrids">Use Grids (Tab Specific)</span>
+                    <select id="useGrids" class="settings-select">
+                        <option value="none" data-i18n="settings.gridOptions.none">None</option>
+                        <option value="kanban" data-i18n="settings.gridOptions.kanban">Kanban Board</option>
+                        <option value="eisenhower" data-i18n="settings.gridOptions.eisenhower">Eisenhower Matrix</option>
+                        <option value="priority" data-i18n="settings.gridOptions.priority">Priority Matrix</option>
+                        <option value="smartgoals" data-i18n="settings.gridOptions.smartgoals">SMART Goals</option>
+                        <option value="swot" data-i18n="settings.gridOptions.swot">SWOT Analysis</option>
+                        <option value="calendar" data-i18n="settings.gridOptions.calendar">Calendar</option>
+                        <option value="nowlater" data-i18n="settings.gridOptions.nowlater">Now &amp; Later</option>
+                        <option value="week" data-i18n="settings.gridOptions.week">Week</option>
                     </select>
                 </div>
 
                 <!-- Default Color Option -->
                 <div class="settings-option">
-                    <span>Default Color for New Items (Global)</span>
+                    <span class="settings-option-label" data-i18n="settings.preferences.defaultColor">Default Color for New Items (Global)</span>
                     <label class="switch">
                         <input type="checkbox" id="toggleDefaultColor">
                         <span class="slider round"></span>
@@ -455,27 +473,28 @@
                 <div class="settings-modal-divider" aria-hidden="true"></div>
 
                 <section id="settingsRecoverySection" class="settings-recovery-section" aria-labelledby="settingsRecoveryTitle" hidden>
-                    <h3 id="settingsRecoveryTitle" class="settings-section-title">Recovery (Development Only)</h3>
-                    <p class="settings-section-copy">
+                    <h3 id="settingsRecoveryTitle" class="settings-section-title" data-i18n="settings.recovery.title">Recovery (Development Only)</h3>
+                    <p class="settings-section-copy" data-i18n="settings.recovery.body">
                         Temporary scroll-only recovery controls for debugging offscreen notes without changing stored positions.
                     </p>
                     <div class="settings-recovery-actions">
-                        <button id="showAllItemsButton" class="modal-button settings-recovery-button" type="button">
+                        <button id="showAllItemsButton" class="modal-button settings-recovery-button" type="button" data-i18n="settings.recovery.showAll">
                             Show All Notes
                         </button>
-                        <button id="jumpNewestItemButton" class="modal-button settings-recovery-button" type="button">
+                        <button id="jumpNewestItemButton" class="modal-button settings-recovery-button" type="button" data-i18n="settings.recovery.jumpNewest">
                             Jump To Newest
                         </button>
-                        <button id="jumpLastEditedItemButton" class="modal-button settings-recovery-button" type="button">
+                        <button id="jumpLastEditedItemButton" class="modal-button settings-recovery-button" type="button" data-i18n="settings.recovery.jumpLastEdited">
                             Jump To Last Edited
                         </button>
                     </div>
                 </section>
 
-                <span class="questions">Questions/Comments:
+                <span class="questions">
+                    <span data-i18n="settings.questionsComments">Questions/Comments:</span>
                     <a href="mailto:markraidc@gmail.com" class="accent-link">markraidc@gmail.com</a>
                 </span>
-                <p id="staticSettingsNote" class="settings-static-note" hidden>
+                <p id="staticSettingsNote" class="settings-static-note" hidden data-i18n="settings.staticNote">
                     Note: This static version saves notes only in this browser on this device. Account sign-in, cloud sync,
                     billing, and cross-device recovery are not available in this mode. Clearing site data or using a
                     different browser/device can make these notes unavailable.
@@ -491,16 +510,18 @@
                 hidden
             >
                 <div class="settings-save-load">
-                    <button id="saveDataButton" class="modal-button">Export Data</button>
-                    <button id="loadDataButton" class="modal-button">Import Data</button>
+                    <button id="saveDataButton" class="modal-button" data-i18n="settings.actions.exportData">Export Data</button>
+                    <button id="loadDataButton" class="modal-button" data-i18n="settings.actions.importData">Import Data</button>
                 </div>
 
                 <div class="settings-modal-divider" aria-hidden="true"></div>
 
                 <section class="settings-mermaid-section" aria-labelledby="settingsMermaidTitle">
-                    <h3 id="settingsMermaidTitle" class="settings-section-title">Mermaid Import</h3>
+                    <h3 id="settingsMermaidTitle" class="settings-section-title" data-i18n="settings.mermaid.title">Mermaid Import</h3>
                     <p class="settings-section-copy">
-                        Turn a supported Mermaid flowchart or graph into ordinary Postbaby notes and edges. Paste Mermaid source below, then click <strong>Import Mermaid</strong> when you are ready to create notes.
+                        <span data-i18n="settings.mermaid.descriptionBeforeAction">Turn a supported Mermaid flowchart or graph into ordinary Postbaby notes and edges. Paste Mermaid source below, then click</span>
+                        <strong data-i18n="settings.actions.importMermaid">Import Mermaid</strong>
+                        <span data-i18n="settings.mermaid.descriptionAfterAction">when you are ready to create notes.</span>
                     </p>
                     <textarea
                         id="mermaidImportSource"
@@ -508,8 +529,9 @@
                         rows="8"
                         spellcheck="false"
                         placeholder="flowchart LR&#10;Idea --> Task&#10;Task --> Done"
+                        data-i18n-placeholder="settings.mermaid.placeholder"
                     ></textarea>
-                    <button id="mermaidImportButton" class="modal-button settings-mermaid-button" type="button">
+                    <button id="mermaidImportButton" class="modal-button settings-mermaid-button" type="button" data-i18n="settings.actions.importMermaid">
                         Import Mermaid
                     </button>
                     <div id="mermaidImportStatus" class="settings-mermaid-status" role="status" aria-live="polite" hidden></div>
@@ -681,6 +703,7 @@
     <script src="./js/edge-geometry.js"></script>
     <script src="./js/graph-creation.js"></script>
     <script src="./js/mermaid-adapter.js"></script>
+    <script src="./js/i18n.js"></script>
     <script src="./js/script.js" defer></script>
 </body>
 

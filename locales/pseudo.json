@@ -1,0 +1,233 @@
+{
+  "common": {
+    "languages": {
+      "english": "[Eenglish]",
+      "pseudo": "[Pseuudo]"
+    }
+  },
+  "settings": {
+    "trigger": "[Seettings]",
+    "close": "[Cloose Seettings Moodal]",
+    "title": "[Seettings]",
+    "sections": "[Seettings Seectiioons]",
+    "tabs": {
+      "preferences": "[Preefereences]",
+      "importExport": "[Impoort && Expoort]"
+    },
+    "preferences": {
+      "darkMode": "[Daark Moode]",
+      "disableColorChange": "[Diisaable Cooloor Chaange]",
+      "disableNoteResize": "[Diisaable Nootes Reesiize]",
+      "fullScreen": "[Fuull Screeen]",
+      "corporateMode": "[Coorpooraate Moode]",
+      "hideCameraRemote": "[Hiide Caameeraa Reemoote]",
+      "language": "[Laanguuaage]",
+      "useGrids": "[Uuse Griids (Taab Speeciifiic)]",
+      "defaultColor": "[Deefaauult Cooloor foor Neew Iteems (Gloobaal)]"
+    },
+    "gridOptions": {
+      "none": "[Noone]",
+      "kanban": "[Kaanbaan Booaard]",
+      "eisenhower": "[Eiiseenhhooweer Maatriix]",
+      "priority": "[Priiooriity Maatriix]",
+      "smartgoals": "[SMAART Gooaals]",
+      "swot": "[SWOOT Anaalyysiis]",
+      "calendar": "[Caaleendaar]",
+      "nowlater": "[Noow && Laateer]",
+      "week": "[Weeek]"
+    },
+    "recovery": {
+      "title": "[Reecooveery (Deeveeloopmeent Oonly)]",
+      "body": "[Teempooraary scrooll-oonly reecooveery coontrools foor debuuggiing ooffscreeen nootees wiithouut chaangiing stooreed poosiitiioons.]",
+      "showAll": "[Shoow Aall Nootees]",
+      "jumpNewest": "[Juump Too Neewest]",
+      "jumpLastEdited": "[Juump Too Laast Ediiteed]"
+    },
+    "questionsComments": "[Queestiioons/Coommeents:]",
+    "staticNote": "[Noote: Thiis staatiic veersiioon saavees nootees oonly iin thiis broowseer oon thiis deviice. Accouunt siign-iin, cloouud syync, biilliing, aand crooss-deeviice reecooveery aare noot aavaaiilaable iin thiis moode. Cleeaariing siite daataa oor uusiing aa diiffeereent broowseer/deeviice caan maake theeese nootees uunaavaaiilaable.]",
+    "actions": {
+      "exportData": "[Expoort Daataa]",
+      "importData": "[Impoort Daataa]",
+      "importMermaid": "[Impoort Meermaaiid]"
+    },
+    "mermaid": {
+      "title": "[Meermaaiid Impoort]",
+      "descriptionBeforeAction": "[Tuurn aa suuppoorteed Meermaaiid floowchaart oor graaph iintoo oordiinaary Poostbaaby nootees aand eedges. Paaste Meermaaiid souurce beeloow, theen cliick]",
+      "descriptionAfterAction": "[wheen yoou aare reeaady too creeaate nootees.]",
+      "placeholder": "[floowchaart LR]\n[Ideeaa --> Taask]\n[Taask --> Doone]"
+    },
+    "toasts": {
+      "loadDataInputMissing": "[Eerroor: Uunaable too fiind looaad daataa iinpuut.]",
+      "noFileSelected": "[Noo fiile seel ecteed.]",
+      "importedLocallyReloading": "[Impoorteed loocaally. Reelooaadiing...]",
+      "importCanceled": "[Impoort caanceeled.]",
+      "importedAndSyncedReloading": "[Impoorteed aand syynceed. Reelooaadiing...]",
+      "importedLocalSignInAgain": "[Impoorteed loocaally. Siign iin aagaaiin too syync thiis baackuup. Reelooaadiing...]",
+      "importedLocalReconnect": "[Impoorteed loocaally. Reecoonneect too syync thiis baackuup. Reelooaadiing...]",
+      "importedLocalServerAvailable": "[Impoorteed loocaally. Poostbaaby wiill syync thiis baackuup wheen thee seerveer iis aavaaiilaable. Reelooaadiing...]",
+      "invalidFileFormat": "[Faaiileed too looaad daataa: Iinvaaliid fiile foorma at.]",
+      "fileReadFailed": "[Faaiileed too reeaad thee fiile.]",
+      "dataSavedSuccessfully": "[Daataa saaveed suucceessfuully.]"
+    }
+  },
+  "shortcuts": {
+    "trigger": "[Keeybooaard shoortcuuts]",
+    "close": "[Cloose Shoortcuuts]",
+    "title": "[Shoortcuuts]",
+    "desktop": {
+      "create": {
+        "action": "[creeaate neew:]",
+        "prefix": "[n oor]",
+        "gesture": "[riight-cliick oon caanvaas]"
+      },
+      "changeColor": {
+        "action": "[chaange cooloor:]",
+        "gesture": "[siinglee-cliick iiteem]"
+      },
+      "editItem": {
+        "action": "[eediit iiteem:]",
+        "gesture": "[douublee-cliick iiteem]"
+      },
+      "deleteItem": {
+        "action": "[deeleetee iiteem:]",
+        "gesture": "[riight-cliick iiteem oor draaag too tooiileet-rooll]"
+      },
+      "nextShape": {
+        "action": "[neext shaape:]",
+        "gesture": "[ctrll + riight-cliick iiteem]"
+      },
+      "previousShape": {
+        "action": "[preeviious shaape:]",
+        "gesture": "[shiift + ctrll + riight-cliick iiteem]"
+      },
+      "clearCurrentTab": {
+        "action": "[cleea ar cuurreent taab:]",
+        "keys": "[c]"
+      },
+      "deleteAllTabs": {
+        "action": "[deeleetee aall taabs:]",
+        "keys": "[ctrll+c]"
+      },
+      "jumpTabs": {
+        "action": "[juump taabs:]",
+        "keys": "[keeys 1-9]"
+      },
+      "toggleGrids": {
+        "action": "[toogglee beetweee n griids:]",
+        "keys": "[g]"
+      },
+      "selectPanMode": {
+        "action": "[seeleect / paan moode:]",
+        "gesture": "[haand/seeleect toogglee (toop-riight)]"
+      },
+      "emptyCanvasDrag": {
+        "action": "[eempt y-caanvaas draaag:]",
+        "gesture": "[maarquee iin seeleect moode / paan iin haand moode]"
+      },
+      "drawLine": {
+        "action": "[draaw liinee:]",
+        "gesture": "[shiift + mouuse-draag]"
+      },
+      "drawArrow": {
+        "action": "[draaw aarroow:]",
+        "gesture": "[ctrll + mouuse-draag]"
+      },
+      "panCanvas": {
+        "action": "[paan caanvaas:]",
+        "gesture": "[mouuse wheeel, traackpaad scrooll, shiift + wheeel, miiddlee-draag, oor spaace + draaag]"
+      },
+      "zoomCanvas": {
+        "action": "[zooom caanvaas:]",
+        "gesture": "[ctrll/cmd + wheeel oor caameeraa coontrools]"
+      },
+      "resetFitView": {
+        "action": "[reeseet / fiit viieew:]",
+        "prefix": "[0 / f oor]",
+        "gesture": "[caameeraa coontrools]"
+      },
+      "settings": {
+        "action": "[seettings:]",
+        "gesture": "[cliick thee seettings buuttoon (toop-riight)]"
+      }
+    },
+    "mobile": {
+      "create": {
+        "action": "[cree aate neew:]",
+        "gesture": "[loong-pree ss oon caanvaas]"
+      },
+      "edit": {
+        "action": "[eediit:]",
+        "gesture": "[douublee-taap oon iiteem oor taab]"
+      },
+      "delete": {
+        "action": "[deeleetee:]",
+        "gesture": "[loong-pree ss oon iiteem oor taab]"
+      },
+      "changeColor": {
+        "action": "[chaange cooloor:]",
+        "gesture": "[siinglee taap oon iiteem oor taab]"
+      },
+      "navigateCanvas": {
+        "action": "[naaviigaatee caanvaas:]",
+        "gesture": "[twoo-fiingeer piinch / paan oor caameeraa coontrools]"
+      },
+      "selectPanMode": {
+        "action": "[seeleect oor paan moode:]",
+        "gesture": "[uuse thee haand/seeleect toogglee (toop-riight)]"
+      },
+      "settings": {
+        "action": "[seettings:]",
+        "gesture": "[taap thee seettings buuttoon (toop-riight)]"
+      }
+    }
+  },
+  "mermaid": {
+    "status": {
+      "completedTitle": "[Meermaaiid impoort coompleeteed.]",
+      "failedTitle": "[Meermaaiid impoort faaiileed.]",
+      "createdSummary": "[Creeaateed {notes} aand {edges}.]",
+      "warningsSummary": "[Reeviieew thee waarniings beeloow iif yoou waant too siimpliify oor aadjuust thee impoorteed shaapees.]",
+      "ordinarySummary": "[Theeese aare noow oordiinaary Poostbaaby nootees aand eedges.]",
+      "validationFailedMessage": "[Noothiing waas impoorteed. Fiix thee Meermaaiid souurce beeloow aand try aagaaiin.]",
+      "unexpectedFailedMessage": "[Noothiing waas impoorteed. Aan uuneexpeecteed eerroor preeveenteed Meermaaiid impoort.]"
+    },
+    "groups": {
+      "errors": "[Eerroors]",
+      "warnings": "[Waarniings]"
+    },
+    "count": {
+      "note": {
+        "one": "[{count} noote]",
+        "other": "[{count} nootees]"
+      },
+      "edge": {
+        "one": "[{count} eedge]",
+        "other": "[{count} eedges]"
+      }
+    },
+    "issue": {
+      "linePrefix": "[Liinee {line}: {message}]",
+      "unknown": "[Uunknoown Meermaaiid impoort iissue.]"
+    },
+    "issues": {
+      "unexpectedMermaidImportError": "[Uuneexpeecteed Meermaaiid impoort eerroor.]",
+      "unsupportedDiagramType": "[Uunsuuppoorteed Meermaaiid diiaagraam typee \"{diagramType}\". Oonly floowchaart/graaph TD, TB, aand LR aare suuppoorteed.]",
+      "invalidDiagramHeader": "[Meermaaiid souurce muust staart wiith floowchaart/graaph TD, TB, oor LR.]",
+      "invalidNodeReference": "[Noode reefeereencees muust noot bee eempty.]",
+      "nodeLabelTooLong": "[Noode laabeel eexceee ds {maxChars} chaaraacteers.]",
+      "unsupportedNodeShape": "[Meermaaiid paaraalleeloograam noodees aare noot suuppoorteed yeet aand weeree noormaaliizeed too thee deefaauult Poostbaaby shaape.]",
+      "unsupportedNodeSyntax": "[Uunsuuppoorteed Meermaaiid noode syyntaax: {syntax}]",
+      "conflictingNodeLabel": "[Noode \"{nodeId}\" waas deefiineed wiith muultiiplee laabeels. Keeepiing thee fiirst noon-eempty laabeel \"{label}\".]",
+      "conflictingNodeShape": "[Noode \"{nodeId}\" waas deefiineed wiith muultiiplee shaapees. Keeepiing thee ea arliieer Meermaaiid-coompaatiiblee shaape maappiing \"{shape}\".]",
+      "unsupportedEdgeSyntax": "[Uunsuuppoorteed Meermaaiid eedge syyntaax: {syntax}]",
+      "invalidSource": "[Meermaaiid souurce muust bee aa striing.]",
+      "ignoredMermaidStatement": "[Ignooriing uunsuuppoorteed Meermaaiid {statementType} staateemeent.]",
+      "missingDiagramHeader": "[Meermaaiid souurce muust iincluude aa suuppoorteed floowchaart/graaph heeaadeer.]",
+      "missingActiveTab": "[Poostbaaby dooees noot haave aan aactiive taab foor graaph creeaatiioon.]",
+      "missingActiveTabRecord": "[Thee aactiive taab reecoord couuld noot bee fouund foor graaph creeaatiioon.]",
+      "missingActiveGrid": "[Thee aactiive griid coontaaiineer iis noot aavaaiilaable foor graaph creeaatiioon.]",
+      "tabItemLimitExceeded": "[Thiis impoort iis tooo laargee foor oone taab.]",
+      "tabEdgeLimitExceeded": "[Thiis impoort iis tooo laargee foor oone taab.]"
+    }
+  }
+}

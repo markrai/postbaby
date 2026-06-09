@@ -39,7 +39,7 @@
         'gitGraph'
     ]);
 
-    function buildIssue(code, message, lineNumber, path) {
+    function buildIssue(code, message, lineNumber, path, details) {
         const issue = {
             code: code,
             message: message
@@ -51,6 +51,10 @@
 
         if (path) {
             issue.path = path;
+        }
+
+        if (details && typeof details === 'object') {
+            issue.details = details;
         }
 
         return issue;
@@ -173,7 +177,8 @@
                         'unsupported_diagram_type',
                         `Unsupported Mermaid diagram type "${diagramType}". Only flowchart/graph TD, TB, and LR are supported.`,
                         lineNumber,
-                        `line:${lineNumber}`
+                        `line:${lineNumber}`,
+                        { diagramType: diagramType }
                     )
                 };
             }
@@ -276,7 +281,8 @@
                         'node_label_too_long',
                         `Node label exceeds ${GRAPH_MAX_LABEL_CHARS} characters.`,
                         lineNumber,
-                        path
+                        path,
+                        { maxChars: GRAPH_MAX_LABEL_CHARS }
                     )
                 };
             }
@@ -303,7 +309,8 @@
                         'node_label_too_long',
                         `Node label exceeds ${GRAPH_MAX_LABEL_CHARS} characters.`,
                         lineNumber,
-                        path
+                        path,
+                        { maxChars: GRAPH_MAX_LABEL_CHARS }
                     )
                 };
             }
@@ -312,7 +319,8 @@
                 'unsupported_node_shape',
                 'Mermaid parallelogram nodes are not supported yet and were normalized to the default Postbaby shape.',
                 lineNumber,
-                path
+                path,
+                { shape: 'default' }
             ));
             return {
                 ok: true,
@@ -346,7 +354,8 @@
                 'unsupported_node_syntax',
                 `Unsupported Mermaid node syntax: ${trimmedToken}`,
                 lineNumber,
-                path
+                path,
+                { syntax: trimmedToken }
             )
         };
     }
@@ -371,7 +380,11 @@
                 'conflicting_node_label',
                 `Node "${nextNode.id}" was defined with multiple labels. Keeping the first non-empty label "${existingNode.label}".`,
                 lineNumber,
-                `line:${lineNumber}`
+                `line:${lineNumber}`,
+                {
+                    nodeId: nextNode.id,
+                    label: existingNode.label
+                }
             ));
         }
 
@@ -387,7 +400,11 @@
                 'conflicting_node_shape',
                 `Node "${nextNode.id}" was defined with multiple shapes. Keeping the earlier Mermaid-compatible shape mapping "${existingNode.shape}".`,
                 lineNumber,
-                `line:${lineNumber}`
+                `line:${lineNumber}`,
+                {
+                    nodeId: nextNode.id,
+                    shape: existingNode.shape
+                }
             ));
         }
     }
@@ -476,7 +493,8 @@
                     'unsupported_edge_syntax',
                     `Unsupported Mermaid edge syntax: ${line}`,
                     lineNumber,
-                    `line:${lineNumber}`
+                    `line:${lineNumber}`,
+                    { syntax: line }
                 )
             };
         }
@@ -573,7 +591,8 @@
                     'ignored_mermaid_statement',
                     `Ignoring unsupported Mermaid ${ignoredStatement} statement.`,
                     lineNumber,
-                    `line:${lineNumber}`
+                    `line:${lineNumber}`,
+                    { statementType: ignoredStatement }
                 ));
                 continue;
             }

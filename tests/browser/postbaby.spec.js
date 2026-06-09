@@ -7,6 +7,7 @@ const META_STORE = 'meta';
 const PRIMARY_RECORD_ID = 'primary';
 const TIMESTAMP = '2026-05-13T12:00:00.000Z';
 const TEST_BASE_URL = 'http://127.0.0.1:4173';
+const LOCALE_STORAGE_KEY = 'postbabyLocale';
 const EDGE_ARM_DELAY_MS = 1000;
 const EDGE_ARROW_TARGET_INSET = 2;
 const LOCAL_TAB_CAMERA_STATES_STORAGE_KEY = 'postbabyLocalTabCameraStates';
@@ -503,8 +504,9 @@ function storageKeyForScope(scopeKey, key) {
 
 async function prepareBlankPage(page) {
   await page.goto('/tests/browser/blank.html');
-  await page.evaluate(async ({ dbName }) => {
+  await page.evaluate(async ({ dbName, localeStorageKey }) => {
     window.localStorage.clear();
+    window.localStorage.setItem(localeStorageKey, 'en');
 
     await new Promise((resolve) => {
       const request = window.indexedDB.deleteDatabase(dbName);
@@ -512,7 +514,10 @@ async function prepareBlankPage(page) {
       request.onerror = function () { resolve(); };
       request.onblocked = function () { resolve(); };
     });
-  }, { dbName: DB_NAME });
+  }, {
+    dbName: DB_NAME,
+    localeStorageKey: LOCALE_STORAGE_KEY
+  });
 }
 
 async function seedLocalStorage(page, snapshot, scopeKey = PRIMARY_RECORD_ID) {
@@ -676,15 +681,15 @@ async function openSettingsModal(page) {
   await expect(page.locator('#settingsModal')).toBeVisible();
 }
 
-async function switchSettingsTab(page, tabName) {
-  const tab = page.getByRole('tab', { name: tabName });
+async function switchSettingsTab(page, tabKey) {
+  const tab = page.locator(`[data-settings-tab-button="${tabKey}"]`);
   await tab.click();
   await expect(tab).toHaveAttribute('aria-selected', 'true');
 }
 
 async function openSettingsImportExportTab(page) {
   await openSettingsModal(page);
-  await switchSettingsTab(page, 'Import & Export');
+  await switchSettingsTab(page, 'import-export');
   await expect(page.locator('#settingsImportExportPanel')).toBeVisible();
 }
 
@@ -5267,7 +5272,7 @@ test.describe('Static behavior', () => {
     expect(noteAfterDrag.y).toBe(noteBeforeDrag.y + 40);
 
     await page.reload();
-    expect(await readCamera(page)).toEqual(DEFAULT_CAMERA);
+    expect(await readCamera(page)).toEqual(afterPanModeCamera);
     expect(await readCanvasMode(page)).toBe('pan');
     const reloadedToggleState = await readCanvasModeToggleState(page);
     expect(reloadedToggleState.pressed).toBe('true');
@@ -10574,12 +10579,13 @@ test.describe('Mocked sync startup reconciliation', () => {
 });
 
 test.describe('Settings and Account UI', () => {
-  test('opens Settings from the gear button and not from trash click', async ({ page }) => {
+  test('opens Settings from the gear button while trash remains non-interactive', async ({ page }) => {
     await prepareBlankPage(page);
     await page.goto('/index.html');
 
-    await page.locator('#trash').click();
     await expect(page.locator('#settingsModal')).toBeHidden();
+    await expect(page.locator('#trash')).toBeVisible();
+    await expect(page.locator('#trash')).toHaveCSS('pointer-events', 'none');
 
     await openSettingsModal(page);
     await expect(page.locator('#settingsModal')).toBeVisible();
@@ -11050,11 +11056,11 @@ test.describe('Settings and Account UI', () => {
 
     await openSettingsModal(page);
     await expect(page.locator('#settingsModal .modal-title')).toHaveText('Settings');
-    await expect(page.getByRole('tab', { name: 'Preferences' })).toHaveAttribute('aria-selected', 'true');
-    await expect(page.getByRole('tab', { name: 'Import & Export' })).toHaveAttribute('aria-selected', 'false');
+    await expect(page.locator('#settingsTabPreferences')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#settingsTabImportExport')).toHaveAttribute('aria-selected', 'false');
     await expect(page.locator('#settingsPreferencesPanel')).toBeVisible();
     await expect(page.locator('#settingsImportExportPanel')).toBeHidden();
-    await expect(page.locator('#settingsPreferencesPanel .settings-option').filter({ hasText: 'Dark Mode' })).toBeVisible();
+    await expect(page.locator('#settingsPreferencesPanel [data-i18n="settings.preferences.darkMode"]')).toHaveText('Dark Mode');
     await expect(page.locator('#settingsRecoverySection')).toBeHidden();
     await expect(page.locator('#showAllItemsButton')).toBeHidden();
     await expect(page.locator('#jumpNewestItemButton')).toBeHidden();
@@ -11066,7 +11072,7 @@ test.describe('Settings and Account UI', () => {
     await expect(page.locator('#settingsModal #logoutForm')).toHaveCount(0);
     await expect(page.locator('#settingsModal #syncStateStatus')).toHaveCount(0);
 
-    await switchSettingsTab(page, 'Import & Export');
+    await switchSettingsTab(page, 'import-export');
     await expect(page.locator('#settingsPreferencesPanel')).toBeHidden();
     await expect(page.locator('#settingsImportExportPanel')).toBeVisible();
     await expect(page.locator('#saveDataButton')).toBeVisible();
@@ -11080,8 +11086,44 @@ test.describe('Settings and Account UI', () => {
     await expect(page.locator('#jumpNewestItemButton')).toBeHidden();
     await expect(page.locator('#jumpLastEditedItemButton')).toBeHidden();
 
-    await switchSettingsTab(page, 'Preferences');
+    await switchSettingsTab(page, 'preferences');
     await expect(page.locator('#staticSettingsNote')).toBeHidden();
+  });
+
+  test('Settings and Shortcuts can switch to pseudo locale and back to English', async ({ page }) => {
+    await prepareBlankPage(page);
+    await page.goto('/index.html');
+
+    await openSettingsModal(page);
+    await expect(page.locator('#settingsModal .modal-title')).toHaveText('Settings');
+    await expect(page.locator('#settingsPreferencesPanel [data-i18n="settings.preferences.darkMode"]')).toHaveText('Dark Mode');
+
+    await page.selectOption('#localeSelect', 'pseudo');
+    await expect.poll(async () => page.evaluate(() => document.documentElement.lang)).toBe('en-xa');
+    await expect(page.locator('#settingsModal .modal-title')).toHaveText('[Seettings]');
+    await expect(page.locator('#settingsPreferencesPanel [data-i18n="settings.preferences.darkMode"]')).toHaveText('[Daark Moode]');
+
+    await page.locator('.close-settings').click();
+    await expect(page.locator('#settingsModal')).toBeHidden();
+
+    await page.locator('#shortcutsTriggerButton').click();
+    await expect(page.locator('#shortcutsModal')).toBeVisible();
+    await expect(page.locator('#shortcutsModal .modal-title')).toHaveText('[Shoortcuuts]');
+    await expect(page.locator('#shortcutsModal .desktop-shortcuts .shortcut-action').first()).toHaveText('[creeaate neew:]');
+
+    await page.locator('.close-shortcuts').click();
+    await expect(page.locator('#shortcutsModal')).toBeHidden();
+
+    await openSettingsModal(page);
+    await page.selectOption('#localeSelect', 'en');
+    await expect.poll(async () => page.evaluate(() => document.documentElement.lang)).toBe('en');
+    await expect(page.locator('#settingsModal .modal-title')).toHaveText('Settings');
+    await expect(page.locator('#settingsPreferencesPanel [data-i18n="settings.preferences.darkMode"]')).toHaveText('Dark Mode');
+
+    await page.locator('.close-settings').click();
+    await page.locator('#shortcutsTriggerButton').click();
+    await expect(page.locator('#shortcutsModal .modal-title')).toHaveText('Shortcuts');
+    await expect(page.locator('#shortcutsModal .desktop-shortcuts .shortcut-action').first()).toHaveText('create new:');
   });
 
   test('Recovery debug flag reveals the development-only recovery section in Settings', async ({ page }) => {
