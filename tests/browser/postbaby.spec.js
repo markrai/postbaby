@@ -11105,42 +11105,6 @@ test.describe('Settings and Account UI', () => {
     await expect(page.locator('#staticSettingsNote')).toBeHidden();
   });
 
-  test('Settings and Shortcuts can switch to pseudo locale and back to English', async ({ page }) => {
-    await prepareBlankPage(page);
-    await page.goto('/index.html');
-
-    await openSettingsModal(page);
-    await expect(page.locator('#settingsModal .modal-title')).toHaveText('Settings');
-    await expect(page.locator('#settingsPreferencesPanel [data-i18n="settings.preferences.darkMode"]')).toHaveText('Dark Mode');
-
-    await page.selectOption('#localeSelect', 'pseudo');
-    await expect.poll(async () => page.evaluate(() => document.documentElement.lang)).toBe('en-xa');
-    await expect(page.locator('#settingsModal .modal-title')).toHaveText('[Seettings]');
-    await expect(page.locator('#settingsPreferencesPanel [data-i18n="settings.preferences.darkMode"]')).toHaveText('[Daark Moode]');
-
-    await page.locator('.close-settings').click();
-    await expect(page.locator('#settingsModal')).toBeHidden();
-
-    await page.locator('#shortcutsTriggerButton').click();
-    await expect(page.locator('#shortcutsModal')).toBeVisible();
-    await expect(page.locator('#shortcutsModal .modal-title')).toHaveText('[Shoortcuuts]');
-    await expect(page.locator('#shortcutsModal .desktop-shortcuts .shortcut-action').first()).toHaveText('[creeaate neew:]');
-
-    await page.locator('.close-shortcuts').click();
-    await expect(page.locator('#shortcutsModal')).toBeHidden();
-
-    await openSettingsModal(page);
-    await page.selectOption('#localeSelect', 'en');
-    await expect.poll(async () => page.evaluate(() => document.documentElement.lang)).toBe('en');
-    await expect(page.locator('#settingsModal .modal-title')).toHaveText('Settings');
-    await expect(page.locator('#settingsPreferencesPanel [data-i18n="settings.preferences.darkMode"]')).toHaveText('Dark Mode');
-
-    await page.locator('.close-settings').click();
-    await page.locator('#shortcutsTriggerButton').click();
-    await expect(page.locator('#shortcutsModal .modal-title')).toHaveText('Shortcuts');
-    await expect(page.locator('#shortcutsModal .desktop-shortcuts .shortcut-action').first()).toHaveText('create new:');
-  });
-
   test('Settings and Shortcuts can switch to Spanish and back to English', async ({ page }) => {
     await prepareBlankPage(page);
     await page.goto('/index.html');
@@ -11153,7 +11117,7 @@ test.describe('Settings and Account UI', () => {
     await expect.poll(async () => page.evaluate(() => document.documentElement.lang)).toBe('es');
     await expect(page.locator('#settingsModal .modal-title')).toHaveText('Configuración');
     await expect(page.locator('#settingsPreferencesPanel [data-i18n="settings.preferences.darkMode"]')).toHaveText('Modo oscuro');
-    await expect(page.locator('#localePartialNote')).toHaveText('Algunas áreas de la aplicación todavía están en inglés.');
+    await expect(page.locator('#localePartialNote')).toHaveText('Algunas áreas de la aplicación siguen estando en inglés.');
 
     await page.locator('.close-settings').click();
     await expect(page.locator('#settingsModal')).toBeHidden();
@@ -11179,7 +11143,7 @@ test.describe('Settings and Account UI', () => {
     await expect(page.locator('#shortcutsModal .desktop-shortcuts .shortcut-action').first()).toHaveText('create new:');
   });
 
-  test('pseudo locale fetch failure falls back to English and resets the selector', async ({ page }) => {
+  test('Spanish locale fetch failure falls back to English and resets the selector', async ({ page }) => {
     await page.addInitScript(() => {
       const originalFetch = window.fetch.bind(window);
       window.fetch = function (input, init) {
@@ -11187,8 +11151,8 @@ test.describe('Settings and Account UI', () => {
           ? input
           : (input && typeof input.url === 'string' ? input.url : '');
         const resolvedUrl = new URL(requestUrl, window.location.href);
-        if (resolvedUrl.pathname === '/locales/pseudo.json') {
-          return Promise.resolve(new Response('pseudo unavailable', {
+        if (resolvedUrl.pathname === '/locales/es.json') {
+          return Promise.resolve(new Response('Spanish locale unavailable', {
             status: 503,
             headers: {
               'Content-Type': 'text/plain'
@@ -11203,7 +11167,7 @@ test.describe('Settings and Account UI', () => {
     await page.goto('/index.html');
 
     await openSettingsModal(page);
-    await page.selectOption('#localeSelect', 'pseudo');
+    await page.selectOption('#localeSelect', 'es');
 
     await expect.poll(async () => page.evaluate(() => document.documentElement.lang)).toBe('en');
     await expect(page.locator('#settingsModal .modal-title')).toHaveText('Settings');
