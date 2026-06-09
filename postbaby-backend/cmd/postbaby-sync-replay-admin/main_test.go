@@ -391,8 +391,8 @@ func TestRunApplyPolicyAbortDoesNotWrite(t *testing.T) {
 	if result.CanonicalStateChanged || result.DocumentVersionAdvanced || result.ApplicationRowsInserted {
 		t.Fatalf("expected policy abort to report no committed mutation, got %+v", result)
 	}
-	if spyHolder.store == nil || spyHolder.store.applyCallCount != 1 {
-		t.Fatalf("expected exactly one apply call before policy abort, got %+v", spyHolder.store)
+	if spyHolder.store == nil || spyHolder.store.applyCallCount != 0 {
+		t.Fatalf("expected policy-abort preflight to stop before store apply, got %+v", spyHolder.store)
 	}
 
 	afterState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
@@ -1010,8 +1010,8 @@ func TestRunApplyPolicyAbortCanBeRetriedSafelyWithoutPartialRows(t *testing.T) {
 		if len(result.MutationResults) != 1 || result.MutationResults[0].ApplicationStatus != store.SyncMutationReplayApplicationStatusFailed {
 			t.Fatalf("unexpected policy retry mutation results on attempt %d: %+v", attempt, result.MutationResults)
 		}
-		if spyHolder.store == nil || spyHolder.store.applyCallCount != 1 {
-			t.Fatalf("expected attempt %d to call store apply once, got %+v", attempt, spyHolder.store)
+		if spyHolder.store == nil || spyHolder.store.applyCallCount != 0 {
+			t.Fatalf("expected attempt %d to stop before store apply, got %+v", attempt, spyHolder.store)
 		}
 
 		afterState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
@@ -1117,6 +1117,11 @@ func TestRunObserveJSONRecordsObservation(t *testing.T) {
 	if result.Observation.ID <= fixture.observationID || result.Observation.ReceiptCountConsidered != len(beforeState.Receipts) {
 		t.Fatalf("unexpected recorded observation summary: %+v", result.Observation)
 	}
+	if result.AuthoritativePreview == nil ||
+		result.AuthoritativePreview.Status != store.SyncMutationReplayAuthoritativePreviewStatusAvailable ||
+		result.AuthoritativePreview.ApplicationStatusCounts[store.SyncMutationReplayApplicationStatusApplied] != 1 {
+		t.Fatalf("expected observe to include available authoritative preview, got %+v", result.AuthoritativePreview)
+	}
 	if !strings.Contains(stderr.String(), "mode=observe") || !strings.Contains(stderr.String(), "status="+operatorStatusRecorded) {
 		t.Fatalf("unexpected observe audit line: %q", stderr.String())
 	}
@@ -1159,7 +1164,9 @@ func TestRunDiagnoseTextDoesNotMutateState(t *testing.T) {
 		!strings.Contains(text, "receipt_count=1") ||
 		!strings.Contains(text, "observation_count=1") ||
 		!strings.Contains(text, "application_count=0") ||
-		!strings.Contains(text, "application_status_counts=") {
+		!strings.Contains(text, "application_status_counts=") ||
+		!strings.Contains(text, "authoritative_preview_status="+store.SyncMutationReplayAuthoritativePreviewStatusAvailable) ||
+		!strings.Contains(text, "authoritative_preview_application_status_counts=authoritativeApplied:1") {
 		t.Fatalf("unexpected diagnose text output: %q", text)
 	}
 	if !strings.Contains(stderr.String(), "mode=diagnose") || !strings.Contains(stderr.String(), "status="+operatorStatusOK) {
@@ -1530,7 +1537,64 @@ func TestRunPreflightJSONSafeAndDoesNotMutateState(t *testing.T) {
 	if result.MatchingApplicationRowCount != 0 || len(result.AppliedMutationIDs) != 0 {
 		t.Fatalf("expected no application progress, got %+v", result)
 	}
+	if result.AuthoritativePreview == nil ||
+		result.AuthoritativePreview.Status != store.SyncMutationReplayAuthoritativePreviewStatusAvailable ||
+		result.AuthoritativePreview.ApplicationStatusCounts[store.SyncMutationReplayApplicationStatusApplied] != 1 ||
+		result.AuthoritativePreview.DryRunPreviewHash == "" ||
+		result.AuthoritativePreview.AuthoritativePreviewHash == "" {
+		t.Fatalf("expected available authoritative preview in preflight, got %+v", result.AuthoritativePreview)
+	}
 	if !strings.Contains(stderr.String(), "mode=preflight") || !strings.Contains(stderr.String(), "status="+preflightStatusSafe) {
+		t.Fatalf("unexpected stderr audit line: %q", stderr.String())
+	}
+
+	afterState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	assertReplayAdminStateEqual(t, beforeState, afterState)
+}
+
+func TestRunPreflightJSONWouldAbortPolicyDoesNotMutateState(t *testing.T) {
+	t.Setenv(envEnableInternalSyncReplayCLI, "1")
+	t.Setenv(envDeploymentMode, "selfhosted")
+
+	fixture := createReplayPreflightFixture(t, replayPreflightFixtureOptions{
+		customReceiptInputs: []store.SyncMutationReceiptInput{
+			buildReplayReceiptInputForCommand("mut-missing-node", "Node", "missing-node", "UpdateNode", `{"tabId":"tab-1","changes":{"name":"Renamed"}}`),
+		},
+	})
+	beforeState := snapshotReplayAdminState(t, fixture.dbPath, fixture.ownerKey, fixture.appID)
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+
+	exitCode := run([]string{
+		"preflight",
+		"--db", fixture.dbPath,
+		"--owner-key", fixture.ownerKey,
+		"--app-id", fixture.appID,
+		"--observation-id", fixture.observationIDString,
+	}, stdout, stderr)
+	if exitCode != 1 {
+		t.Fatalf("expected policy-abort preflight exit 1, got %d stderr=%q", exitCode, stderr.String())
+	}
+
+	result := decodePreflightResult(t, stdout.String())
+	if result.Status != preflightStatusWouldAbortPolicy ||
+		result.CompareAndApplyStatus != store.SyncMutationReplayCompareAndApplyStatusAllowed ||
+		result.RecoveryStatus != store.SyncMutationReplayRecoveryStatusSafeToAttemptTransaction {
+		t.Fatalf("unexpected policy-abort preflight result: %+v", result)
+	}
+	if result.AuthoritativePreview == nil ||
+		result.AuthoritativePreview.Status != store.SyncMutationReplayAuthoritativePreviewStatusWouldAbortPolicy ||
+		!result.AuthoritativePreview.PolicyAbort ||
+		result.AuthoritativePreview.PolicyAbortMutationID != "mut-missing-node" ||
+		result.AuthoritativePreview.PolicyAbortStatus == "" ||
+		result.AuthoritativePreview.ApplicationStatusCounts[store.SyncMutationReplayApplicationStatusConflict] != 1 {
+		t.Fatalf("unexpected authoritative preview in policy-abort preflight: %+v", result.AuthoritativePreview)
+	}
+	if !containsString(result.Reasons, "authoritative_policy_would_abort") ||
+		!containsString(result.Reasons, "missing_node") {
+		t.Fatalf("expected policy abort reasons, got %+v", result.Reasons)
+	}
+	if !strings.Contains(stderr.String(), "status="+preflightStatusWouldAbortPolicy) {
 		t.Fatalf("unexpected stderr audit line: %q", stderr.String())
 	}
 
@@ -1813,7 +1877,9 @@ func TestRunPreflightTextOutput(t *testing.T) {
 	if !strings.Contains(text, "status="+preflightStatusSafe) ||
 		!strings.Contains(text, "owner_key="+fixture.ownerKey) ||
 		!strings.Contains(text, "app_id="+fixture.appID) ||
-		!strings.Contains(text, "observation_id="+fixture.observationIDString) {
+		!strings.Contains(text, "observation_id="+fixture.observationIDString) ||
+		!strings.Contains(text, "authoritative_preview_status="+store.SyncMutationReplayAuthoritativePreviewStatusAvailable) ||
+		!strings.Contains(text, "authoritative_preview_application_status_counts=authoritativeApplied:1") {
 		t.Fatalf("unexpected text output: %q", text)
 	}
 }
@@ -1901,6 +1967,10 @@ func (s *countingReplayAdminStore) GetSyncMutationReplayDiagnostics(ctx context.
 
 func (s *countingReplayAdminStore) CompactSyncMutationReplayArtifacts(ctx context.Context, ownerKey, appID string, options store.SyncMutationReplayCompactOptions) (store.SyncMutationReplayCompactResult, error) {
 	return s.inner.CompactSyncMutationReplayArtifacts(ctx, ownerKey, appID, options)
+}
+
+func (s *countingReplayAdminStore) EvaluateSyncMutationReplayAuthoritativePreview(ctx context.Context, ownerKey, appID string, observationID int64) (store.SyncMutationReplayAuthoritativePreview, error) {
+	return s.inner.EvaluateSyncMutationReplayAuthoritativePreview(ctx, ownerKey, appID, observationID)
 }
 
 func (s *countingReplayAdminStore) EvaluateSyncMutationReplayCompareAndApplyPreconditions(ctx context.Context, ownerKey, appID string, observationID int64) (store.SyncMutationReplayCompareAndApplyEvaluation, error) {

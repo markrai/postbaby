@@ -281,6 +281,24 @@ type SyncMutationReplayAuthoritativePolicyEvaluation struct {
 	Warnings []string
 }
 
+type SyncMutationReplayAuthoritativePreview struct {
+	Status                                string
+	DryRunPreviewHash                     string
+	AuthoritativePreviewHash              string
+	AuthoritativePreviewHashMatchesDryRun bool
+	ApplicationStatusCounts               map[string]int64
+	MutationResults                       []SyncMutationReplayAuthoritativeMutationResult
+	PolicyAbort                           bool
+	PolicyAbortMutationID                 string
+	PolicyAbortOperationType              string
+	PolicyAbortStatus                     string
+	PolicyAbortReasons                    []string
+	Reasons                               []string
+	Warnings                              []string
+	CompareAndApplyStatus                 string
+	RecoveryStatus                        string
+}
+
 type SyncMutationReplayAuthoritativeApplyOptions struct {
 	AllowInternalAuthoritativeReplay bool
 	FailAfterApplicationRowInserts   *int
@@ -346,6 +364,7 @@ type syncMutationReplayAuthoritativeProgressivePreview struct {
 	PreviewBody              json.RawMessage
 	MutationResults          []SyncMutationReplayAuthoritativeMutationResult
 	StagedApplications       []syncMutationReplayAuthoritativeStagedApplication
+	Warnings                 []string
 	PolicyAbort              bool
 	PolicyAbortMutationID    string
 	PolicyAbortOperationType string
@@ -424,6 +443,9 @@ const (
 	SyncMutationReplayRecoveryStatusCanonicalStateWithoutApplicationRows         = "canonical_state_without_application_rows"
 	SyncMutationReplayRecoveryStatusMissingObservation                           = "missing_observation"
 	SyncMutationReplayRecoveryStatusInvalidObservationScope                      = "invalid_observation_scope"
+	SyncMutationReplayAuthoritativePreviewStatusAvailable                        = "available"
+	SyncMutationReplayAuthoritativePreviewStatusUnavailablePreconditions         = "unavailable_preconditions"
+	SyncMutationReplayAuthoritativePreviewStatusWouldAbortPolicy                 = "would_abort_policy"
 	SyncMutationReplayAuthoritativeApplyStatusRefusedInternalGate                = "refused_internal_gate"
 	SyncMutationReplayAuthoritativeApplyStatusApplied                            = "applied"
 	SyncMutationReplayAuthoritativeApplyStatusAbortedPreconditions               = "aborted_preconditions"
@@ -1655,6 +1677,90 @@ func (s *Store) EvaluateSyncMutationReplayRecoveryState(ctx context.Context, own
 	return evaluateSyncMutationReplayRecoveryAgainstState(observation, doc, receipts, result, applications, compareEvaluation), nil
 }
 
+func (s *Store) EvaluateSyncMutationReplayAuthoritativePreview(ctx context.Context, ownerKey, appID string, observationID int64) (SyncMutationReplayAuthoritativePreview, error) {
+	preview := SyncMutationReplayAuthoritativePreview{
+		Status:                  SyncMutationReplayAuthoritativePreviewStatusUnavailablePreconditions,
+		ApplicationStatusCounts: map[string]int64{},
+		MutationResults:         []SyncMutationReplayAuthoritativeMutationResult{},
+		PolicyAbortReasons:      []string{},
+		Reasons:                 []string{},
+		Warnings:                []string{},
+	}
+
+	observation, found, err := s.getSyncMutationReplayDryRunObservationByID(ctx, observationID)
+	if err != nil {
+		return SyncMutationReplayAuthoritativePreview{}, err
+	}
+	if !found {
+		preview.Reasons = []string{"missing_observation"}
+		preview.CompareAndApplyStatus = SyncMutationReplayCompareAndApplyStatusMissingObservation
+		preview.RecoveryStatus = SyncMutationReplayRecoveryStatusMissingObservation
+		return preview, nil
+	}
+	if observation.OwnerKey != ownerKey || observation.AppID != appID {
+		preview.Reasons = []string{"observation_owner_app_mismatch"}
+		preview.CompareAndApplyStatus = SyncMutationReplayCompareAndApplyStatusInvalidObservationScope
+		preview.RecoveryStatus = SyncMutationReplayRecoveryStatusInvalidObservationScope
+		return preview, nil
+	}
+
+	doc, receipts, err := s.loadSyncMutationReplayDryRunInputs(ctx, ownerKey, appID)
+	if err != nil {
+		return SyncMutationReplayAuthoritativePreview{}, err
+	}
+
+	dryRunResult, err := buildSyncMutationDryRunResult(doc, receipts)
+	if err != nil {
+		return SyncMutationReplayAuthoritativePreview{}, err
+	}
+	preview.DryRunPreviewHash = hashReplayObservationBytes(dryRunResult.PreviewBody)
+
+	applications, err := s.ListSyncMutationReplayApplications(ctx, ownerKey, appID)
+	if err != nil {
+		return SyncMutationReplayAuthoritativePreview{}, err
+	}
+
+	compareEvaluation, err := evaluateSyncMutationReplayCompareAndApplyAgainstState(observation, doc, receipts, dryRunResult, applications)
+	if err != nil {
+		return SyncMutationReplayAuthoritativePreview{}, err
+	}
+	recoveryEvaluation := evaluateSyncMutationReplayRecoveryAgainstState(observation, doc, receipts, dryRunResult, applications, compareEvaluation)
+
+	preview.CompareAndApplyStatus = compareEvaluation.Status
+	preview.RecoveryStatus = recoveryEvaluation.Status
+	preview.Reasons = mergeReplayStringSets(compareEvaluation.Reasons, recoveryEvaluation.Reasons)
+	preview.Warnings = mergeReplayStringSets(compareEvaluation.Warnings, recoveryEvaluation.Warnings)
+
+	if compareEvaluation.Status != SyncMutationReplayCompareAndApplyStatusAllowed ||
+		recoveryEvaluation.Status != SyncMutationReplayRecoveryStatusSafeToAttemptTransaction {
+		return preview, nil
+	}
+
+	progressivePreview, err := buildSyncMutationReplayAuthoritativeProgressivePreview(doc, receipts)
+	if err != nil {
+		return SyncMutationReplayAuthoritativePreview{}, err
+	}
+	preview.MutationResults = cloneReplayAuthoritativeMutationResults(progressivePreview.MutationResults)
+	preview.ApplicationStatusCounts = countReplayMutationApplicationStatuses(progressivePreview.MutationResults)
+	preview.Warnings = mergeReplayStringSets(preview.Warnings, progressivePreview.Warnings)
+
+	if progressivePreview.PolicyAbort {
+		preview.Status = SyncMutationReplayAuthoritativePreviewStatusWouldAbortPolicy
+		preview.PolicyAbort = true
+		preview.PolicyAbortMutationID = progressivePreview.PolicyAbortMutationID
+		preview.PolicyAbortOperationType = progressivePreview.PolicyAbortOperationType
+		preview.PolicyAbortStatus = progressivePreview.PolicyAbortStatus
+		preview.PolicyAbortReasons = cloneStringSlice(progressivePreview.PolicyAbortReasons)
+		preview.Reasons = mergeReplayStringSets(preview.Reasons, preview.PolicyAbortReasons)
+		return preview, nil
+	}
+
+	preview.Status = SyncMutationReplayAuthoritativePreviewStatusAvailable
+	preview.AuthoritativePreviewHash = hashReplayObservationBytes(progressivePreview.PreviewBody)
+	preview.AuthoritativePreviewHashMatchesDryRun = preview.AuthoritativePreviewHash == preview.DryRunPreviewHash
+	return preview, nil
+}
+
 func (s *Store) ReplaySyncMutationReceiptsDryRun(ctx context.Context, ownerKey, appID string) (SyncMutationDryRunResult, error) {
 	doc, receipts, err := s.loadSyncMutationReplayDryRunInputs(ctx, ownerKey, appID)
 	if err != nil {
@@ -2180,10 +2286,12 @@ func buildSyncMutationReplayAuthoritativeProgressivePreview(doc Document, receip
 	preview := syncMutationReplayAuthoritativeProgressivePreview{
 		MutationResults:    make([]SyncMutationReplayAuthoritativeMutationResult, 0, len(receipts)),
 		StagedApplications: make([]syncMutationReplayAuthoritativeStagedApplication, 0, len(receipts)),
+		Warnings:           []string{},
 	}
 
 	for _, receipt := range receipts {
 		policyEvaluation := evaluateSyncMutationReplayAuthoritativePolicyAgainstTabs(tabs, receipt)
+		preview.Warnings = mergeReplayStringSets(preview.Warnings, policyEvaluation.Warnings)
 		switch policyEvaluation.Status {
 		case replayAuthoritativePolicyStatusAllowed:
 			if !applyReplayMutationForAuthoritativePreview(&tabs, receipt) {
@@ -2461,35 +2569,35 @@ func EvaluateSyncMutationReplayAuthoritativeReadiness(observation SyncMutationRe
 	}
 	snapshotAnalysis := analyzeReplaySnapshotForAuthoritativePolicy(tabs)
 
-	appendReplayAuthoritativeArea(&readiness, "document_version_gating", replayAuthoritativeStatusPartiallyReady, "Compare-and-apply precondition evaluation can now detect stale canonical version and hash observations, but there is still no live authoritative write transaction.")
-	appendReplayAuthoritativeArea(&readiness, "receipt_selection", replayAuthoritativeStatusPartiallyReady, "Accepted receipts are scoped by owner and app, but there is no authoritative applied-receipt boundary yet.")
+	appendReplayAuthoritativeArea(&readiness, "document_version_gating", replayAuthoritativeStatusReady, "CLI-authoritative apply verifies the observed canonical version and hash immediately before the transaction commits.")
+	appendReplayAuthoritativeArea(&readiness, "receipt_selection", replayAuthoritativeStatusPartiallyReady, "Accepted receipts are scoped by owner and app and protected by application-row boundaries, but receipt selection is still whole-set rather than operator-subset or causal-merge based.")
 	appendReplayAuthoritativeArea(&readiness, "replay_ordering", replayAuthoritativeStatusPartiallyReady, "Deterministic ordering exists by accepted_at, created_at, and mutation_id, but it is not a full causal merge model.")
-	appendReplayAuthoritativeArea(&readiness, "transaction_boundary", replayAuthoritativeStatusPartiallyReady, "A store-level internal authoritative replay skeleton now proves the compare-and-apply transaction boundary, but it is not wired into any live endpoint.")
-	appendReplayAuthoritativeArea(&readiness, "canonical_snapshot_observation", replayAuthoritativeStatusPartiallyReady, "Dry-run observations capture version and hash, but they are observational only and do not gate canonical writes.")
-	appendReplayAuthoritativeArea(&readiness, "receipt_status_model", replayAuthoritativeStatusPartiallyReady, "Applied-receipt tracking now has separate inert authoritative application statuses, but live compare-and-apply wiring does not exist yet.")
-	appendReplayAuthoritativeArea(&readiness, "replay_progress_state", replayAuthoritativeStatusPartiallyReady, "Dry-run observations and inert application rows can now be compared for stale receipt sets and already-applied progress, but they are not persisted by a canonical write transaction.")
-	appendReplayAuthoritativeArea(&readiness, "rollback_behavior", replayAuthoritativeStatusPartiallyReady, "Read-only recovery evaluation can now distinguish stale observations, blocked snapshots, partial application rows, and recovery mismatches, but no live rollback transaction exists.")
-	appendReplayAuthoritativeArea(&readiness, "idempotency", replayAuthoritativeStatusPartiallyReady, "Receipt acceptance is idempotent and compare-and-apply preconditions can detect existing application rows, but authoritative retry handling is not implemented.")
-	appendReplayAuthoritativeArea(&readiness, "conflict_behavior", replayAuthoritativeStatusPartiallyReady, "Conflict application statuses now exist in inert tracking, but compare-and-apply conflict handling is not implemented.")
-	appendReplayAuthoritativeArea(&readiness, "malformed_legacy_snapshot_policy", replayAuthoritativeStatusPartiallyReady, "Policy is defined to preserve unrelated malformed legacy data during replay admission, but no canonical write path applies that policy yet.")
-	appendReplayAuthoritativeArea(&readiness, "duplicate_item_id_policy", replayAuthoritativeStatusPartiallyReady, "Policy is defined to block authoritative replay when the snapshot contains duplicate item ids.")
-	appendReplayAuthoritativeArea(&readiness, "duplicate_edge_id_policy", replayAuthoritativeStatusPartiallyReady, "Policy is defined to block authoritative replay when the snapshot contains duplicate edge ids.")
+	appendReplayAuthoritativeArea(&readiness, "transaction_boundary", replayAuthoritativeStatusReady, "Store-level CLI-authoritative apply writes the canonical snapshot and replay application rows in one SQLite transaction.")
+	appendReplayAuthoritativeArea(&readiness, "canonical_snapshot_observation", replayAuthoritativeStatusReady, "Dry-run observations capture version and hash, can be created by the CLI, and gate CLI-authoritative canonical writes.")
+	appendReplayAuthoritativeArea(&readiness, "receipt_status_model", replayAuthoritativeStatusReady, "Replay application rows durably distinguish applied, skipped, conflict, and failed outcomes without changing receipt ACK meaning.")
+	appendReplayAuthoritativeArea(&readiness, "replay_progress_state", replayAuthoritativeStatusReady, "Dry-run observations and durable application rows are compared for stale receipt sets, partial progress, and already-applied idempotent exits.")
+	appendReplayAuthoritativeArea(&readiness, "rollback_behavior", replayAuthoritativeStatusPartiallyReady, "Recovery evaluation can identify stale observations, blocked snapshots, partial application rows, and canonical/application mismatches, but there is still no automated rollback transaction.")
+	appendReplayAuthoritativeArea(&readiness, "idempotency", replayAuthoritativeStatusReady, "Receipt acceptance is idempotent and repeated CLI-authoritative apply exits idempotently when application rows match canonical state.")
+	appendReplayAuthoritativeArea(&readiness, "conflict_behavior", replayAuthoritativeStatusPartiallyReady, "Conflict application statuses and policy-abort previews exist, but conflict resolution remains snapshot/operator based rather than a mutation-level merge model.")
+	appendReplayAuthoritativeArea(&readiness, "malformed_legacy_snapshot_policy", replayAuthoritativeStatusPartiallyReady, "Policy preserves unrelated malformed legacy data during replay admission, but legacy cleanup remains a separate future decision.")
+	appendReplayAuthoritativeArea(&readiness, "duplicate_item_id_policy", replayAuthoritativeStatusReady, "Policy blocks authoritative replay when the snapshot contains duplicate item ids.")
+	appendReplayAuthoritativeArea(&readiness, "duplicate_edge_id_policy", replayAuthoritativeStatusReady, "Policy blocks authoritative replay when the snapshot contains duplicate edge ids.")
 	appendReplayAuthoritativeArea(&readiness, "duplicate_endpoint_edge_policy", replayAuthoritativeStatusReady, "Dry-run matches the frontend rule that duplicate endpoint pairs are rejected in either direction regardless of edge kind.")
-	appendReplayAuthoritativeArea(&readiness, "self_edge_policy", replayAuthoritativeStatusPartiallyReady, "Policy is defined to skip new self-edge mutations while preserving unrelated legacy self-edges until a future cleanup policy exists.")
-	appendReplayAuthoritativeArea(&readiness, "missing_endpoint_policy", replayAuthoritativeStatusPartiallyReady, "Policy is defined to preserve unrelated malformed legacy edges while rejecting new missing-endpoint mutations.")
+	appendReplayAuthoritativeArea(&readiness, "self_edge_policy", replayAuthoritativeStatusReady, "Policy skips new self-edge mutations while preserving unrelated legacy self-edges.")
+	appendReplayAuthoritativeArea(&readiness, "missing_endpoint_policy", replayAuthoritativeStatusReady, "Policy preserves unrelated malformed legacy edges while rejecting new missing-endpoint mutations.")
 	appendReplayAuthoritativeArea(&readiness, "missing_tab_policy", replayAuthoritativeStatusReady, "Replay never creates tabs implicitly and reports missing_tab deterministically.")
-	appendReplayAuthoritativeArea(&readiness, "per_tab_item_limit", replayAuthoritativeStatusPartiallyReady, "Policy is defined to skip CreateNode mutations that would exceed the per-tab item limit.")
-	appendReplayAuthoritativeArea(&readiness, "per_tab_edge_limit", replayAuthoritativeStatusPartiallyReady, "Policy is defined to skip CreateEdge mutations that would exceed the per-tab edge limit.")
-	appendReplayAuthoritativeArea(&readiness, "item_width_height_semantics", replayAuthoritativeStatusPartiallyReady, "Policy is defined to preserve literal stored width and height values and to reject invalid dimensions instead of silently deriving them.")
-	appendReplayAuthoritativeArea(&readiness, "shape_specific_sizing_behavior", replayAuthoritativeStatusPartiallyReady, "Policy is defined to preserve literal dimensions for fixed-ratio shapes even though the frontend derives some visual heights from width.")
-	appendReplayAuthoritativeArea(&readiness, "text_length_limit_behavior", replayAuthoritativeStatusPartiallyReady, "Policy is defined to skip oversize text mutations instead of preserving or truncating them silently.")
-	appendReplayAuthoritativeArea(&readiness, "unknown_fields", replayAuthoritativeStatusPartiallyReady, "Policy is defined to skip unknown update fields deterministically.")
-	appendReplayAuthoritativeArea(&readiness, "unknown_operations", replayAuthoritativeStatusPartiallyReady, "Receipt acceptance already rejects unsupported operations, and policy evaluation treats unknown operations as fatal.")
-	appendReplayAuthoritativeArea(&readiness, "server_side_validation_requirements", replayAuthoritativeStatusPartiallyReady, "Pure validation policy evaluation now exists, but it is not yet wired into a compare-and-apply transaction.")
-	appendReplayAuthoritativeArea(&readiness, "applied_receipt_tracking", replayAuthoritativeStatusPartiallyReady, "Separate inert applied-receipt tracking infrastructure now exists, but it is not wired into live replay.")
-	appendReplayAuthoritativeArea(&readiness, "delta_pull", replayAuthoritativeStatusIntentionallyDeferred, "Revisioned delta pull remains out of scope until authoritative replay and applied-state tracking exist.")
+	appendReplayAuthoritativeArea(&readiness, "per_tab_item_limit", replayAuthoritativeStatusReady, "CLI-authoritative preview and apply skip CreateNode mutations that would exceed the per-tab item limit.")
+	appendReplayAuthoritativeArea(&readiness, "per_tab_edge_limit", replayAuthoritativeStatusReady, "CLI-authoritative preview and apply skip CreateEdge mutations that would exceed the per-tab edge limit.")
+	appendReplayAuthoritativeArea(&readiness, "item_width_height_semantics", replayAuthoritativeStatusReady, "CLI-authoritative policy preserves literal stored width and height values and rejects invalid dimensions instead of silently deriving them.")
+	appendReplayAuthoritativeArea(&readiness, "shape_specific_sizing_behavior", replayAuthoritativeStatusReady, "CLI-authoritative policy preserves literal dimensions for fixed-ratio shapes and reports that divergence in authoritative preview.")
+	appendReplayAuthoritativeArea(&readiness, "text_length_limit_behavior", replayAuthoritativeStatusReady, "CLI-authoritative preview and apply skip oversize text mutations instead of preserving or truncating them silently.")
+	appendReplayAuthoritativeArea(&readiness, "unknown_fields", replayAuthoritativeStatusReady, "Policy skips unknown update fields deterministically.")
+	appendReplayAuthoritativeArea(&readiness, "unknown_operations", replayAuthoritativeStatusReady, "Receipt acceptance rejects unsupported operations, and policy evaluation treats unknown operations as fatal.")
+	appendReplayAuthoritativeArea(&readiness, "server_side_validation_requirements", replayAuthoritativeStatusReady, "Validation policy is wired into the CLI-authoritative compare-and-apply path and its read-only authoritative preview.")
+	appendReplayAuthoritativeArea(&readiness, "applied_receipt_tracking", replayAuthoritativeStatusReady, "Durable application rows provide the applied-receipt boundary for CLI recovery, idempotency, and delta metadata.")
+	appendReplayAuthoritativeArea(&readiness, "delta_pull", replayAuthoritativeStatusIntentionallyDeferred, "Revisioned delta pull remains out of scope until a separate behavior-changing phase proves it is safe.")
 
-	addReplayAuthoritativeBlocker(&readiness, "authoritative_replay_not_live")
+	addReplayAuthoritativeBlocker(&readiness, "authoritative_replay_not_product_path")
 	addReplayAuthoritativeBlockerIf(&readiness, currentDoc.Version != observation.CanonicalDocumentVersionObserved, "canonical_snapshot_changed_since_observation")
 	addReplayAuthoritativeBlockerIf(&readiness, hashReplayObservationBytes(currentDoc.Body) != observation.CanonicalDocumentHashObserved, "canonical_snapshot_changed_since_observation")
 
@@ -3508,6 +3616,42 @@ func cloneStringPointer(value *string) *string {
 
 func cloneReplayWarnings(warnings []string) []string {
 	return cloneStringSlice(warnings)
+}
+
+func cloneReplayAuthoritativeMutationResults(values []SyncMutationReplayAuthoritativeMutationResult) []SyncMutationReplayAuthoritativeMutationResult {
+	if len(values) == 0 {
+		return []SyncMutationReplayAuthoritativeMutationResult{}
+	}
+	return append([]SyncMutationReplayAuthoritativeMutationResult{}, values...)
+}
+
+func countReplayMutationApplicationStatuses(values []SyncMutationReplayAuthoritativeMutationResult) map[string]int64 {
+	counts := make(map[string]int64)
+	for _, value := range values {
+		if strings.TrimSpace(value.ApplicationStatus) == "" {
+			continue
+		}
+		counts[value.ApplicationStatus]++
+	}
+	return counts
+}
+
+func mergeReplayStringSets(groups ...[]string) []string {
+	result := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, group := range groups {
+		for _, value := range group {
+			if strings.TrimSpace(value) == "" {
+				continue
+			}
+			if _, ok := seen[value]; ok {
+				continue
+			}
+			seen[value] = struct{}{}
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func appendReplayWarningIfMissing(warnings []string, warning string) []string {

@@ -42,6 +42,7 @@ const (
 	preflightStatusPartialRows           = "partial_application_rows"
 	preflightStatusRowsMismatch          = "application_rows_without_matching_canonical_state"
 	preflightStatusCanonicalMismatch     = "canonical_state_without_application_rows"
+	preflightStatusWouldAbortPolicy      = "would_abort_policy"
 	preflightStatusInternalError         = "internal_error"
 	applyStatusRefusedDisabled           = "refused_disabled"
 	applyStatusRefusedApplyDisabled      = "refused_apply_disabled"
@@ -75,6 +76,7 @@ type replayAdminStore interface {
 	RecordSyncMutationReplayDryRunObservation(ctx context.Context, ownerKey, appID string) (store.SyncMutationReplayDryRunObservation, error)
 	GetSyncMutationReplayDiagnostics(ctx context.Context, ownerKey, appID string) (store.SyncMutationReplayDiagnostics, error)
 	CompactSyncMutationReplayArtifacts(ctx context.Context, ownerKey, appID string, options store.SyncMutationReplayCompactOptions) (store.SyncMutationReplayCompactResult, error)
+	EvaluateSyncMutationReplayAuthoritativePreview(ctx context.Context, ownerKey, appID string, observationID int64) (store.SyncMutationReplayAuthoritativePreview, error)
 	EvaluateSyncMutationReplayCompareAndApplyPreconditions(ctx context.Context, ownerKey, appID string, observationID int64) (store.SyncMutationReplayCompareAndApplyEvaluation, error)
 	EvaluateSyncMutationReplayRecoveryState(ctx context.Context, ownerKey, appID string, observationID int64) (store.SyncMutationReplayRecoveryEvaluation, error)
 	ApplySyncMutationReplayAuthoritativeInternal(ctx context.Context, ownerKey, appID string, observationID int64, options store.SyncMutationReplayAuthoritativeApplyOptions) (store.SyncMutationReplayAuthoritativeApplyResult, error)
@@ -134,23 +136,25 @@ type replayPreflightEvaluation struct {
 	Warnings                    []string
 	AppliedMutationIDs          []string
 	MatchingApplicationRowCount int
+	AuthoritativePreview        *store.SyncMutationReplayAuthoritativePreview
 }
 
 type preflightResult struct {
-	Mode                        string   `json:"mode"`
-	OwnerKey                    string   `json:"ownerKey"`
-	AppID                       string   `json:"appId"`
-	ObservationID               int64    `json:"observationId"`
-	Status                      string   `json:"status"`
-	CompareAndApplyStatus       string   `json:"compareAndApplyStatus"`
-	RecoveryStatus              string   `json:"recoveryStatus"`
-	Reasons                     []string `json:"reasons"`
-	Warnings                    []string `json:"warnings"`
-	AppliedMutationIDs          []string `json:"appliedMutationIds"`
-	MatchingApplicationRowCount int      `json:"matchingApplicationRowCount"`
-	CanonicalStateChanged       bool     `json:"canonicalStateChanged"`
-	DocumentVersionAdvanced     bool     `json:"documentVersionAdvanced"`
-	ApplicationRowsInserted     bool     `json:"applicationRowsInserted"`
+	Mode                        string                       `json:"mode"`
+	OwnerKey                    string                       `json:"ownerKey"`
+	AppID                       string                       `json:"appId"`
+	ObservationID               int64                        `json:"observationId"`
+	Status                      string                       `json:"status"`
+	CompareAndApplyStatus       string                       `json:"compareAndApplyStatus"`
+	RecoveryStatus              string                       `json:"recoveryStatus"`
+	Reasons                     []string                     `json:"reasons"`
+	Warnings                    []string                     `json:"warnings"`
+	AppliedMutationIDs          []string                     `json:"appliedMutationIds"`
+	MatchingApplicationRowCount int                          `json:"matchingApplicationRowCount"`
+	CanonicalStateChanged       bool                         `json:"canonicalStateChanged"`
+	DocumentVersionAdvanced     bool                         `json:"documentVersionAdvanced"`
+	ApplicationRowsInserted     bool                         `json:"applicationRowsInserted"`
+	AuthoritativePreview        *authoritativePreviewSummary `json:"authoritativePreview"`
 }
 
 type applyResult struct {
@@ -175,6 +179,24 @@ type applyResult struct {
 	ApplicationRowsInserted        bool                                                  `json:"applicationRowsInserted"`
 }
 
+type authoritativePreviewSummary struct {
+	Status                                string                                                `json:"status"`
+	DryRunPreviewHash                     string                                                `json:"dryRunPreviewHash"`
+	AuthoritativePreviewHash              string                                                `json:"authoritativePreviewHash"`
+	AuthoritativePreviewHashMatchesDryRun bool                                                  `json:"authoritativePreviewHashMatchesDryRun"`
+	ApplicationStatusCounts               map[string]int64                                      `json:"applicationStatusCounts"`
+	MutationResults                       []store.SyncMutationReplayAuthoritativeMutationResult `json:"mutationResults"`
+	PolicyAbort                           bool                                                  `json:"policyAbort"`
+	PolicyAbortMutationID                 string                                                `json:"policyAbortMutationId"`
+	PolicyAbortOperationType              string                                                `json:"policyAbortOperationType"`
+	PolicyAbortStatus                     string                                                `json:"policyAbortStatus"`
+	PolicyAbortReasons                    []string                                              `json:"policyAbortReasons"`
+	Reasons                               []string                                              `json:"reasons"`
+	Warnings                              []string                                              `json:"warnings"`
+	CompareAndApplyStatus                 string                                                `json:"compareAndApplyStatus"`
+	RecoveryStatus                        string                                                `json:"recoveryStatus"`
+}
+
 type observationSummary struct {
 	ID                               int64  `json:"id"`
 	CanonicalDocumentVersionObserved int64  `json:"canonicalDocumentVersionObserved"`
@@ -191,37 +213,39 @@ type observationSummary struct {
 }
 
 type observeResult struct {
-	Mode        string              `json:"mode"`
-	OwnerKey    string              `json:"ownerKey"`
-	AppID       string              `json:"appId"`
-	Status      string              `json:"status"`
-	Observation *observationSummary `json:"observation"`
-	Reasons     []string            `json:"reasons"`
-	Warnings    []string            `json:"warnings"`
+	Mode                 string                       `json:"mode"`
+	OwnerKey             string                       `json:"ownerKey"`
+	AppID                string                       `json:"appId"`
+	Status               string                       `json:"status"`
+	Observation          *observationSummary          `json:"observation"`
+	AuthoritativePreview *authoritativePreviewSummary `json:"authoritativePreview"`
+	Reasons              []string                     `json:"reasons"`
+	Warnings             []string                     `json:"warnings"`
 }
 
 type diagnoseResult struct {
-	Mode                       string              `json:"mode"`
-	OwnerKey                   string              `json:"ownerKey"`
-	AppID                      string              `json:"appId"`
-	Status                     string              `json:"status"`
-	ReceiptCount               int64               `json:"receiptCount"`
-	ReceiptOldestCreatedAt     *string             `json:"receiptOldestCreatedAt"`
-	ReceiptNewestCreatedAt     *string             `json:"receiptNewestCreatedAt"`
-	ReceiptOldestAcceptedAt    *string             `json:"receiptOldestAcceptedAt"`
-	ReceiptNewestAcceptedAt    *string             `json:"receiptNewestAcceptedAt"`
-	ReceiptPayloadBytes        int64               `json:"receiptPayloadBytes"`
-	ObservationCount           int64               `json:"observationCount"`
-	ObservationOldestCreatedAt *string             `json:"observationOldestCreatedAt"`
-	ObservationNewestCreatedAt *string             `json:"observationNewestCreatedAt"`
-	LatestObservation          *observationSummary `json:"latestObservation"`
-	ApplicationCount           int64               `json:"applicationCount"`
-	ApplicationOldestCreatedAt *string             `json:"applicationOldestCreatedAt"`
-	ApplicationNewestCreatedAt *string             `json:"applicationNewestCreatedAt"`
-	ApplicationStatusCounts    map[string]int64    `json:"applicationStatusCounts"`
-	DBFileBytes                *int64              `json:"dbFileBytes"`
-	Reasons                    []string            `json:"reasons"`
-	Warnings                   []string            `json:"warnings"`
+	Mode                       string                       `json:"mode"`
+	OwnerKey                   string                       `json:"ownerKey"`
+	AppID                      string                       `json:"appId"`
+	Status                     string                       `json:"status"`
+	ReceiptCount               int64                        `json:"receiptCount"`
+	ReceiptOldestCreatedAt     *string                      `json:"receiptOldestCreatedAt"`
+	ReceiptNewestCreatedAt     *string                      `json:"receiptNewestCreatedAt"`
+	ReceiptOldestAcceptedAt    *string                      `json:"receiptOldestAcceptedAt"`
+	ReceiptNewestAcceptedAt    *string                      `json:"receiptNewestAcceptedAt"`
+	ReceiptPayloadBytes        int64                        `json:"receiptPayloadBytes"`
+	ObservationCount           int64                        `json:"observationCount"`
+	ObservationOldestCreatedAt *string                      `json:"observationOldestCreatedAt"`
+	ObservationNewestCreatedAt *string                      `json:"observationNewestCreatedAt"`
+	LatestObservation          *observationSummary          `json:"latestObservation"`
+	ApplicationCount           int64                        `json:"applicationCount"`
+	ApplicationOldestCreatedAt *string                      `json:"applicationOldestCreatedAt"`
+	ApplicationNewestCreatedAt *string                      `json:"applicationNewestCreatedAt"`
+	ApplicationStatusCounts    map[string]int64             `json:"applicationStatusCounts"`
+	DBFileBytes                *int64                       `json:"dbFileBytes"`
+	AuthoritativePreview       *authoritativePreviewSummary `json:"authoritativePreview"`
+	Reasons                    []string                     `json:"reasons"`
+	Warnings                   []string                     `json:"warnings"`
 }
 
 type compactResult struct {
@@ -361,6 +385,15 @@ func runObserveWithDeps(deps commandDeps, args []string, stdout, stderr io.Write
 
 		result.Status = operatorStatusRecorded
 		result.Observation = buildObservationSummary(observation)
+		authoritativePreview, err := sqliteStore.EvaluateSyncMutationReplayAuthoritativePreview(context.Background(), opts.ownerKey, opts.appID, observation.ID)
+		if err != nil {
+			result.Status = operatorStatusInternalError
+			result.Reasons = []string{"authoritative_preview_failed", err.Error()}
+			writeObserveResult(stdout, opts.output, opts.verbose, result)
+			writeObserveAuditLine(stderr, result)
+			return 1
+		}
+		result.AuthoritativePreview = buildAuthoritativePreviewSummary(authoritativePreview)
 		writeObserveResult(stdout, opts.output, opts.verbose, result)
 		writeObserveAuditLine(stderr, result)
 		return 0
@@ -438,6 +471,17 @@ func runDiagnoseWithDeps(deps commandDeps, args []string, stdout, stderr io.Writ
 		}
 
 		populateDiagnoseResultFromStore(&result, diagnostics)
+		if diagnostics.LatestObservation != nil {
+			authoritativePreview, err := sqliteStore.EvaluateSyncMutationReplayAuthoritativePreview(context.Background(), opts.ownerKey, opts.appID, diagnostics.LatestObservation.ID)
+			if err != nil {
+				result.Status = operatorStatusInternalError
+				result.Reasons = []string{"authoritative_preview_failed", err.Error()}
+				writeDiagnoseResult(stdout, opts.output, opts.verbose, result)
+				writeDiagnoseAuditLine(stderr, result)
+				return 1
+			}
+			result.AuthoritativePreview = buildAuthoritativePreviewSummary(authoritativePreview)
+		}
 		result.Status = operatorStatusOK
 		writeDiagnoseResult(stdout, opts.output, opts.verbose, result)
 		writeDiagnoseAuditLine(stderr, result)
@@ -1039,19 +1083,34 @@ func evaluatePreflightWithStore(ctx context.Context, sqliteStore replayAdminStor
 		return replayPreflightEvaluation{}, fmt.Errorf("recovery_evaluation_failed: %w", err)
 	}
 
+	authoritativePreview, err := sqliteStore.EvaluateSyncMutationReplayAuthoritativePreview(ctx, ownerKey, appID, observationID)
+	if err != nil {
+		return replayPreflightEvaluation{}, fmt.Errorf("authoritative_preview_failed: %w", err)
+	}
+
 	appliedMutationIDs := cloneStrings(recoveryEvaluation.AppliedMutationIDs)
 	if len(appliedMutationIDs) == 0 {
 		appliedMutationIDs = cloneStrings(compareEvaluation.AppliedMutationIDs)
 	}
 
+	status := derivePreflightStatus(compareEvaluation, recoveryEvaluation)
+	reasons := mergeUniqueStrings(compareEvaluation.Reasons, recoveryEvaluation.Reasons)
+	warnings := mergeUniqueStrings(compareEvaluation.Warnings, recoveryEvaluation.Warnings)
+	if status == preflightStatusSafe && authoritativePreview.Status == store.SyncMutationReplayAuthoritativePreviewStatusWouldAbortPolicy {
+		status = preflightStatusWouldAbortPolicy
+		reasons = mergeUniqueStrings(reasons, []string{"authoritative_policy_would_abort"}, authoritativePreview.Reasons)
+		warnings = mergeUniqueStrings(warnings, authoritativePreview.Warnings)
+	}
+
 	return replayPreflightEvaluation{
-		Status:                      derivePreflightStatus(compareEvaluation, recoveryEvaluation),
+		Status:                      status,
 		CompareAndApplyStatus:       compareEvaluation.Status,
 		RecoveryStatus:              recoveryEvaluation.Status,
-		Reasons:                     mergeUniqueStrings(compareEvaluation.Reasons, recoveryEvaluation.Reasons),
-		Warnings:                    mergeUniqueStrings(compareEvaluation.Warnings, recoveryEvaluation.Warnings),
+		Reasons:                     reasons,
+		Warnings:                    warnings,
 		AppliedMutationIDs:          appliedMutationIDs,
 		MatchingApplicationRowCount: recoveryEvaluation.MatchingApplicationRowCount,
+		AuthoritativePreview:        &authoritativePreview,
 	}, nil
 }
 
@@ -1066,6 +1125,9 @@ func populatePreflightResultFromEvaluation(result *preflightResult, evaluation r
 	result.CanonicalStateChanged = false
 	result.DocumentVersionAdvanced = false
 	result.ApplicationRowsInserted = false
+	if evaluation.AuthoritativePreview != nil {
+		result.AuthoritativePreview = buildAuthoritativePreviewSummary(*evaluation.AuthoritativePreview)
+	}
 }
 
 func populateApplyResultFromPreflight(result *applyResult, evaluation replayPreflightEvaluation) {
@@ -1074,6 +1136,9 @@ func populateApplyResultFromPreflight(result *applyResult, evaluation replayPref
 	result.RecoveryStatus = evaluation.RecoveryStatus
 	result.Reasons = cloneStrings(evaluation.Reasons)
 	result.Warnings = cloneStrings(evaluation.Warnings)
+	if evaluation.Status == preflightStatusWouldAbortPolicy && evaluation.AuthoritativePreview != nil {
+		result.MutationResults = cloneMutationResults(evaluation.AuthoritativePreview.MutationResults)
+	}
 }
 
 func populateApplyResultFromStore(result *applyResult, storeResult store.SyncMutationReplayAuthoritativeApplyResult) {
@@ -1090,6 +1155,26 @@ func populateApplyResultFromStore(result *applyResult, storeResult store.SyncMut
 	result.CanonicalStateChanged = pointersDiffer(result.CanonicalDocumentHashBefore, result.CanonicalDocumentHashAfter)
 	result.DocumentVersionAdvanced = pointersDifferInt64(result.CanonicalDocumentVersionBefore, result.CanonicalDocumentVersionAfter)
 	result.ApplicationRowsInserted = result.InsertedApplicationRowCount > 0
+}
+
+func buildAuthoritativePreviewSummary(preview store.SyncMutationReplayAuthoritativePreview) *authoritativePreviewSummary {
+	return &authoritativePreviewSummary{
+		Status:                                preview.Status,
+		DryRunPreviewHash:                     preview.DryRunPreviewHash,
+		AuthoritativePreviewHash:              preview.AuthoritativePreviewHash,
+		AuthoritativePreviewHashMatchesDryRun: preview.AuthoritativePreviewHashMatchesDryRun,
+		ApplicationStatusCounts:               cloneStringInt64Map(preview.ApplicationStatusCounts),
+		MutationResults:                       cloneMutationResults(preview.MutationResults),
+		PolicyAbort:                           preview.PolicyAbort,
+		PolicyAbortMutationID:                 preview.PolicyAbortMutationID,
+		PolicyAbortOperationType:              preview.PolicyAbortOperationType,
+		PolicyAbortStatus:                     preview.PolicyAbortStatus,
+		PolicyAbortReasons:                    cloneStrings(preview.PolicyAbortReasons),
+		Reasons:                               cloneStrings(preview.Reasons),
+		Warnings:                              cloneStrings(preview.Warnings),
+		CompareAndApplyStatus:                 preview.CompareAndApplyStatus,
+		RecoveryStatus:                        preview.RecoveryStatus,
+	}
 }
 
 func buildObservationSummary(observation store.SyncMutationReplayDryRunObservation) *observationSummary {
@@ -1214,6 +1299,8 @@ func mapPreflightStatusToApplyStatus(status string) string {
 		return applyStatusRowsMismatch
 	case preflightStatusCanonicalMismatch:
 		return applyStatusCanonicalMismatch
+	case preflightStatusWouldAbortPolicy:
+		return applyStatusAbortedPolicy
 	default:
 		return applyStatusInternalError
 	}
@@ -1251,6 +1338,7 @@ func writeTextObserveResult(stdout io.Writer, verbose bool, result observeResult
 			fmt.Fprintf(stdout, "created_at=%s\n", result.Observation.CreatedAt)
 		}
 	}
+	writeTextAuthoritativePreview(stdout, verbose, result.AuthoritativePreview)
 	fmt.Fprintf(stdout, "reasons=%s\n", strings.Join(result.Reasons, ","))
 	fmt.Fprintf(stdout, "warnings=%s\n", strings.Join(result.Warnings, ","))
 }
@@ -1281,6 +1369,7 @@ func writeTextDiagnoseResult(stdout io.Writer, verbose bool, result diagnoseResu
 	if result.LatestObservation != nil {
 		fmt.Fprintf(stdout, "latest_observation_id=%d\n", result.LatestObservation.ID)
 	}
+	writeTextAuthoritativePreview(stdout, verbose, result.AuthoritativePreview)
 	if verbose {
 		fmt.Fprintf(stdout, "receipt_oldest_created_at=%s\n", formatOptionalString(result.ReceiptOldestCreatedAt))
 		fmt.Fprintf(stdout, "receipt_newest_created_at=%s\n", formatOptionalString(result.ReceiptNewestCreatedAt))
@@ -1294,6 +1383,29 @@ func writeTextDiagnoseResult(stdout io.Writer, verbose bool, result diagnoseResu
 	}
 	fmt.Fprintf(stdout, "reasons=%s\n", strings.Join(result.Reasons, ","))
 	fmt.Fprintf(stdout, "warnings=%s\n", strings.Join(result.Warnings, ","))
+}
+
+func writeTextAuthoritativePreview(stdout io.Writer, verbose bool, preview *authoritativePreviewSummary) {
+	if preview == nil {
+		return
+	}
+	fmt.Fprintf(stdout, "authoritative_preview_status=%s\n", preview.Status)
+	fmt.Fprintf(stdout, "authoritative_preview_application_status_counts=%s\n", formatStringInt64Map(preview.ApplicationStatusCounts))
+	if verbose {
+		fmt.Fprintf(stdout, "authoritative_preview_dry_run_hash=%s\n", preview.DryRunPreviewHash)
+		fmt.Fprintf(stdout, "authoritative_preview_hash=%s\n", preview.AuthoritativePreviewHash)
+		fmt.Fprintf(stdout, "authoritative_preview_hash_matches_dry_run=%t\n", preview.AuthoritativePreviewHashMatchesDryRun)
+		fmt.Fprintf(stdout, "authoritative_preview_policy_abort=%t\n", preview.PolicyAbort)
+		fmt.Fprintf(stdout, "authoritative_preview_policy_abort_mutation_id=%s\n", preview.PolicyAbortMutationID)
+		fmt.Fprintf(stdout, "authoritative_preview_policy_abort_operation_type=%s\n", preview.PolicyAbortOperationType)
+		fmt.Fprintf(stdout, "authoritative_preview_policy_abort_status=%s\n", preview.PolicyAbortStatus)
+		fmt.Fprintf(stdout, "authoritative_preview_policy_abort_reasons=%s\n", strings.Join(preview.PolicyAbortReasons, ","))
+		fmt.Fprintf(stdout, "authoritative_preview_compare_and_apply_status=%s\n", preview.CompareAndApplyStatus)
+		fmt.Fprintf(stdout, "authoritative_preview_recovery_status=%s\n", preview.RecoveryStatus)
+		fmt.Fprintf(stdout, "authoritative_preview_mutation_results=%s\n", formatMutationResults(preview.MutationResults))
+		fmt.Fprintf(stdout, "authoritative_preview_reasons=%s\n", strings.Join(preview.Reasons, ","))
+		fmt.Fprintf(stdout, "authoritative_preview_warnings=%s\n", strings.Join(preview.Warnings, ","))
+	}
 }
 
 func writeCompactResult(stdout io.Writer, output string, verbose bool, result compactResult) {
@@ -1350,6 +1462,7 @@ func writeTextPreflightResult(stdout io.Writer, verbose bool, result preflightRe
 	fmt.Fprintf(stdout, "observation_id=%d\n", result.ObservationID)
 	fmt.Fprintf(stdout, "reasons=%s\n", strings.Join(result.Reasons, ","))
 	fmt.Fprintf(stdout, "warnings=%s\n", strings.Join(result.Warnings, ","))
+	writeTextAuthoritativePreview(stdout, verbose, result.AuthoritativePreview)
 	if verbose {
 		fmt.Fprintf(stdout, "compare_and_apply_status=%s\n", result.CompareAndApplyStatus)
 		fmt.Fprintf(stdout, "recovery_status=%s\n", result.RecoveryStatus)

@@ -1763,6 +1763,299 @@ func TestReplaySyncMutationReceiptsDryRunDoesNotDeriveFixedRatioShapeHeight(t *t
 	}
 }
 
+func TestEvaluateSyncMutationReplayAuthoritativePreviewReportsAuthoritativeDivergence(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name                      string
+		seed                      func(t *testing.T, docStore *Store)
+		receipt                   SyncMutationReceiptInput
+		expectedMutationID        string
+		expectedApplicationStatus string
+		expectedApplicationReason string
+		expectedWarnings          []string
+		expectHashMatch           bool
+	}{
+		{
+			name: "item_limit_skip",
+			seed: func(t *testing.T, docStore *Store) {
+				tab := replayTab{
+					ID:          "tab-1",
+					Name:        "Main",
+					Items:       make([]replayItem, 0, 500),
+					ColorIndex:  0,
+					GridSetting: "none",
+					Edges:       []replayEdge{},
+				}
+				for index := 0; index < 500; index += 1 {
+					tab.Items = append(tab.Items, replayItem{
+						ID:       fmt.Sprintf("seed-item-%d", index),
+						Name:     fmt.Sprintf("Seed %d", index),
+						Color:    "yellow",
+						Position: replayPosition{Top: fmt.Sprintf("%dpx", index), Left: fmt.Sprintf("%dpx", index)},
+					})
+				}
+				seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{tab})
+			},
+			receipt:                   buildReplayReceiptInput("mut-over-limit-item", "Node", "item-over-limit", "CreateNode", `{"tabId":"tab-1","name":"Over Limit","color":"blue","position":{"top":"10px","left":"20px"}}`),
+			expectedMutationID:        "mut-over-limit-item",
+			expectedApplicationStatus: SyncMutationReplayApplicationStatusSkipped,
+			expectedApplicationReason: "item_limit_exceeded",
+			expectHashMatch:           false,
+		},
+		{
+			name: "edge_limit_skip",
+			seed: func(t *testing.T, docStore *Store) {
+				seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{buildReplayTabWithEdgeLimitState()})
+			},
+			receipt:                   buildReplayReceiptInput("mut-over-limit-edge", "Edge", "edge-over-limit", "CreateEdge", `{"tabId":"tab-1","fromItemId":"seed-item-2000","toItemId":"seed-item-2001","kind":"line"}`),
+			expectedMutationID:        "mut-over-limit-edge",
+			expectedApplicationStatus: SyncMutationReplayApplicationStatusSkipped,
+			expectedApplicationReason: "edge_limit_exceeded",
+			expectHashMatch:           false,
+		},
+		{
+			name: "oversize_text_skip",
+			seed: func(t *testing.T, docStore *Store) {
+				seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+					{
+						ID:   "tab-1",
+						Name: "Main",
+						Items: []replayItem{
+							{ID: "item-1", Name: "First", Color: "yellow", Position: replayPosition{Top: "0px", Left: "0px"}},
+						},
+						ColorIndex:  0,
+						GridSetting: "none",
+						Edges:       []replayEdge{},
+					},
+				})
+			},
+			receipt:                   buildReplayReceiptInput("mut-oversize-text", "Node", "item-1", "UpdateNode", `{"tabId":"tab-1","changes":{"name":"`+strings.Repeat("x", 4001)+`"}}`),
+			expectedMutationID:        "mut-oversize-text",
+			expectedApplicationStatus: SyncMutationReplayApplicationStatusSkipped,
+			expectedApplicationReason: "text_limit_exceeded",
+			expectHashMatch:           false,
+		},
+		{
+			name: "fixed_ratio_dimension_warning",
+			seed: func(t *testing.T, docStore *Store) {
+				initialWidth := 170.0
+				initialHeight := 170.0
+				seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+					{
+						ID:   "tab-1",
+						Name: "Main",
+						Items: []replayItem{
+							{
+								ID:       "item-1",
+								Name:     "Circle",
+								Color:    "yellow",
+								Position: replayPosition{Top: "0px", Left: "0px"},
+								Shape:    "circle",
+								Width:    &initialWidth,
+								Height:   &initialHeight,
+							},
+						},
+						ColorIndex:  0,
+						GridSetting: "none",
+						Edges:       []replayEdge{},
+					},
+				})
+			},
+			receipt:                   buildReplayReceiptInput("mut-circle-width-only", "Node", "item-1", "UpdateNode", `{"tabId":"tab-1","changes":{"width":220}}`),
+			expectedMutationID:        "mut-circle-width-only",
+			expectedApplicationStatus: SyncMutationReplayApplicationStatusApplied,
+			expectedApplicationReason: "policy_allowed",
+			expectedWarnings:          []string{"preserve_literal_fixed_ratio_dimensions"},
+			expectHashMatch:           true,
+		},
+	} {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			docStore := openTestStore(t)
+			ctx := context.Background()
+			testCase.seed(t, docStore)
+			insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z", testCase.receipt)
+			observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+			if err != nil {
+				t.Fatalf("record observation: %v", err)
+			}
+
+			preview, err := docStore.EvaluateSyncMutationReplayAuthoritativePreview(ctx, "owner", "postbaby-web", observation.ID)
+			if err != nil {
+				t.Fatalf("evaluate authoritative preview: %v", err)
+			}
+			if preview.Status != SyncMutationReplayAuthoritativePreviewStatusAvailable {
+				t.Fatalf("expected available authoritative preview, got %+v", preview)
+			}
+			if preview.DryRunPreviewHash == "" || preview.AuthoritativePreviewHash == "" {
+				t.Fatalf("expected dry-run and authoritative hashes, got %+v", preview)
+			}
+			if preview.AuthoritativePreviewHashMatchesDryRun != testCase.expectHashMatch {
+				t.Fatalf("unexpected hash match flag for %s: %+v", testCase.name, preview)
+			}
+			if preview.ApplicationStatusCounts[testCase.expectedApplicationStatus] != 1 {
+				t.Fatalf("expected one %s status, got %+v", testCase.expectedApplicationStatus, preview.ApplicationStatusCounts)
+			}
+			result := findReplayAuthoritativeMutationResultByMutationID(t, preview.MutationResults, testCase.expectedMutationID)
+			if result.ApplicationStatus != testCase.expectedApplicationStatus || result.ApplicationReason != testCase.expectedApplicationReason {
+				t.Fatalf("unexpected authoritative mutation result: %+v", result)
+			}
+			if len(testCase.expectedWarnings) > 0 {
+				assertReplayWarnings(t, preview.Warnings, testCase.expectedWarnings)
+			}
+		})
+	}
+}
+
+func TestEvaluateSyncMutationReplayAuthoritativePreviewPolicyAbortDoesNotWrite(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	before := seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:          "tab-1",
+			Name:        "Main",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-missing-node", "Node", "missing-node", "UpdateNode", `{"tabId":"tab-1","changes":{"name":"Renamed"}}`),
+	)
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+
+	beforeReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	beforeApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+
+	preview, err := docStore.EvaluateSyncMutationReplayAuthoritativePreview(ctx, "owner", "postbaby-web", observation.ID)
+	if err != nil {
+		t.Fatalf("evaluate authoritative preview: %v", err)
+	}
+	if preview.Status != SyncMutationReplayAuthoritativePreviewStatusWouldAbortPolicy ||
+		!preview.PolicyAbort ||
+		preview.PolicyAbortMutationID != "mut-missing-node" ||
+		preview.PolicyAbortOperationType != "UpdateNode" ||
+		preview.PolicyAbortStatus != replayAuthoritativePolicyStatusConflict {
+		t.Fatalf("unexpected policy-abort preview: %+v", preview)
+	}
+	assertReplayPolicyReasons(t, preview.PolicyAbortReasons, []string{"missing_node"})
+	if preview.ApplicationStatusCounts[SyncMutationReplayApplicationStatusConflict] != 1 {
+		t.Fatalf("expected one conflict status in preview counts, got %+v", preview.ApplicationStatusCounts)
+	}
+
+	after, err := docStore.GetDocument(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("load document after preview: %v", err)
+	}
+	if after.Version != before.Version || string(after.Body) != string(before.Body) {
+		t.Fatalf("expected authoritative preview to preserve canonical document, before=%+v after=%+v", before, after)
+	}
+	afterReceipts := loadAllReplayReceiptRowsForTest(t, docStore, "owner", "postbaby-web")
+	assertReplayReceiptRowsEqual(t, beforeReceipts, afterReceipts)
+	afterApplications := mustListReplayApplications(t, docStore, "owner", "postbaby-web")
+	assertReplayApplicationsEqual(t, beforeApplications, afterApplications)
+}
+
+func TestEvaluateSyncMutationReplayAuthoritativePreviewUnavailableForStaleObservation(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name             string
+		mutate           func(t *testing.T, docStore *Store)
+		expectedCompare  string
+		expectedRecovery string
+		expectedReason   string
+	}{
+		{
+			name: "canonical",
+			mutate: func(t *testing.T, docStore *Store) {
+				currentDoc, err := docStore.GetDocument(context.Background(), "owner", "postbaby-web")
+				if err != nil {
+					t.Fatalf("load current document: %v", err)
+				}
+				expectedVersion := currentDoc.Version
+				if _, err := docStore.PutDocument(context.Background(), "owner", "postbaby-web", buildReplaySnapshotBody(t, []replayTab{
+					{
+						ID:          "tab-1",
+						Name:        "Changed",
+						Items:       []replayItem{},
+						ColorIndex:  0,
+						GridSetting: "none",
+						Edges:       []replayEdge{},
+					},
+				}), &expectedVersion); err != nil {
+					t.Fatalf("mutate canonical document: %v", err)
+				}
+			},
+			expectedCompare:  SyncMutationReplayCompareAndApplyStatusStaleCanonicalDocument,
+			expectedRecovery: SyncMutationReplayRecoveryStatusStaleObservationRequiresRedryrun,
+			expectedReason:   "canonical_document_version_changed",
+		},
+		{
+			name: "receipt_set",
+			mutate: func(t *testing.T, docStore *Store) {
+				insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:01Z", "2026-06-01T12:00:01Z",
+					buildReplayReceiptInput("mut-extra", "Node", "item-2", "CreateNode", `{"tabId":"tab-1","name":"Second","position":{"top":"30px","left":"40px"}}`),
+				)
+			},
+			expectedCompare:  SyncMutationReplayCompareAndApplyStatusStaleReceiptSet,
+			expectedRecovery: SyncMutationReplayRecoveryStatusStaleObservationRequiresRedryrun,
+			expectedReason:   "receipt_count_changed",
+		},
+	} {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			docStore := openTestStore(t)
+			ctx := context.Background()
+			seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+				{
+					ID:          "tab-1",
+					Name:        "Main",
+					Items:       []replayItem{},
+					ColorIndex:  0,
+					GridSetting: "none",
+					Edges:       []replayEdge{},
+				},
+			})
+			insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+				buildReplayReceiptInput("mut-create", "Node", "item-1", "CreateNode", `{"tabId":"tab-1","name":"First","position":{"top":"10px","left":"20px"}}`),
+			)
+			observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+			if err != nil {
+				t.Fatalf("record observation: %v", err)
+			}
+			testCase.mutate(t, docStore)
+
+			preview, err := docStore.EvaluateSyncMutationReplayAuthoritativePreview(ctx, "owner", "postbaby-web", observation.ID)
+			if err != nil {
+				t.Fatalf("evaluate authoritative preview: %v", err)
+			}
+			if preview.Status != SyncMutationReplayAuthoritativePreviewStatusUnavailablePreconditions ||
+				preview.CompareAndApplyStatus != testCase.expectedCompare ||
+				preview.RecoveryStatus != testCase.expectedRecovery {
+				t.Fatalf("unexpected unavailable preview: %+v", preview)
+			}
+			if !containsStringValue(preview.Reasons, testCase.expectedReason) {
+				t.Fatalf("expected reason %q in %+v", testCase.expectedReason, preview.Reasons)
+			}
+			if preview.AuthoritativePreviewHash != "" || len(preview.MutationResults) != 0 {
+				t.Fatalf("expected unavailable preview to avoid authoritative staging, got %+v", preview)
+			}
+		})
+	}
+}
+
 func TestEvaluateSyncMutationReplayAuthoritativePolicyCreateNodeOverItemLimit(t *testing.T) {
 	t.Parallel()
 
@@ -2002,25 +2295,25 @@ func TestEvaluateSyncMutationReplayAuthoritativeReadinessBlockedByContractGaps(t
 		t.Fatalf("expected authoritative replay readiness to stay blocked, got %+v", readiness)
 	}
 	assertReplayReadinessBlockers(t, readiness.Blockers, []string{
-		"authoritative_replay_not_live",
+		"authoritative_replay_not_product_path",
 	})
 	assertReplayAreaStatus(t, readiness.Areas, "duplicate_endpoint_edge_policy", replayAuthoritativeStatusReady)
 	assertReplayAreaStatus(t, readiness.Areas, "missing_tab_policy", replayAuthoritativeStatusReady)
-	assertReplayAreaStatus(t, readiness.Areas, "document_version_gating", replayAuthoritativeStatusPartiallyReady)
+	assertReplayAreaStatus(t, readiness.Areas, "document_version_gating", replayAuthoritativeStatusReady)
 	assertReplayAreaStatus(t, readiness.Areas, "replay_ordering", replayAuthoritativeStatusPartiallyReady)
-	assertReplayAreaStatus(t, readiness.Areas, "transaction_boundary", replayAuthoritativeStatusPartiallyReady)
-	assertReplayAreaStatus(t, readiness.Areas, "replay_progress_state", replayAuthoritativeStatusPartiallyReady)
+	assertReplayAreaStatus(t, readiness.Areas, "transaction_boundary", replayAuthoritativeStatusReady)
+	assertReplayAreaStatus(t, readiness.Areas, "replay_progress_state", replayAuthoritativeStatusReady)
 	assertReplayAreaStatus(t, readiness.Areas, "rollback_behavior", replayAuthoritativeStatusPartiallyReady)
-	assertReplayAreaStatus(t, readiness.Areas, "per_tab_item_limit", replayAuthoritativeStatusPartiallyReady)
-	assertReplayAreaStatus(t, readiness.Areas, "per_tab_edge_limit", replayAuthoritativeStatusPartiallyReady)
-	assertReplayAreaStatus(t, readiness.Areas, "text_length_limit_behavior", replayAuthoritativeStatusPartiallyReady)
-	assertReplayAreaStatus(t, readiness.Areas, "shape_specific_sizing_behavior", replayAuthoritativeStatusPartiallyReady)
-	assertReplayAreaStatus(t, readiness.Areas, "duplicate_item_id_policy", replayAuthoritativeStatusPartiallyReady)
-	assertReplayAreaStatus(t, readiness.Areas, "duplicate_edge_id_policy", replayAuthoritativeStatusPartiallyReady)
-	assertReplayAreaStatus(t, readiness.Areas, "server_side_validation_requirements", replayAuthoritativeStatusPartiallyReady)
-	assertReplayAreaStatus(t, readiness.Areas, "receipt_status_model", replayAuthoritativeStatusPartiallyReady)
+	assertReplayAreaStatus(t, readiness.Areas, "per_tab_item_limit", replayAuthoritativeStatusReady)
+	assertReplayAreaStatus(t, readiness.Areas, "per_tab_edge_limit", replayAuthoritativeStatusReady)
+	assertReplayAreaStatus(t, readiness.Areas, "text_length_limit_behavior", replayAuthoritativeStatusReady)
+	assertReplayAreaStatus(t, readiness.Areas, "shape_specific_sizing_behavior", replayAuthoritativeStatusReady)
+	assertReplayAreaStatus(t, readiness.Areas, "duplicate_item_id_policy", replayAuthoritativeStatusReady)
+	assertReplayAreaStatus(t, readiness.Areas, "duplicate_edge_id_policy", replayAuthoritativeStatusReady)
+	assertReplayAreaStatus(t, readiness.Areas, "server_side_validation_requirements", replayAuthoritativeStatusReady)
+	assertReplayAreaStatus(t, readiness.Areas, "receipt_status_model", replayAuthoritativeStatusReady)
 	assertReplayAreaStatus(t, readiness.Areas, "conflict_behavior", replayAuthoritativeStatusPartiallyReady)
-	assertReplayAreaStatus(t, readiness.Areas, "applied_receipt_tracking", replayAuthoritativeStatusPartiallyReady)
+	assertReplayAreaStatus(t, readiness.Areas, "applied_receipt_tracking", replayAuthoritativeStatusReady)
 	assertReplayAreaStatus(t, readiness.Areas, "delta_pull", replayAuthoritativeStatusIntentionallyDeferred)
 }
 
