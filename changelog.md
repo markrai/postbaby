@@ -1,3 +1,6 @@
+# v2.2.6 (6/12/2026)
+- Persisted note text is no longer selectable; text selection is limited to edit mode.
+
 # v2.2.5 (6/11/2026)
 - Note text wrapped in matching backticks renders as inline code with Comic Mono.
 - Comic Mono font by [dtinth](https://github.com/dtinth/comic-mono-font) (MIT), fork of Comic Shanns by Shannon Miwa.

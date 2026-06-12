@@ -904,6 +904,10 @@ body {
     width: -webkit-max-content;
     width: -moz-max-content;
     width: max-content;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
   }
 
 .grid-item[data-shape="square"]:not(.editing),
@@ -1132,6 +1136,8 @@ body {
     overflow: auto; /* Scrollbar for overflow */
     background-color: var(--textarea-bg);
     color: var(--text-primary);
+    user-select: text;
+    -webkit-user-select: text;
 }
 
 
