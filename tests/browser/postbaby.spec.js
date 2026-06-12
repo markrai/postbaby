@@ -9300,6 +9300,56 @@ test.describe('Mocked sync startup reconciliation', () => {
     expect(debugState.deltaMetadataUnavailableForSession).toBe(false);
   });
 
+  test('cloud delta capability probe does not request the delta metadata endpoint', async ({ page }) => {
+    const localSnapshot = addDurableCloudSyncMetadata(
+      buildLocalSnapshot('Cloud Delta Gate Note', { syncVersion: 6 }),
+      {
+        pending: false,
+        revision: 6,
+        lastCloudUploadedAt: TIMESTAMP
+      }
+    );
+    let deltaRequests = 0;
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableDynamicMockedSync(page, {
+      runtimeOverrides: {
+        deploymentMode: 'cloud',
+        authorityModel: 'subscription_sync',
+        isAuthenticated: true,
+        syncUsable: true,
+        syncPausedReason: '',
+        entitlement: { hostedSync: true, status: 'active' }
+      },
+      getMetaPayload: () => ({ ok: true, exists: true, version: 6, updatedAt: TIMESTAMP }),
+      getDocumentPayload: () => buildServerPayload('Cloud Delta Gate Note', 6),
+      onDelta: async () => {
+        deltaRequests += 1;
+        return {
+          status: 500,
+          body: { ok: false, error: { code: 'unexpected_delta_request', message: 'cloud delta should be gated' } }
+        };
+      }
+    });
+
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Cloud Delta Gate Note');
+    await expect.poll(async () => {
+      const state = await page.evaluate(() => window.postbabyDebugSync());
+      return state.syncState;
+    }).toBe('synced');
+    await page.waitForTimeout(200);
+
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    expect(deltaRequests).toBe(0);
+    expect(debugState.runtimeConfig.deploymentMode).toBe('cloud');
+    expect(debugState.deltaMetadataCheckCount).toBe(0);
+    expect(debugState.deltaMetadataAvailable).toBe(false);
+    expect(debugState.deltaMetadataLastCheckedAt).toBeNull();
+  });
+
   test('self-hosted startup probe records debug state without mutating notes, outbox, camera, or applying replay metadata locally', async ({ page }) => {
     const localSnapshot = buildLocalSnapshot('Probe Stable Note', { syncVersion: 6 });
     const requestSequence = [];
@@ -11204,6 +11254,82 @@ test.describe('Mocked sync startup reconciliation', () => {
     expect(outbox.totalCount).toBe(1);
     expect(outbox.serverPendingCount).toBe(0);
     expect(outbox.records[0].status).toBe('serverAcked');
+  });
+
+  test('subscription-paused cloud mutationOutbox stays local and does not POST to the receipt endpoint', async ({ page }) => {
+    const localSnapshot = addDurableCloudSyncMetadata(
+      buildLocalSnapshot('Paused Existing Note', { syncVersion: 6 }),
+      {
+        pending: false,
+        revision: 6,
+        lastCloudUploadedAt: TIMESTAMP
+      }
+    );
+    let saveRequests = 0;
+    let mutationRequests = 0;
+    let deltaRequests = 0;
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableDynamicMockedSync(page, {
+      runtimeOverrides: {
+        deploymentMode: 'cloud',
+        authorityModel: 'subscription_sync',
+        isAuthenticated: true,
+        billingAvailable: true,
+        syncUsable: false,
+        syncPausedReason: 'subscription_inactive',
+        entitlement: { hostedSync: false, status: 'canceled' }
+      },
+      getMetaPayload: () => ({ ok: true, exists: true, version: 6, updatedAt: TIMESTAMP }),
+      getDocumentPayload: () => buildServerPayload('Paused Existing Note', 6),
+      onSave: async () => {
+        saveRequests += 1;
+        return {
+          status: 500,
+          body: { ok: false, error: { code: 'unexpected_save', message: 'sync should be paused' } }
+        };
+      },
+      onMutations: async () => {
+        mutationRequests += 1;
+        return {
+          status: 500,
+          body: { ok: false, error: { code: 'unexpected_receipt', message: 'receipts should be paused' } }
+        };
+      },
+      onDelta: async () => {
+        deltaRequests += 1;
+        return {
+          status: 500,
+          body: { ok: false, error: { code: 'unexpected_delta', message: 'cloud delta should be gated' } }
+        };
+      }
+    });
+
+    await page.goto('/index.html');
+    await expectNoteVisible(page, 'Paused Existing Note');
+    await createNoteAt(page, 'Paused Local Outbox Note', { x: 820, y: 260 });
+
+    await expect.poll(async () => {
+      const outbox = await readMutationOutbox(page);
+      return outbox.pendingCount;
+    }).toBeGreaterThan(0);
+    await page.waitForTimeout(2500);
+
+    const debugState = await page.evaluate(() => window.postbabyDebugSync());
+    const outbox = debugState.mutationOutbox;
+    expect(debugState.runtimeConfig.deploymentMode).toBe('cloud');
+    expect(debugState.runtimeConfig.syncUsable).toBe(false);
+    expect(debugState.isBackgroundSyncActive).toBe(false);
+    expect(outbox.enabled).toBe(true);
+    expect(outbox.pendingCount).toBeGreaterThan(0);
+    expect(outbox.serverPendingCount).toBe(outbox.pendingCount);
+    expect(outbox.serverAckedCount).toBe(0);
+    expect(outbox.records.map((record) => record.operationType)).toEqual(['CreateNode', 'UpdateNode']);
+    expect(saveRequests).toBe(0);
+    expect(mutationRequests).toBe(0);
+    expect(deltaRequests).toBe(0);
   });
 });
 
