@@ -1,3 +1,6 @@
+# v2.2.4 (6/11/2026)
+- New notes shake when Escape is pressed before any text is entered, so empty edit mode is easier to understand.
+
 # v2.2.3 (6/11/2026)
 - Shift-drag or Ctrl-drag a line or arrow into empty canvas creates a new note at the drop point, connects it to the source note, and opens edit mode.
 - Settings toggle to disable mouse wheel vertical pan (trackpad horizontal scroll and Shift+wheel still work).
