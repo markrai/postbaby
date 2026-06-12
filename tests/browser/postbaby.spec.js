@@ -1732,6 +1732,104 @@ async function dragNoteBy(page, note, deltaX, deltaY) {
   await page.mouse.up();
 }
 
+function buildThreeTabSnapshot(options = {}) {
+  return {
+    tabs: JSON.stringify([
+      {
+        id: 'tab-1',
+        name: '1',
+        items: [],
+        colorIndex: 0,
+        gridSetting: 'none',
+        edges: []
+      },
+      {
+        id: 'tab-2',
+        name: '2',
+        items: [],
+        colorIndex: 0,
+        gridSetting: 'none',
+        edges: []
+      },
+      {
+        id: 'tab-3',
+        name: '3',
+        items: [],
+        colorIndex: 0,
+        gridSetting: 'none',
+        edges: []
+      }
+    ]),
+    activeTabId: options.activeTabId || 'tab-1',
+    hasRunBefore: 'true',
+    theme: options.theme || 'light'
+  };
+}
+
+async function readTabBarOrder(page) {
+  return page.evaluate(() => {
+    return Array.from(document.querySelectorAll('#tabBar .tab[data-tab-id]')).map((element) => element.dataset.tabId);
+  });
+}
+
+async function readPersistedTabOrder(page) {
+  const indexedDBState = await readIndexedDBState(page);
+  if (indexedDBState && indexedDBState.snapshot && indexedDBState.snapshot.tabs) {
+    return JSON.parse(indexedDBState.snapshot.tabs).map((tab) => tab.id);
+  }
+
+  return page.evaluate(() => {
+    const rawTabs = localStorage.getItem('tabs');
+    return rawTabs ? JSON.parse(rawTabs).map((tab) => tab.id) : [];
+  });
+}
+
+async function readPersistedTabRecord(page, tabId) {
+  const indexedDBState = await readIndexedDBState(page);
+  const tabsPayload = indexedDBState && indexedDBState.snapshot && indexedDBState.snapshot.tabs
+    ? indexedDBState.snapshot.tabs
+    : await page.evaluate(() => localStorage.getItem('tabs'));
+  const tabs = tabsPayload ? JSON.parse(tabsPayload) : [];
+  return tabs.find((tab) => tab.id === tabId) || null;
+}
+
+async function dragTabBefore(page, sourceTabId, targetTabId) {
+  const sourceTab = page.locator(`.tab[data-tab-id="${sourceTabId}"]`);
+  const targetTab = page.locator(`.tab[data-tab-id="${targetTabId}"]`);
+  await sourceTab.scrollIntoViewIfNeeded();
+  await targetTab.scrollIntoViewIfNeeded();
+  const sourceBox = await sourceTab.boundingBox();
+  const targetBox = await targetTab.boundingBox();
+  if (!sourceBox || !targetBox) {
+    throw new Error('Tab bounding boxes were not available for drag.');
+  }
+
+  const startX = sourceBox.x + (sourceBox.width / 2);
+  const startY = sourceBox.y + (sourceBox.height / 2);
+  const endX = targetBox.x + Math.min(8, targetBox.width / 4);
+  const endY = targetBox.y + (targetBox.height / 2);
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(endX, endY, { steps: 16 });
+  await page.mouse.up();
+}
+
+async function clickTabWithoutDrag(page, tabId) {
+  const tab = page.locator(`.tab[data-tab-id="${tabId}"]`);
+  await tab.scrollIntoViewIfNeeded();
+  const box = await tab.boundingBox();
+  if (!box) {
+    throw new Error('Tab bounding box was not available.');
+  }
+
+  const x = box.x + (box.width / 2);
+  const y = box.y + (box.height / 2);
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.waitForTimeout(350);
+}
+
 async function beginDragGesture(page, note, deltaX, deltaY) {
   await note.scrollIntoViewIfNeeded();
   const box = await note.boundingBox();
@@ -7560,6 +7658,64 @@ test.describe('Static behavior', () => {
     await expectNoteVisible(page, 'Tab One Note');
     await expect(note).not.toHaveClass(/selected/);
     await expect.poll(() => readSelectedNoteIds(page)).toEqual([]);
+  });
+
+  test('drag reorders tabs in the bar and persists order after reload', async ({ page }) => {
+    const localSnapshot = buildThreeTabSnapshot();
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    await expect.poll(async () => readTabBarOrder(page)).toEqual(['tab-1', 'tab-2', 'tab-3']);
+    await dragTabBefore(page, 'tab-2', 'tab-1');
+    await expect.poll(async () => readTabBarOrder(page)).toEqual(['tab-2', 'tab-1', 'tab-3']);
+    await expect.poll(async () => readPersistedTabOrder(page)).toEqual(['tab-2', 'tab-1', 'tab-3']);
+
+    await page.reload();
+    await expect.poll(async () => readTabBarOrder(page)).toEqual(['tab-2', 'tab-1', 'tab-3']);
+    await expect.poll(async () => readPersistedTabOrder(page)).toEqual(['tab-2', 'tab-1', 'tab-3']);
+  });
+
+  test('tab click without drag still switches the active tab', async ({ page }) => {
+    const localSnapshot = buildThreeTabSnapshot();
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    await expect(page.locator('.tab-pane.active')).toHaveAttribute('data-tab-id', 'tab-1');
+    await clickTabWithoutDrag(page, 'tab-2');
+    await expect(page.locator('.tab-pane.active')).toHaveAttribute('data-tab-id', 'tab-2');
+  });
+
+  test('dragging an inactive tab does not activate it or change its color', async ({ page }) => {
+    const localSnapshot = buildThreeTabSnapshot();
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const tabTwoBefore = await readPersistedTabRecord(page, 'tab-2');
+    await dragTabBefore(page, 'tab-2', 'tab-1');
+    await expect(page.locator('.tab-pane.active')).toHaveAttribute('data-tab-id', 'tab-1');
+    const tabTwoAfter = await readPersistedTabRecord(page, 'tab-2');
+    expect(tabTwoAfter.colorIndex).toBe(tabTwoBefore.colorIndex);
+    await expect.poll(async () => readTabBarOrder(page)).toEqual(['tab-2', 'tab-1', 'tab-3']);
+  });
+
+  test('keyboard tab shortcuts follow the reordered tab bar', async ({ page }) => {
+    const localSnapshot = buildThreeTabSnapshot();
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    await dragTabBefore(page, 'tab-2', 'tab-1');
+    await expect.poll(async () => readTabBarOrder(page)).toEqual(['tab-2', 'tab-1', 'tab-3']);
+
+    await page.keyboard.press('2');
+    await expect(page.locator('.tab-pane.active')).toHaveAttribute('data-tab-id', 'tab-1');
   });
 
   test('Control-click no longer toggles selection and still behaves like a normal note click', async ({ page }) => {

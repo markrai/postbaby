@@ -385,6 +385,20 @@
             border-radius 0.5s ease;
 }
 
+.tab:not(.add-tab) {
+    cursor: grab;
+}
+
+.tab.tab-dragging {
+    cursor: grabbing;
+    z-index: 3;
+    opacity: 0.85;
+}
+
+#tabBar.tab-bar-drag-active .tab {
+    transition: none;
+}
+
 .tab.active {
     opacity: 1;
     border-top: 2px dotted var(--border-tab-active);
