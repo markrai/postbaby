@@ -39,7 +39,8 @@
       "swot": "SWOT 分析",
       "calendar": "日历",
       "nowlater": "现在与稍后",
-      "week": "周"
+      "week": "周",
+      "graphpaper": "方格纸"
     },
     "recovery": {
       "title": "恢复（仅限开发）",
@@ -123,7 +124,8 @@
       },
       "selectPanMode": {
         "action": "选择/平移模式：",
-        "gesture": "手形/选择切换按钮（右上角）"
+        "keys": "s",
+        "gesture": "或手形/选择切换按钮（右上角）"
       },
       "emptyCanvasDrag": {
         "action": "在空白画布上拖动：",
@@ -139,7 +141,7 @@
       },
       "panCanvas": {
         "action": "平移画布：",
-        "gesture": "鼠标滚轮、触控板滚动、shift + 滚轮、中键拖动，或空格 + 拖动"
+        "gesture": "方向键、鼠标滚轮、触控板滚动、shift + 滚轮、中键拖动，或空格 + 拖动"
       },
       "zoomCanvas": {
         "action": "缩放画布：",

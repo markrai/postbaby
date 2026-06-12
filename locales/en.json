@@ -39,7 +39,8 @@
       "swot": "SWOT Analysis",
       "calendar": "Calendar",
       "nowlater": "Now & Later",
-      "week": "Week"
+      "week": "Week",
+      "graphpaper": "Graph Paper"
     },
     "recovery": {
       "title": "Recovery (Development Only)",
@@ -123,7 +124,8 @@
       },
       "selectPanMode": {
         "action": "select / pan mode:",
-        "gesture": "hand/select toggle (top-right)"
+        "keys": "s",
+        "gesture": "or hand/select toggle (top-right)"
       },
       "emptyCanvasDrag": {
         "action": "empty-canvas drag:",
@@ -139,7 +141,7 @@
       },
       "panCanvas": {
         "action": "pan canvas:",
-        "gesture": "mouse wheel, trackpad scroll, shift + wheel, middle-drag, or space + drag"
+        "gesture": "arrow keys, mouse wheel, trackpad scroll, shift + wheel, middle-drag, or space + drag"
       },
       "zoomCanvas": {
         "action": "zoom canvas:",

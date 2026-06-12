@@ -1,36 +1,41 @@
 // sw.js
 
-const PUBLIC_JS_REVISION = '4db929b0541e';
+const PUBLIC_JS_REVISION = '42360d5d5dd2';
 const CACHE_NAME = 'postbaby-cache-v8-' + PUBLIC_JS_REVISION;
+
+function assetUrl(path) {
+  return `${path}?v=${PUBLIC_JS_REVISION}`;
+}
+
 const urlsToCache = [
-  '/favicon.ico',
-  '/manifest.json',
-  '/css/theme.css',
-  '/css/style.css',
-  '/css/grids.css',
-  '/css/mobile.css',
-  '/css/calendar.css',
-  '/css/ios.css',
-  '/img/logotexttransparent.png',
-  '/img/icon-192x192.png',
-  '/img/icon-512x512.png',
-  '/fonts/kalam.ttf',
-  '/fonts/comfortaa.ttf',
-  '/fonts/cherrybombone.ttf',
-  '/js/version.js',
-  '/js/utils.js',
-  '/js/strings.js',
-  '/js/indexeddb-storage.js',
-  '/js/storage-adapter.js',
-  '/js/persistence.js',
-  '/js/selectors.js',
-  '/js/modal.js',
-  '/js/script.js',
-  // Add any other assets you want to cache
+  assetUrl('/favicon.ico'),
+  assetUrl('/manifest.json'),
+  assetUrl('/css/theme.css'),
+  assetUrl('/css/style.css'),
+  assetUrl('/css/grids.css'),
+  assetUrl('/css/mobile.css'),
+  assetUrl('/css/calendar.css'),
+  assetUrl('/css/ios.css'),
+  assetUrl('/img/logotexttransparent.png'),
+  assetUrl('/img/icon-192x192.png'),
+  assetUrl('/img/icon-512x512.png'),
+  assetUrl('/fonts/kalam.ttf'),
+  assetUrl('/fonts/comfortaa.ttf'),
+  assetUrl('/fonts/cherrybombone.ttf'),
+  assetUrl('/js/version.js'),
+  assetUrl('/js/utils.js'),
+  assetUrl('/js/strings.js'),
+  assetUrl('/js/indexeddb-storage.js'),
+  assetUrl('/js/storage-adapter.js'),
+  assetUrl('/js/persistence.js'),
+  assetUrl('/js/selectors.js'),
+  assetUrl('/js/modal.js'),
+  assetUrl('/js/script.js')
 ];
 
 // Install event - caching assets
 self.addEventListener('install', (event) => {
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => {
@@ -106,6 +111,6 @@ self.addEventListener('activate', (event) => {
           }
         })
       );
-    })
+    }).then(() => self.clients.claim())
   );
 });

@@ -5044,6 +5044,40 @@ test.describe('Static behavior', () => {
     expect(await readItemPositionsById(page, ['wheel-pan-note'])).toEqual(beforePositions);
   });
 
+  test('arrow keys pan the camera without mutating item positions or firing while editing', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Arrow Pan Note', {
+        itemId: 'arrow-pan-note',
+        position: { top: '400px', left: '480px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const beforeCamera = await readCamera(page);
+    const beforePositions = await readItemPositionsById(page, ['arrow-pan-note']);
+
+    await page.keyboard.press('ArrowRight');
+    const afterRightCamera = await readCamera(page);
+    expect(afterRightCamera.x).toBeGreaterThan(beforeCamera.x);
+    expect(afterRightCamera.y).toBeCloseTo(beforeCamera.y, 3);
+
+    await page.keyboard.press('ArrowDown');
+    const afterDownCamera = await readCamera(page);
+    expect(afterDownCamera.x).toBeCloseTo(afterRightCamera.x, 3);
+    expect(afterDownCamera.y).toBeGreaterThan(afterRightCamera.y);
+    expect(await readItemPositionsById(page, ['arrow-pan-note'])).toEqual(beforePositions);
+
+    const note = page.locator('.grid-item[data-id="arrow-pan-note"]');
+    await note.dblclick();
+    await expect(page.locator('textarea.edit-textarea')).toHaveCount(1);
+    const beforeEditArrowCamera = await readCamera(page);
+    await page.keyboard.press('ArrowLeft');
+    expect(await readCamera(page)).toEqual(beforeEditArrowCamera);
+  });
+
   test('wheel over edit textareas, settings modals, and top-right chrome does not pan or zoom the camera', async ({ page }) => {
     const localSnapshot = buildLocalSnapshotWithItems([
       buildNoteItem('Protected Wheel Note', {
@@ -5229,6 +5263,51 @@ test.describe('Static behavior', () => {
     expect(stacking.noteZ).toBe('2');
   });
 
+  test('graph paper grid applies a square underlay pattern without week time chrome', async ({ page }) => {
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildLocalSnapshot('Graph Paper Seed'));
+    await page.goto('/index.html');
+
+    await openSettingsModal(page);
+    await page.locator('#useGrids').selectOption('week');
+    await page.locator('.close-settings').click();
+    await expect(page.locator('#gridLines-week')).toBeVisible();
+    await expect(page.locator('#gridTimeLabels-week')).toBeVisible();
+
+    await openSettingsModal(page);
+    await page.locator('#useGrids').selectOption('graphpaper');
+    await page.locator('.close-settings').click();
+
+    const gridState = await page.evaluate(() => {
+      const gridUnderlay = document.getElementById('gridUnderlay');
+      if (!gridUnderlay) {
+        return null;
+      }
+      const style = window.getComputedStyle(gridUnderlay);
+      return {
+        className: gridUnderlay.className,
+        backgroundImage: style.backgroundImage,
+        backgroundRepeat: style.backgroundRepeat,
+        backgroundSize: style.backgroundSize
+      };
+    });
+
+    expect(gridState).not.toBeNull();
+    expect(gridState.className).toContain('grid-graphpaper');
+    expect(gridState.className).not.toContain('grid-week');
+    expect(gridState.backgroundImage).toContain('linear-gradient');
+    expect(gridState.backgroundRepeat).toBe('repeat');
+    expect(gridState.backgroundSize).toBe('auto');
+    await expect(page.locator('.grid-labels[style*="display: grid"]')).toHaveCount(0);
+    await expect(page.locator('#gridLines-week')).toBeHidden();
+    await expect(page.locator('#gridTimeLabels-week')).toBeHidden();
+    await expect(page.locator('.current-time-line')).toHaveCount(0);
+    await expect(page.locator('.week-hour-line')).toHaveCount(0);
+
+    const tabsSnapshot = await readTabsSnapshot(page);
+    expect(tabsSnapshot[0].gridSetting).toBe('graphpaper');
+  });
+
   test('top-right hand toggle persists browser-locally and empty-canvas drag pans only in hand mode', async ({ page }) => {
     const localSnapshot = buildLocalSnapshotWithItems([
       buildNoteItem('Mode Toggle Note', {
@@ -5295,6 +5374,42 @@ test.describe('Static behavior', () => {
     await page.click('#canvasModeToggleButton');
     expect(await readCanvasMode(page)).toBe('select');
     expect(await page.evaluate(() => window.localStorage.getItem('postbabyCanvasMode'))).toBe('select');
+  });
+
+  test('s key toggles select and hand pan mode without entering edit mode', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('S Key Mode Note', {
+        itemId: 's-key-mode-note',
+        position: { top: '200px', left: '280px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    expect(await readCanvasMode(page)).toBe('select');
+    const selectToggleState = await readCanvasModeToggleState(page);
+    expect(selectToggleState.pressed).toBe('false');
+    expect(selectToggleState.label).toContain('Canvas mode: Select');
+
+    await page.keyboard.press('s');
+    expect(await readCanvasMode(page)).toBe('pan');
+    const panToggleState = await readCanvasModeToggleState(page);
+    expect(panToggleState.pressed).toBe('true');
+    expect(panToggleState.label).toContain('Canvas mode: Hand pan');
+    expect(await page.evaluate(() => window.localStorage.getItem('postbabyCanvasMode'))).toBe('pan');
+
+    await page.keyboard.press('s');
+    expect(await readCanvasMode(page)).toBe('select');
+    expect(await page.evaluate(() => window.localStorage.getItem('postbabyCanvasMode'))).toBe('select');
+
+    const note = page.locator('.grid-item[data-id="s-key-mode-note"]');
+    await note.dblclick();
+    await expect(page.locator('textarea.edit-textarea')).toHaveCount(1);
+    await page.keyboard.press('s');
+    await expect(page.locator('textarea.edit-textarea')).toHaveCount(1);
+    expect(await readCanvasMode(page)).toBe('select');
   });
 
   test('two-pointer touch pinch pans and zooms the camera without mutating item positions and cleans up on cancel', async ({ page }) => {

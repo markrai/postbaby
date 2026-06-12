@@ -1,3 +1,9 @@
+# v2.2.2 (6/11/2026)
+- Graph Paper grid added: repeating square-cell overlay for freeform layout (per-tab, like other grids).
+- Shell asset cache busting: CSS/JS URLs and the service worker now use a deploy revision so grid and shortcut fixes load without a hard refresh.
+- Press `s` to toggle select and hand pan canvas mode (same as the top-right hand/select button).
+- Arrow keys pan the canvas camera (same pan math as wheel and trackpad scrolling).
+
 # v2.2.1 (6/9/2026)
 - Importance grid added: four-column layout with Low, Medium, High, and Critical categories.
 

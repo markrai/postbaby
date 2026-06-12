@@ -39,7 +39,8 @@
       "swot": "Analyse SWOT",
       "calendar": "Calendrier",
       "nowlater": "Maintenant et plus tard",
-      "week": "Semaine"
+      "week": "Semaine",
+      "graphpaper": "Papier quadrillé"
     },
     "recovery": {
       "title": "Récupération (réservée au développement)",
@@ -123,7 +124,8 @@
       },
       "selectPanMode": {
         "action": "mode sélection / déplacement :",
-        "gesture": "sélecteur main/sélection (en haut à droite)"
+        "keys": "s",
+        "gesture": "ou sélecteur main/sélection (en haut à droite)"
       },
       "emptyCanvasDrag": {
         "action": "glisser sur le canevas vide :",
@@ -139,7 +141,7 @@
       },
       "panCanvas": {
         "action": "déplacer le canevas :",
-        "gesture": "molette de souris, défilement du trackpad, shift + molette, glisser avec le bouton central ou espace + glisser"
+        "gesture": "flèches directionnelles, molette de souris, défilement du trackpad, shift + molette, glisser avec le bouton central ou espace + glisser"
       },
       "zoomCanvas": {
         "action": "zoomer sur le canevas :",

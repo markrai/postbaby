@@ -39,7 +39,8 @@
       "swot": "SWOT-Analyse",
       "calendar": "Kalender",
       "nowlater": "Jetzt & später",
-      "week": "Woche"
+      "week": "Woche",
+      "graphpaper": "Millimeterpapier"
     },
     "recovery": {
       "title": "Wiederherstellung (nur für Entwicklung)",
@@ -123,7 +124,8 @@
       },
       "selectPanMode": {
         "action": "Auswahl-/Handmodus:",
-        "gesture": "Hand-/Auswahl-Umschalter (oben rechts)"
+        "keys": "s",
+        "gesture": "oder Hand-/Auswahl-Umschalter (oben rechts)"
       },
       "emptyCanvasDrag": {
         "action": "Ziehen auf leerer Leinwand:",
@@ -139,7 +141,7 @@
       },
       "panCanvas": {
         "action": "Leinwand verschieben:",
-        "gesture": "Mausrad, Trackpad-Scrollen, Umschalt + Mausrad, Ziehen mit mittlerer Maustaste oder Leertaste + Ziehen"
+        "gesture": "Pfeiltasten, Mausrad, Trackpad-Scrollen, Umschalt + Mausrad, Ziehen mit mittlerer Maustaste oder Leertaste + Ziehen"
       },
       "zoomCanvas": {
         "action": "Leinwand zoomen:",
