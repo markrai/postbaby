@@ -1,6 +1,6 @@
 // sw.js
 
-const PUBLIC_JS_REVISION = '11ea6596eeb7';
+const PUBLIC_JS_REVISION = '6972656abe04';
 const CACHE_NAME = 'postbaby-cache-v8-' + PUBLIC_JS_REVISION;
 
 function assetUrl(path) {
@@ -22,6 +22,7 @@ const urlsToCache = [
   assetUrl('/fonts/kalam.ttf'),
   assetUrl('/fonts/comfortaa.ttf'),
   assetUrl('/fonts/cherrybombone.ttf'),
+  assetUrl('/fonts/comicmono.ttf'),
   assetUrl('/js/version.js'),
   assetUrl('/js/utils.js'),
   assetUrl('/js/strings.js'),

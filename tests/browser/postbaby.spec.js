@@ -8146,6 +8146,29 @@ test.describe('Static behavior', () => {
     expect(JSON.parse(indexedDBState.snapshot.tabs)[0].items[0].name).toBe('Blur Saved');
   });
 
+  test('renders backtick-wrapped note text as inline code with Comic Mono', async ({ page }) => {
+    const noteText = 'Use `npm run dev` today';
+    const localSnapshot = buildLocalSnapshot(noteText);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const note = page.locator('.grid-item[data-id="item-1"]');
+    await expect(note.locator('.grid-item-text')).toContainText('Use npm run dev today');
+    await expect(note.locator('.grid-item-inline-code')).toHaveCount(1);
+    await expect(note.locator('.grid-item-inline-code')).toHaveText('npm run dev');
+
+    const fontFamily = await note.locator('.grid-item-inline-code').evaluate((element) => {
+      return window.getComputedStyle(element).fontFamily;
+    });
+    expect(fontFamily.toLowerCase()).toContain('comic mono');
+
+    await note.dblclick();
+    const textarea = page.locator('textarea.edit-textarea');
+    await expect(textarea).toHaveValue(noteText);
+  });
+
   test('keeps Enter as newline and commits multiline text on Escape', async ({ page }) => {
     const localSnapshot = buildLocalSnapshot('Line 0');
 

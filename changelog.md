@@ -1,3 +1,7 @@
+# v2.2.5 (6/11/2026)
+- Note text wrapped in matching backticks renders as inline code with Comic Mono.
+- Comic Mono font by [dtinth](https://github.com/dtinth/comic-mono-font) (MIT), fork of Comic Shanns by Shannon Miwa.
+
 # v2.2.4 (6/11/2026)
 - New notes shake when Escape is pressed before any text is entered, so empty edit mode is easier to understand.
 

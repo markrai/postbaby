@@ -8,6 +8,12 @@
     src: url('../fonts/kalam.ttf') format('truetype');
 }
 
+@font-face {
+    font-family: 'Comic Mono';
+    src: url('../fonts/comicmono.ttf') format('truetype');
+    font-display: swap;
+}
+
 
 
 *,
@@ -1517,6 +1523,17 @@ h1 {
     display: block;
     width: 100%;
     white-space: inherit;
+}
+
+.grid-item-inline-code {
+    font-family: 'Comic Mono', Consolas, "Courier New", monospace;
+    background-color: color-mix(in srgb, #000000 10%, transparent);
+    border-radius: 3px;
+    padding: 0 0.2em;
+}
+
+[data-theme="dark"] .grid-item-inline-code {
+    background-color: color-mix(in srgb, #000000 22%, transparent);
 }
 
 /* Toast Styles */

@@ -1,7 +1,7 @@
 /** Single source of truth for the app build version (shown in the UI). */
-const POSTBABY_VERSION = '2.2.4';
+const POSTBABY_VERSION = '2.2.5';
 /** Cache-bust token for shell assets; updated by npm run build:public-js. */
-const POSTBABY_ASSET_REVISION = '11ea6596eeb7';
+const POSTBABY_ASSET_REVISION = '6972656abe04';
 
 window.POSTBABY_VERSION = POSTBABY_VERSION;
 window.POSTBABY_ASSET_REVISION = POSTBABY_ASSET_REVISION;
