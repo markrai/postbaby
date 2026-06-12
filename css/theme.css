@@ -23,6 +23,9 @@
     --bg-tab-add-hover: #c0c0c0;
     --border-tab-active: #ffffff11;
     --border-tab-active-bottom: #000000;
+    --border-tab-drag-slot: color-mix(in srgb, #2a7de1 58%, var(--border-tab-bar));
+    --bg-tab-drag-slot-overlay: rgba(255, 255, 255, 0.34);
+    --shadow-tab-drag-ghost: 0 14px 30px rgba(0, 0, 0, 0.18), 0 4px 12px rgba(0, 0, 0, 0.10);
 
     /* Modals */
     --bg-modal-overlay: rgba(0, 0, 0, 0.5);
@@ -100,6 +103,9 @@
     --bg-tab-add-hover: #45463f;
     --border-tab-active: #ffffff22;
     --border-tab-active-bottom: #e6e6e1;
+    --border-tab-drag-slot: color-mix(in srgb, #6aa6ff 62%, var(--border-tab-bar));
+    --bg-tab-drag-slot-overlay: rgba(0, 0, 0, 0.24);
+    --shadow-tab-drag-ghost: 0 16px 36px rgba(0, 0, 0, 0.52), 0 6px 16px rgba(0, 0, 0, 0.36);
 
     /* Modals */
     --bg-modal-overlay: rgba(0, 0, 0, 0.7);

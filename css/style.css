@@ -391,12 +391,64 @@
 
 .tab.tab-dragging {
     cursor: grabbing;
+}
+
+.tab.tab-drag-placeholder {
+    cursor: grabbing;
     z-index: 3;
-    opacity: 0.85;
+    opacity: 0.62;
+    color: transparent;
+    text-shadow: none;
+    filter: saturate(0.55) brightness(1.03);
+    outline: 2px dashed var(--border-tab-drag-slot);
+    outline-offset: -3px;
+    box-shadow:
+            inset 0 0 0 1px var(--border-tab-drag-slot),
+            inset 0 0 0 999px var(--bg-tab-drag-slot-overlay);
+}
+
+.tab.tab-drag-placeholder.active {
+    opacity: 0.62;
+}
+
+.tab.tab-drag-ghost {
+    position: fixed;
+    top: 0;
+    left: 0;
+    margin: 0;
+    opacity: 0.96;
+    z-index: 30;
+    pointer-events: none;
+    cursor: grabbing;
+    box-shadow: var(--shadow-tab-drag-ghost);
+    transform-origin: top left;
+    will-change: transform;
+    filter: saturate(1.04);
+    transition:
+            opacity 0.12s ease,
+            box-shadow 0.12s ease,
+            filter 0.12s ease;
+}
+
+.tab.tab-drag-ghost.active {
+    opacity: 1;
 }
 
 #tabBar.tab-bar-drag-active .tab {
     transition: none;
+}
+
+#tabBar.tab-bar-drag-active .tab:not(.add-tab):not(.tab-drag-placeholder) {
+    opacity: 0.28;
+    filter: saturate(0.86);
+}
+
+#tabBar.tab-bar-drag-active .tab.active:not(.tab-drag-placeholder) {
+    opacity: 0.72;
+}
+
+#tabBar.tab-bar-drag-active .tab.add-tab {
+    opacity: 0.32;
 }
 
 .tab.active {
@@ -413,6 +465,13 @@
 
 .tab.add-tab:hover {
     background-color: var(--bg-tab-add-hover);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .tab.tab-drag-placeholder,
+    .tab.tab-drag-ghost {
+        transition: none;
+    }
 }
 
 /* Tab Content Styles */

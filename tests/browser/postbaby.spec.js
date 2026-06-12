@@ -1794,6 +1794,11 @@ async function readPersistedTabRecord(page, tabId) {
 }
 
 async function dragTabBefore(page, sourceTabId, targetTabId) {
+  await startTabDragBefore(page, sourceTabId, targetTabId);
+  await page.mouse.up();
+}
+
+async function startTabDragBefore(page, sourceTabId, targetTabId) {
   const sourceTab = page.locator(`.tab[data-tab-id="${sourceTabId}"]`);
   const targetTab = page.locator(`.tab[data-tab-id="${targetTabId}"]`);
   await sourceTab.scrollIntoViewIfNeeded();
@@ -1811,7 +1816,6 @@ async function dragTabBefore(page, sourceTabId, targetTabId) {
   await page.mouse.move(startX, startY);
   await page.mouse.down();
   await page.mouse.move(endX, endY, { steps: 16 });
-  await page.mouse.up();
 }
 
 async function clickTabWithoutDrag(page, tabId) {
@@ -7675,6 +7679,23 @@ test.describe('Static behavior', () => {
     await page.reload();
     await expect.poll(async () => readTabBarOrder(page)).toEqual(['tab-2', 'tab-1', 'tab-3']);
     await expect.poll(async () => readPersistedTabOrder(page)).toEqual(['tab-2', 'tab-1', 'tab-3']);
+  });
+
+  test('tab drag shows a floating ghost while the real tab remains the reorder placeholder', async ({ page }) => {
+    const localSnapshot = buildThreeTabSnapshot();
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    await startTabDragBefore(page, 'tab-2', 'tab-1');
+    await expect(page.locator('body > .tab-drag-ghost')).toHaveCount(1);
+    await expect(page.locator('#tabBar .tab[data-tab-id="tab-2"]')).toHaveClass(/tab-drag-placeholder/);
+    await expect.poll(async () => readTabBarOrder(page)).toEqual(['tab-2', 'tab-1', 'tab-3']);
+
+    await page.mouse.up();
+    await expect(page.locator('body > .tab-drag-ghost')).toHaveCount(0);
+    await expect(page.locator('#tabBar .tab[data-tab-id="tab-2"]')).not.toHaveClass(/tab-drag-placeholder/);
   });
 
   test('tab click without drag still switches the active tab', async ({ page }) => {
