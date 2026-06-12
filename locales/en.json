@@ -24,6 +24,7 @@
       "fullScreen": "Full Screen",
       "corporateMode": "Corporate Mode",
       "hideCameraRemote": "Hide Camera Remote",
+      "disableWheelVerticalPan": "Disable Mouse Wheel Pan",
       "language": "Language",
       "partialLocaleNote": "Some app areas are still English.",
       "useGrids": "Use Grids (Tab Specific)",

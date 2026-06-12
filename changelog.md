@@ -1,3 +1,7 @@
+# v2.2.3 (6/11/2026)
+- Shift-drag or Ctrl-drag a line or arrow into empty canvas creates a new note at the drop point, connects it to the source note, and opens edit mode.
+- Settings toggle to disable mouse wheel vertical pan (trackpad horizontal scroll and Shift+wheel still work).
+
 # v2.2.2 (6/11/2026)
 - Graph Paper grid added: repeating square-cell overlay for freeform layout (per-tab, like other grids).
 - Shell asset cache busting: CSS/JS URLs and the service worker now use a deploy revision so grid and shortcut fixes load without a hard refresh.

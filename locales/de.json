@@ -24,6 +24,7 @@
       "fullScreen": "Vollbild",
       "corporateMode": "Unternehmensmodus",
       "hideCameraRemote": "Ansichtssteuerung ausblenden",
+      "disableWheelVerticalPan": "Mausrad-Verschiebung deaktivieren",
       "language": "Sprache",
       "partialLocaleNote": "Einige Bereiche der App sind noch auf Englisch.",
       "useGrids": "Raster verwenden (pro Tab)",

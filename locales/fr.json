@@ -24,6 +24,7 @@
       "fullScreen": "Plein écran",
       "corporateMode": "Mode entreprise",
       "hideCameraRemote": "Masquer les contrôles de caméra",
+      "disableWheelVerticalPan": "Désactiver le déplacement avec la molette",
       "language": "Langue",
       "partialLocaleNote": "Certaines zones de l'application restent en anglais.",
       "useGrids": "Utiliser des grilles (par onglet)",

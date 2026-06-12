@@ -24,6 +24,7 @@
       "fullScreen": "全屏",
       "corporateMode": "企业模式",
       "hideCameraRemote": "隐藏画布视图控件",
+      "disableWheelVerticalPan": "禁用鼠标滚轮平移",
       "language": "语言",
       "partialLocaleNote": "应用的某些区域仍为英文。",
       "useGrids": "使用网格（按标签页设置）",

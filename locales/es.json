@@ -24,6 +24,7 @@
       "fullScreen": "Pantalla completa",
       "corporateMode": "Modo corporativo",
       "hideCameraRemote": "Ocultar controles de cámara",
+      "disableWheelVerticalPan": "Desactivar desplazamiento con la rueda del ratón",
       "language": "Idioma",
       "partialLocaleNote": "Algunas áreas de la aplicación siguen estando en inglés.",
       "useGrids": "Usar cuadrículas (por pestaña)",

@@ -72,6 +72,7 @@ const SYNC_HASH_STORAGE_KEYS = [
   'theme',
   'disableColorChange',
   'disableNoteResize',
+  'disableWheelVerticalPan',
   'hideCameraControls',
   'corporateMode',
   'defaultColorEnabled',
@@ -220,6 +221,10 @@ function buildLocalSnapshotWithItems(items, options = {}) {
 
   if (options.disableNoteResize !== undefined) {
     snapshot.disableNoteResize = String(options.disableNoteResize);
+  }
+
+  if (options.disableWheelVerticalPan !== undefined) {
+    snapshot.disableWheelVerticalPan = String(options.disableWheelVerticalPan);
   }
 
   if (typeof options.syncVersion === 'number') {
@@ -1969,6 +1974,29 @@ async function drawEdgeBetweenNotes(page, fromNote, toNote, options = {}) {
   await page.mouse.move(fromX, fromY);
   await page.mouse.down();
   await page.mouse.move(toX, toY, { steps: 12 });
+  await page.mouse.up();
+  await page.keyboard.up(modifier);
+}
+
+async function drawEdgeToClientPoint(page, fromNote, clientPoint, options = {}) {
+  await fromNote.scrollIntoViewIfNeeded();
+
+  const fromBox = await fromNote.boundingBox();
+  if (!fromBox) {
+    throw new Error('Edge source was not available.');
+  }
+
+  const fromX = fromBox.x + (fromBox.width / 2);
+  const fromY = fromBox.y + (fromBox.height / 2);
+  const modifier = options.modifier || 'Shift';
+  const steps = Number.isFinite(options.steps) ? options.steps : 12;
+
+  await page.keyboard.down(modifier);
+  await page.mouse.move(fromX, fromY);
+  await page.mouse.down();
+  if (steps > 0) {
+    await page.mouse.move(clientPoint.x, clientPoint.y, { steps });
+  }
   await page.mouse.up();
   await page.keyboard.up(modifier);
 }
@@ -5662,6 +5690,217 @@ test.describe('Static behavior', () => {
     expect(tabsSnapshot[0].edges).toHaveLength(1);
   });
 
+  test('Shift-drag to empty canvas creates a line, a new note in edit mode, and leaves the source untouched', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Line Empty Source', {
+        itemId: 'line-empty-source',
+        position: { top: '120px', left: '140px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const sourceNote = page.locator('.grid-item[data-id="line-empty-source"]');
+    const workspaceBox = await page.locator('#tabContent').boundingBox();
+    if (!workspaceBox) {
+      throw new Error('Workspace viewport bounding box was not available.');
+    }
+
+    const dropPoint = {
+      x: Math.round(workspaceBox.x + workspaceBox.width - 180),
+      y: Math.round(workspaceBox.y + workspaceBox.height - 160)
+    };
+    const beforeSource = await readItemSnapshot(page, 'line-empty-source');
+
+    await drawEdgeToClientPoint(page, sourceNote, dropPoint, { modifier: 'Shift' });
+
+    const tabsSnapshot = await readTabsSnapshot(page);
+    expect(tabsSnapshot[0].items).toHaveLength(2);
+    expect(tabsSnapshot[0].edges).toHaveLength(1);
+    expect(tabsSnapshot[0].edges[0]).toMatchObject({
+      fromItemId: 'line-empty-source',
+      kind: 'line'
+    });
+    expect(tabsSnapshot[0].edges[0].toItemId).not.toBe('line-empty-source');
+
+    const afterSource = await readItemSnapshot(page, 'line-empty-source');
+    expect(afterSource.position).toEqual(beforeSource.position);
+    await expect(page.locator('textarea.edit-textarea')).toHaveCount(1);
+    await expect(page.locator('.grid-selection-marquee')).toHaveCount(0);
+  });
+
+  test('Ctrl-drag to empty canvas creates an arrow edge and opens edit mode on the new note', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Arrow Empty Source', {
+        itemId: 'arrow-empty-source',
+        position: { top: '100px', left: '120px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const sourceNote = page.locator('.grid-item[data-id="arrow-empty-source"]');
+    const workspaceBox = await page.locator('#tabContent').boundingBox();
+    if (!workspaceBox) {
+      throw new Error('Workspace viewport bounding box was not available.');
+    }
+
+    const dropPoint = {
+      x: Math.round(workspaceBox.x + workspaceBox.width - 200),
+      y: Math.round(workspaceBox.y + workspaceBox.height - 140)
+    };
+
+    await drawEdgeToClientPoint(page, sourceNote, dropPoint, { modifier: 'Control' });
+
+    const tabsSnapshot = await readTabsSnapshot(page);
+    expect(tabsSnapshot[0].items).toHaveLength(2);
+    expect(tabsSnapshot[0].edges).toHaveLength(1);
+    expect(tabsSnapshot[0].edges[0]).toMatchObject({
+      fromItemId: 'arrow-empty-source',
+      kind: 'arrow'
+    });
+
+    const edgeLine = page.locator('.edge-line').first();
+    const edgePresentation = await readEdgePresentation(edgeLine);
+    expect(edgePresentation.markerEnd).toMatch(/^url\(#.+-arrow\)$/);
+    await expect(page.locator('textarea.edit-textarea')).toHaveCount(1);
+  });
+
+  test('edge drag to empty canvas without movement does not create a note', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('No Move Source', {
+        itemId: 'no-move-source',
+        position: { top: '200px', left: '220px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const sourceNote = page.locator('.grid-item[data-id="no-move-source"]');
+    const sourceBox = await sourceNote.boundingBox();
+    if (!sourceBox) {
+      throw new Error('Source note bounding box was not available.');
+    }
+
+    const centerPoint = {
+      x: Math.round(sourceBox.x + (sourceBox.width / 2)),
+      y: Math.round(sourceBox.y + (sourceBox.height / 2))
+    };
+
+    await drawEdgeToClientPoint(page, sourceNote, centerPoint, { modifier: 'Shift', steps: 0 });
+
+    const tabsSnapshot = await readTabsSnapshot(page);
+    expect(tabsSnapshot[0].items).toHaveLength(1);
+    expect(tabsSnapshot[0].edges).toHaveLength(0);
+    await expect(page.locator('textarea.edit-textarea')).toHaveCount(0);
+  });
+
+  test('edge drag to empty canvas refuses note creation once the tab reaches the note limit', async ({ page }) => {
+    const items = buildBulkNoteItems(MAX_ITEMS_PER_TAB);
+    const sourceId = items[0].id;
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildLocalSnapshotWithItems(items));
+    await page.goto('/index.html');
+
+    const sourceNote = page.locator(`.grid-item[data-id="${sourceId}"]`);
+    const workspaceBox = await page.locator('#tabContent').boundingBox();
+    if (!workspaceBox) {
+      throw new Error('Workspace viewport bounding box was not available.');
+    }
+
+    const dropPoint = {
+      x: Math.round(workspaceBox.x + workspaceBox.width - 180),
+      y: Math.round(workspaceBox.y + workspaceBox.height - 160)
+    };
+
+    await drawEdgeToClientPoint(page, sourceNote, dropPoint, { modifier: 'Shift' });
+
+    await expect(page.locator('.toast').last()).toContainText('This tab has reached the note limit.');
+    const tabsSnapshot = await readTabsSnapshot(page);
+    expect(tabsSnapshot[0].items).toHaveLength(MAX_ITEMS_PER_TAB);
+    expect(tabsSnapshot[0].edges).toHaveLength(0);
+  });
+
+  test('edge drag to empty canvas creates an orphan note when the tab is at the connection limit', async ({ page }) => {
+    const items = buildBulkNoteItems(65, { columns: 8 });
+    const itemIds = items.map((item) => item.id);
+    const edges = buildDenseUndirectedEdges(itemIds, MAX_EDGES_PER_TAB, { kind: 'line' });
+    const sourceId = itemIds[0];
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, buildLocalSnapshotWithItems(items, { edges }));
+    await page.goto('/index.html');
+
+    const sourceNote = page.locator(`.grid-item[data-id="${sourceId}"]`);
+    const workspaceBox = await page.locator('#tabContent').boundingBox();
+    if (!workspaceBox) {
+      throw new Error('Workspace viewport bounding box was not available.');
+    }
+
+    const dropPoint = {
+      x: Math.round(workspaceBox.x + workspaceBox.width - 180),
+      y: Math.round(workspaceBox.y + workspaceBox.height - 160)
+    };
+
+    await drawEdgeToClientPoint(page, sourceNote, dropPoint, { modifier: 'Shift' });
+
+    await expect(page.locator('.toast').last()).toContainText('This tab has reached the connection limit.');
+    const tabsSnapshot = await readTabsSnapshot(page);
+    expect(tabsSnapshot[0].items).toHaveLength(items.length + 1);
+    expect(tabsSnapshot[0].edges).toHaveLength(MAX_EDGES_PER_TAB);
+    await expect(page.locator('textarea.edit-textarea')).toHaveCount(1);
+  });
+
+  test('edge drag to empty canvas persists the new note and edge across reload', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Persist Empty Source', {
+        itemId: 'persist-empty-source',
+        position: { top: '140px', left: '160px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const sourceNote = page.locator('.grid-item[data-id="persist-empty-source"]');
+    const workspaceBox = await page.locator('#tabContent').boundingBox();
+    if (!workspaceBox) {
+      throw new Error('Workspace viewport bounding box was not available.');
+    }
+
+    const dropPoint = {
+      x: Math.round(workspaceBox.x + workspaceBox.width - 200),
+      y: Math.round(workspaceBox.y + workspaceBox.height - 150)
+    };
+
+    await drawEdgeToClientPoint(page, sourceNote, dropPoint, { modifier: 'Shift' });
+    await page.keyboard.press('Escape');
+
+    const beforeReload = await readTabsSnapshot(page);
+    expect(beforeReload[0].items).toHaveLength(2);
+    expect(beforeReload[0].edges).toHaveLength(1);
+    const createdItemId = beforeReload[0].edges[0].toItemId;
+
+    await page.reload();
+    const afterReload = await readTabsSnapshot(page);
+    expect(afterReload[0].items).toHaveLength(2);
+    expect(afterReload[0].edges).toHaveLength(1);
+    expect(afterReload[0].edges[0]).toMatchObject({
+      fromItemId: 'persist-empty-source',
+      toItemId: createdItemId,
+      kind: 'line'
+    });
+    await expect(page.locator(`.grid-item[data-id="${createdItemId}"]`)).toHaveCount(1);
+  });
+
   test('existing saved out-of-bounds items render unchanged until drag commit clamps them back into bounds', async ({ page }) => {
     const localSnapshot = buildLocalSnapshot('Out Of Bounds Seed', {
       itemId: 'far-item',
@@ -7808,6 +8047,66 @@ test.describe('Static behavior', () => {
     await page.locator('.close-settings').click();
     await expect(page.locator('#settingsModal')).toBeHidden();
     await expect.poll(async () => (await readCameraControlsState(page)).hidden).toBe(false);
+  });
+
+  test('Disable Mouse Wheel Pan blocks vertical wheel pan but keeps horizontal trackpad and Shift+wheel pan', async ({ page }) => {
+    const localSnapshot = buildLocalSnapshotWithItems([
+      buildNoteItem('Wheel Vertical Pan Toggle', {
+        itemId: 'wheel-vertical-pan-toggle-note',
+        position: { top: '320px', left: '360px' }
+      })
+    ]);
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot);
+    await page.goto('/index.html');
+
+    const beforeCamera = await readCamera(page);
+    const verticalPanResult = await dispatchWorkspaceWheel(page, { deltaY: 180 });
+    expect(verticalPanResult.defaultPrevented).toBe(true);
+    const afterVerticalPan = await readCamera(page);
+    expect(afterVerticalPan.y).toBeGreaterThan(beforeCamera.y);
+
+    await openSettingsModal(page);
+    const disableWheelVerticalPanToggle = page.locator('#toggleDisableWheelVerticalPan');
+    await expect(disableWheelVerticalPanToggle).not.toBeChecked();
+    await disableWheelVerticalPanToggle.evaluate((element) => element.click());
+    await expect(disableWheelVerticalPanToggle).toBeChecked();
+    await expect.poll(async () => {
+      const indexedDBState = await readIndexedDBState(page);
+      return indexedDBState.snapshot ? indexedDBState.snapshot.disableWheelVerticalPan : null;
+    }).toBe('true');
+    await page.locator('.close-settings').click();
+
+    const beforeDisabledVerticalPan = await readCamera(page);
+    const blockedVerticalPanResult = await dispatchWorkspaceWheel(page, { deltaY: 180 });
+    expect(blockedVerticalPanResult.defaultPrevented).toBe(false);
+    expect(await readCamera(page)).toEqual(beforeDisabledVerticalPan);
+
+    const trackpadPanResult = await dispatchWorkspaceWheel(page, { deltaX: 120, deltaY: 80 });
+    expect(trackpadPanResult.defaultPrevented).toBe(true);
+    const afterTrackpadPan = await readCamera(page);
+    expect(afterTrackpadPan.x).toBeGreaterThan(beforeDisabledVerticalPan.x);
+    expect(afterTrackpadPan.y).toBeCloseTo(beforeDisabledVerticalPan.y, 3);
+
+    const shiftHorizontalPanResult = await dispatchWorkspaceWheel(page, {
+      deltaY: 160,
+      shiftKey: true
+    });
+    expect(shiftHorizontalPanResult.defaultPrevented).toBe(true);
+    const afterShiftHorizontalPan = await readCamera(page);
+    expect(afterShiftHorizontalPan.x).toBeGreaterThan(afterTrackpadPan.x);
+    expect(afterShiftHorizontalPan.y).toBeCloseTo(afterTrackpadPan.y, 3);
+
+    await page.reload();
+    await expectNoteVisible(page, 'Wheel Vertical Pan Toggle');
+    await openSettingsModal(page);
+    await expect(page.locator('#toggleDisableWheelVerticalPan')).toBeChecked();
+    await page.locator('.close-settings').click();
+
+    const beforeReloadBlockedVerticalPan = await readCamera(page);
+    await dispatchWorkspaceWheel(page, { deltaY: 180 });
+    expect(await readCamera(page)).toEqual(beforeReloadBlockedVerticalPan);
   });
 
   test('enters textarea edit mode on desktop double-click', async ({ page }) => {
