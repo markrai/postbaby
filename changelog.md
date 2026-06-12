@@ -1,3 +1,6 @@
+# v2.2.7 (6/12/2026)
+- Drag tabs in the tab bar to reorder them; order persists after reload and keyboard tab shortcuts follow the new order.
+
 # v2.2.6 (6/12/2026)
 - Persisted note text is no longer selectable; text selection is limited to edit mode.
 
