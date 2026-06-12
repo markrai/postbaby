@@ -32,12 +32,17 @@ const (
 )
 
 var allowedSyncMutationOperations = map[string]struct{}{
-	"CreateNode": {},
-	"UpdateNode": {},
-	"MoveNode":   {},
-	"DeleteNode": {},
-	"CreateEdge": {},
-	"DeleteEdge": {},
+	"CreateNode":    {},
+	"UpdateNode":    {},
+	"MoveNode":      {},
+	"DeleteNode":    {},
+	"CreateEdge":    {},
+	"DeleteEdge":    {},
+	"CreateTab":     {},
+	"UpdateTab":     {},
+	"DeleteTab":     {},
+	"ReorderTabs":   {},
+	"ClearTabNodes": {},
 }
 
 var errEntitlementRequired = errors.New("entitlement required")

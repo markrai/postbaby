@@ -1,6 +1,6 @@
 // sw.js
 
-const PUBLIC_JS_REVISION = '909b2555fa3f';
+const PUBLIC_JS_REVISION = '0592f6b864c0';
 const CACHE_NAME = 'postbaby-cache-v8-' + PUBLIC_JS_REVISION;
 
 function assetUrl(path) {

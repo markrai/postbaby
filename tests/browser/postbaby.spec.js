@@ -868,6 +868,21 @@ async function readTabsSnapshot(page) {
   return JSON.parse(tabsPayload);
 }
 
+async function readTabsSnapshotWithLocalStorageFallback(page) {
+  try {
+    return await readTabsSnapshot(page);
+  } catch (error) {
+    const localTabs = await page.evaluate(() => {
+      const rawTabs = window.localStorage.getItem('tabs');
+      return rawTabs ? JSON.parse(rawTabs) : null;
+    });
+    if (localTabs) {
+      return localTabs;
+    }
+    throw error;
+  }
+}
+
 async function readItemSnapshot(page, itemId = 'item-1') {
   const tabsSnapshot = await readTabsSnapshot(page);
   for (const tab of tabsSnapshot) {
@@ -10832,6 +10847,192 @@ test.describe('Mocked sync startup reconciliation', () => {
         }
       }
     ]));
+  });
+
+  test('mutationOutbox records structural tab create rename committed reorder and delete envelopes', async ({ page }) => {
+    const serverSnapshot = buildThreeTabSnapshot();
+    const serverTabs = JSON.parse(serverSnapshot.tabs);
+    serverTabs[1].items = [
+      buildNoteItem('Delete Tab Source', {
+        itemId: 'tab-2-item-1',
+        position: { top: '80px', left: '120px' }
+      }),
+      buildNoteItem('Delete Tab Target', {
+        itemId: 'tab-2-item-2',
+        position: { top: '120px', left: '360px' }
+      })
+    ];
+    serverTabs[1].edges = [
+      { id: 'tab-2-edge-1', fromItemId: 'tab-2-item-1', toItemId: 'tab-2-item-2', kind: 'line' }
+    ];
+    serverSnapshot.tabs = JSON.stringify(serverTabs);
+    serverSnapshot.postbabySyncVersion = '6';
+    const localSnapshot = addDurableCloudSyncMetadata(
+      Object.assign({}, serverSnapshot),
+      {
+        pending: false,
+        revision: 6,
+        lastCloudUploadedAt: TIMESTAMP
+      }
+    );
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerSnapshotPayload(serverSnapshot, 6),
+      onSave: async () => ({
+        status: 503,
+        body: { ok: false, error: { code: 'blocked_for_test', message: 'blocked for test' } }
+      })
+    });
+
+    await page.goto('/index.html');
+    await page.locator('#addTab').click();
+    const newTabId = await page.locator('#tabBar .tab[data-tab-id]').last().getAttribute('data-tab-id');
+    if (!newTabId) {
+      throw new Error('New tab id was not available.');
+    }
+
+    let outbox = await readMutationOutbox(page);
+    expect(outbox.records.map((record) => record.operationType)).toEqual(['CreateTab']);
+    expect(outbox.records[0].entityType).toBe('Tab');
+    expect(outbox.records[0].entityId).toBe(newTabId);
+    expect(outbox.records[0].payload).toEqual({
+      name: '4',
+      colorIndex: 0,
+      gridSetting: 'none',
+      orderIndex: 3
+    });
+
+    const newTab = page.locator(`#tabBar .tab[data-tab-id="${newTabId}"]`);
+    await newTab.dblclick();
+    const input = page.locator('.edit-tab-input');
+    await input.fill('Renamed Structural Tab');
+    await input.press('Enter');
+    await expect(input).toHaveCount(0);
+
+    outbox = await readMutationOutbox(page);
+    expect(outbox.records.map((record) => record.operationType)).toEqual(['CreateTab', 'UpdateTab']);
+    expect(outbox.records[1].payload).toEqual({
+      tabId: newTabId,
+      changes: {
+        name: 'Renamed Structural Tab'
+      }
+    });
+
+    await startTabDragBefore(page, newTabId, 'tab-1');
+    outbox = await readMutationOutbox(page);
+    expect(outbox.records.filter((record) => record.operationType === 'ReorderTabs')).toHaveLength(0);
+    await page.mouse.up();
+    await expect.poll(async () => readTabBarOrder(page)).toEqual([newTabId, 'tab-1', 'tab-2', 'tab-3']);
+
+    outbox = await readMutationOutbox(page);
+    const reorderRecords = outbox.records.filter((record) => record.operationType === 'ReorderTabs');
+    expect(reorderRecords).toHaveLength(1);
+    expect(reorderRecords[0].entityType).toBe('TabOrder');
+    expect(reorderRecords[0].entityId).toBe('postbaby-web:tabs');
+    expect(reorderRecords[0].payload).toEqual({
+      tabIds: [newTabId, 'tab-1', 'tab-2', 'tab-3'],
+      tabCount: 4
+    });
+
+    const deleted = await page.evaluate(() => window.postbabyDeleteTabForTest('tab-2'));
+    expect(deleted).toBe(true);
+
+    outbox = await readMutationOutbox(page);
+    expect(outbox.records.map((record) => record.operationType)).toEqual(['CreateTab', 'UpdateTab', 'ReorderTabs', 'DeleteTab']);
+    const deleteRecord = outbox.records[3];
+    expect(deleteRecord.entityType).toBe('Tab');
+    expect(deleteRecord.entityId).toBe('tab-2');
+    expect(deleteRecord.payload).toMatchObject({
+      tabId: 'tab-2',
+      name: '2',
+      orderIndex: 2,
+      itemCount: 2,
+      edgeCount: 1,
+      itemIds: ['tab-2-item-1', 'tab-2-item-2'],
+      edgeIds: ['tab-2-edge-1'],
+      itemIdsTruncated: false,
+      edgeIdsTruncated: false
+    });
+  });
+
+  test('mutationOutbox records ClearTabNodes with bounded node ids and preserves current edge behavior', async ({ page }) => {
+    const localSnapshot = addDurableCloudSyncMetadata(
+      buildLocalSnapshotWithItems([
+        buildNoteItem('Clear Source', {
+          itemId: 'clear-item-1',
+          position: { top: '100px', left: '140px' }
+        }),
+        buildNoteItem('Clear Target', {
+          itemId: 'clear-item-2',
+          position: { top: '140px', left: '420px' }
+        })
+      ], {
+        edges: [
+          { id: 'clear-edge-1', fromItemId: 'clear-item-1', toItemId: 'clear-item-2', kind: 'arrow' }
+        ],
+        syncVersion: 6
+      }),
+      {
+        pending: false,
+        revision: 6,
+        lastCloudUploadedAt: TIMESTAMP
+      }
+    );
+
+    await prepareBlankPage(page);
+    await seedLocalStorage(page, localSnapshot, 'owner-scope');
+    await seedIndexedDB(page, localSnapshot, buildIndexedDBMeta(localSnapshot, { id: 'owner-scope' }), 'owner-scope');
+    await enableMockedSync(page, {
+      metaPayload: { ok: true, exists: true, version: 6, updatedAt: TIMESTAMP },
+      documentPayload: buildServerSnapshotPayload(buildLocalSnapshotWithItems([
+        buildNoteItem('Clear Source', {
+          itemId: 'clear-item-1',
+          position: { top: '100px', left: '140px' }
+        }),
+        buildNoteItem('Clear Target', {
+          itemId: 'clear-item-2',
+          position: { top: '140px', left: '420px' }
+        })
+      ], {
+        edges: [
+          { id: 'clear-edge-1', fromItemId: 'clear-item-1', toItemId: 'clear-item-2', kind: 'arrow' }
+        ]
+      }), 6),
+      onSave: async () => ({
+        status: 503,
+        body: { ok: false, error: { code: 'blocked_for_test', message: 'blocked for test' } }
+      })
+    });
+
+    await page.goto('/index.html');
+    await page.keyboard.press('c');
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    const reloadPromise = page.waitForEvent('framenavigated');
+    await page.click('#confirmDelete');
+    await reloadPromise;
+    await page.waitForLoadState('load');
+
+    const outbox = await readMutationOutbox(page);
+    expect(outbox.records.map((record) => record.operationType)).toEqual(['ClearTabNodes']);
+    expect(outbox.records[0].entityType).toBe('Tab');
+    expect(outbox.records[0].entityId).toBe('tab-1');
+    expect(outbox.records[0].payload).toEqual({
+      tabId: 'tab-1',
+      nodeCount: 2,
+      nodeIds: ['clear-item-1', 'clear-item-2'],
+      nodeIdsTruncated: false,
+      edgePolicy: 'preserve_existing_edges'
+    });
+
+    const tabsSnapshot = await readTabsSnapshotWithLocalStorageFallback(page);
+    expect(tabsSnapshot[0].items).toHaveLength(0);
+    expect(tabsSnapshot[0].edges).toEqual([
+      { id: 'clear-edge-1', fromItemId: 'clear-item-1', toItemId: 'clear-item-2', kind: 'arrow' }
+    ]);
   });
 
   test('keeps pending envelopes across reload and marks them snapshotConfirmed after upload without uploading outbox metadata', async ({ page }) => {

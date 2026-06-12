@@ -546,6 +546,85 @@ func TestSyncMutationsRejectsInvalidOperationType(t *testing.T) {
 	}
 }
 
+func TestSyncMutationsAcceptsStructuralTabOperationTypes(t *testing.T) {
+	t.Parallel()
+
+	env := newAuthenticatedTestEnv(t, config.DeploymentModeSelfHosted)
+	user := authenticatedUserFromCookie(t, env, env.cookie)
+
+	mutations := []map[string]any{
+		buildSyncMutationEnvelopeForEntity("mut-create-tab", "Tab", "tab-2", "CreateTab", map[string]any{
+			"name":        "2",
+			"colorIndex":  0,
+			"gridSetting": "none",
+			"orderIndex":  1,
+		}),
+		buildSyncMutationEnvelopeForEntity("mut-update-tab", "Tab", "tab-2", "UpdateTab", map[string]any{
+			"tabId":   "tab-2",
+			"changes": map[string]any{"name": "Renamed"},
+		}),
+		buildSyncMutationEnvelopeForEntity("mut-delete-tab", "Tab", "tab-2", "DeleteTab", map[string]any{
+			"tabId":            "tab-2",
+			"name":             "Renamed",
+			"orderIndex":       1,
+			"itemCount":        0,
+			"edgeCount":        0,
+			"itemIds":          []string{},
+			"edgeIds":          []string{},
+			"itemIdsTruncated": false,
+			"edgeIdsTruncated": false,
+		}),
+		buildSyncMutationEnvelopeForEntity("mut-reorder-tabs", "TabOrder", "postbaby-web:tabs", "ReorderTabs", map[string]any{
+			"tabIds":   []string{"tab-2", "tab-1"},
+			"tabCount": 2,
+		}),
+		buildSyncMutationEnvelopeForEntity("mut-clear-tab", "Tab", "tab-1", "ClearTabNodes", map[string]any{
+			"tabId":            "tab-1",
+			"nodeCount":        1,
+			"nodeIds":          []string{"item-1"},
+			"nodeIdsTruncated": false,
+			"edgePolicy":       "preserve_existing_edges",
+		}),
+	}
+
+	rec := performJSONRequest(t, env.handler, env.cookie, http.MethodPost, "/api/sync/mutations", map[string]any{
+		"appId":     "postbaby-web",
+		"mutations": mutations,
+	})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%q", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Results []struct {
+			MutationID string `json:"mutationId"`
+			Status     string `json:"status"`
+			Error      struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		} `json:"results"`
+	}
+	decodeResponse(t, rec, &resp)
+
+	if len(resp.Results) != len(mutations) {
+		t.Fatalf("unexpected structural mutation response: %+v", resp)
+	}
+	for _, result := range resp.Results {
+		if result.Status != store.SyncMutationReceiptStatusAccepted {
+			t.Fatalf("expected structural mutation %s to be accepted, got %+v", result.MutationID, result)
+		}
+	}
+
+	count, err := env.store.CountSyncMutationReceipts(context.Background(), user.OwnerKey, "postbaby-web")
+	if err != nil {
+		t.Fatalf("count structural sync mutation receipts: %v", err)
+	}
+	if count != int64(len(mutations)) {
+		t.Fatalf("expected %d structural receipts, got %d", len(mutations), count)
+	}
+}
+
 func TestSyncMutationsScopePerOwnerAndApp(t *testing.T) {
 	t.Parallel()
 
@@ -2097,14 +2176,18 @@ func snapshot(activeTabID, tabs string) map[string]string {
 }
 
 func buildSyncMutationEnvelope(mutationID, operationType string, payload any) map[string]any {
+	return buildSyncMutationEnvelopeForEntity(mutationID, "Node", "item-1", operationType, payload)
+}
+
+func buildSyncMutationEnvelopeForEntity(mutationID, entityType, entityID, operationType string, payload any) map[string]any {
 	return map[string]any{
 		"protocol":      "PB-SYNC/1",
 		"clientId":      "client-1",
 		"deviceId":      "device-1",
 		"mutationId":    mutationID,
 		"baseRevision":  6,
-		"entityType":    "Node",
-		"entityId":      "item-1",
+		"entityType":    entityType,
+		"entityId":      entityID,
 		"operationType": operationType,
 		"payload":       payload,
 	}

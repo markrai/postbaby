@@ -2245,6 +2245,26 @@ func buildSyncMutationDryRunResult(doc Document, receipts []SyncMutationReceipt)
 			if replayDeleteEdge(tabs, receipt, &result) {
 				outcome = "applied"
 			}
+		case "CreateTab":
+			if replayCreateTab(&tabs, receipt, &result) {
+				outcome = "applied"
+			}
+		case "UpdateTab":
+			if replayUpdateTab(tabs, receipt, &result) {
+				outcome = "applied"
+			}
+		case "DeleteTab":
+			if replayDeleteTab(&tabs, receipt, &result) {
+				outcome = "applied"
+			}
+		case "ReorderTabs":
+			if replayReorderTabs(&tabs, receipt, &result) {
+				outcome = "applied"
+			}
+		case "ClearTabNodes":
+			if replayClearTabNodes(tabs, receipt, &result) {
+				outcome = "applied"
+			}
 		default:
 			recordReplayWarning(&result, receipt, replayWarningUnknownOperation, "dry-run replay skipped an unknown operation type")
 		}
@@ -2650,6 +2670,16 @@ func evaluateSyncMutationReplayAuthoritativePolicyAgainstTabs(tabs []replayTab, 
 		return evaluateReplayAuthoritativeCreateEdgePolicy(tabs, receipt, entityID, warnings)
 	case "DeleteEdge":
 		return evaluateReplayAuthoritativeDeleteEdgePolicy(tabs, receipt, entityID, warnings)
+	case "CreateTab":
+		return evaluateReplayAuthoritativeCreateTabPolicy(tabs, receipt, entityID, warnings)
+	case "UpdateTab":
+		return evaluateReplayAuthoritativeUpdateTabPolicy(tabs, receipt, entityID, warnings)
+	case "DeleteTab":
+		return evaluateReplayAuthoritativeDeleteTabPolicy(tabs, receipt, entityID, warnings)
+	case "ReorderTabs":
+		return evaluateReplayAuthoritativeReorderTabsPolicy(tabs, receipt, warnings)
+	case "ClearTabNodes":
+		return evaluateReplayAuthoritativeClearTabNodesPolicy(tabs, receipt, entityID, warnings)
 	default:
 		return replayAuthoritativeFatalPolicyEvaluation(warnings, "unknown_operation")
 	}
@@ -2853,6 +2883,115 @@ func evaluateReplayAuthoritativeDeleteEdgePolicy(tabs []replayTab, receipt SyncM
 	return replayAuthoritativeAllowedPolicyEvaluation(warnings)
 }
 
+func evaluateReplayAuthoritativeCreateTabPolicy(tabs []replayTab, receipt SyncMutationReceipt, entityID string, warnings []string) SyncMutationReplayAuthoritativePolicyEvaluation {
+	var payload struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(receipt.Payload, &payload); err != nil {
+		return replayAuthoritativeFatalPolicyEvaluation(warnings, "invalid_payload")
+	}
+
+	if findReplayTab(tabs, entityID) != nil {
+		return replayAuthoritativeSkipPolicyEvaluation(warnings, "duplicate_tab_id_existing")
+	}
+	if countReplayAuthoritativeTextUnits(payload.Name) > replayItemTextCharsMax {
+		return replayAuthoritativeSkipPolicyEvaluation(warnings, "text_limit_exceeded")
+	}
+	return replayAuthoritativeAllowedPolicyEvaluation(warnings)
+}
+
+func evaluateReplayAuthoritativeUpdateTabPolicy(tabs []replayTab, receipt SyncMutationReceipt, entityID string, warnings []string) SyncMutationReplayAuthoritativePolicyEvaluation {
+	var payload struct {
+		TabID   string                     `json:"tabId"`
+		Changes map[string]json.RawMessage `json:"changes"`
+	}
+	if err := json.Unmarshal(receipt.Payload, &payload); err != nil {
+		return replayAuthoritativeFatalPolicyEvaluation(warnings, "invalid_payload")
+	}
+	if !replayTabPayloadIDMatchesEntity(entityID, payload.TabID) {
+		return replayAuthoritativeFatalPolicyEvaluation(warnings, "invalid_payload")
+	}
+
+	tab := findReplayTab(tabs, entityID)
+	if tab == nil {
+		return replayAuthoritativeConflictPolicyEvaluation(warnings, "missing_tab")
+	}
+	if len(payload.Changes) == 0 {
+		return replayAuthoritativeSkipPolicyEvaluation(warnings, "empty_changes")
+	}
+	for field, rawValue := range payload.Changes {
+		switch field {
+		case "name":
+			var value string
+			if err := json.Unmarshal(rawValue, &value); err != nil {
+				return replayAuthoritativeFatalPolicyEvaluation(warnings, "invalid_payload")
+			}
+			if countReplayAuthoritativeTextUnits(value) > replayItemTextCharsMax {
+				return replayAuthoritativeSkipPolicyEvaluation(warnings, "text_limit_exceeded")
+			}
+		default:
+			return replayAuthoritativeSkipPolicyEvaluation(warnings, "unknown_update_field")
+		}
+	}
+	return replayAuthoritativeAllowedPolicyEvaluation(warnings)
+}
+
+func evaluateReplayAuthoritativeDeleteTabPolicy(tabs []replayTab, receipt SyncMutationReceipt, entityID string, warnings []string) SyncMutationReplayAuthoritativePolicyEvaluation {
+	var payload struct {
+		TabID string `json:"tabId"`
+	}
+	if err := json.Unmarshal(receipt.Payload, &payload); err != nil {
+		return replayAuthoritativeFatalPolicyEvaluation(warnings, "invalid_payload")
+	}
+	if !replayTabPayloadIDMatchesEntity(entityID, payload.TabID) {
+		return replayAuthoritativeFatalPolicyEvaluation(warnings, "invalid_payload")
+	}
+	if findReplayTabIndex(tabs, entityID) < 0 {
+		return replayAuthoritativeSkipPolicyEvaluation(warnings, "missing_tab")
+	}
+	if len(tabs) <= 1 {
+		return replayAuthoritativeSkipPolicyEvaluation(warnings, "last_tab")
+	}
+	return replayAuthoritativeAllowedPolicyEvaluation(warnings)
+}
+
+func evaluateReplayAuthoritativeReorderTabsPolicy(tabs []replayTab, receipt SyncMutationReceipt, warnings []string) SyncMutationReplayAuthoritativePolicyEvaluation {
+	var payload struct {
+		TabIDs []string `json:"tabIds"`
+	}
+	if err := json.Unmarshal(receipt.Payload, &payload); err != nil {
+		return replayAuthoritativeFatalPolicyEvaluation(warnings, "invalid_payload")
+	}
+	order, ok := normalizeReplayTabOrder(tabs, payload.TabIDs)
+	if !ok {
+		return replayAuthoritativeSkipPolicyEvaluation(warnings, "invalid_tab_order")
+	}
+	if replayTabOrderAlreadyMatches(tabs, order) {
+		return replayAuthoritativeSkipPolicyEvaluation(warnings, "already_ordered")
+	}
+	return replayAuthoritativeAllowedPolicyEvaluation(warnings)
+}
+
+func evaluateReplayAuthoritativeClearTabNodesPolicy(tabs []replayTab, receipt SyncMutationReceipt, entityID string, warnings []string) SyncMutationReplayAuthoritativePolicyEvaluation {
+	var payload struct {
+		TabID string `json:"tabId"`
+	}
+	if err := json.Unmarshal(receipt.Payload, &payload); err != nil {
+		return replayAuthoritativeFatalPolicyEvaluation(warnings, "invalid_payload")
+	}
+	if !replayTabPayloadIDMatchesEntity(entityID, payload.TabID) {
+		return replayAuthoritativeFatalPolicyEvaluation(warnings, "invalid_payload")
+	}
+	tab := findReplayTab(tabs, entityID)
+	if tab == nil {
+		return replayAuthoritativeConflictPolicyEvaluation(warnings, "missing_tab")
+	}
+	if len(tab.Items) == 0 {
+		return replayAuthoritativeSkipPolicyEvaluation(warnings, "missing_node")
+	}
+	return replayAuthoritativeAllowedPolicyEvaluation(warnings)
+}
+
 func (s *Store) listAcceptedSyncMutationReceipts(ctx context.Context, ownerKey, appID string) ([]SyncMutationReceipt, error) {
 	started := time.Now()
 	ctx, cancel := withDBTimeout(ctx)
@@ -2952,6 +3091,167 @@ func encodeReplaySnapshot(snapshot replaySnapshot, tabs []replayTab) (json.RawMe
 		return nil, fmt.Errorf("encode replay snapshot: %w", err)
 	}
 	return json.RawMessage(encoded), nil
+}
+
+func replayCreateTab(tabs *[]replayTab, receipt SyncMutationReceipt, result *SyncMutationDryRunResult) bool {
+	var payload struct {
+		Name        string `json:"name"`
+		ColorIndex  *int   `json:"colorIndex"`
+		GridSetting string `json:"gridSetting"`
+		OrderIndex  *int   `json:"orderIndex"`
+	}
+	if err := json.Unmarshal(receipt.Payload, &payload); err != nil {
+		recordReplayWarning(result, receipt, replayWarningInvalidPayload, "dry-run replay could not decode create-tab payload")
+		return false
+	}
+
+	entityID, ok := replayEntityID(receipt, result)
+	if !ok {
+		return false
+	}
+	if findReplayTab(*tabs, entityID) != nil {
+		return false
+	}
+
+	tab := replayTab{
+		ID:          entityID,
+		Name:        payload.Name,
+		Items:       []replayItem{},
+		ColorIndex:  normalizeReplayTabColorIndex(payload.ColorIndex),
+		GridSetting: normalizeReplayTabGridSetting(payload.GridSetting),
+		Edges:       []replayEdge{},
+	}
+	insertReplayTab(tabs, tab, payload.OrderIndex)
+	return true
+}
+
+func replayUpdateTab(tabs []replayTab, receipt SyncMutationReceipt, result *SyncMutationDryRunResult) bool {
+	var payload struct {
+		TabID   string                     `json:"tabId"`
+		Changes map[string]json.RawMessage `json:"changes"`
+	}
+	if err := json.Unmarshal(receipt.Payload, &payload); err != nil {
+		recordReplayWarning(result, receipt, replayWarningInvalidPayload, "dry-run replay could not decode update-tab payload")
+		return false
+	}
+
+	entityID, ok := replayEntityID(receipt, result)
+	if !ok {
+		return false
+	}
+	if !replayTabPayloadIDMatchesEntity(entityID, payload.TabID) {
+		recordReplayWarning(result, receipt, replayWarningInvalidPayload, "dry-run replay skipped update-tab because the tab id does not match the entity id")
+		return false
+	}
+
+	tab := findReplayTab(tabs, entityID)
+	if tab == nil {
+		recordReplayWarning(result, receipt, replayWarningMissingTab, "dry-run replay skipped update-tab because the tab is missing")
+		return false
+	}
+
+	applied := false
+	for field, rawValue := range payload.Changes {
+		switch field {
+		case "name":
+			var value string
+			if err := json.Unmarshal(rawValue, &value); err != nil {
+				recordReplayWarning(result, receipt, replayWarningInvalidUpdateValue, "dry-run replay skipped a tab name update because the value is invalid")
+				continue
+			}
+			tab.Name = value
+			applied = true
+		default:
+			recordReplayWarning(result, receipt, replayWarningUnknownUpdateField, "dry-run replay skipped an unknown update-tab field")
+		}
+	}
+	return applied
+}
+
+func replayDeleteTab(tabs *[]replayTab, receipt SyncMutationReceipt, result *SyncMutationDryRunResult) bool {
+	var payload struct {
+		TabID string `json:"tabId"`
+	}
+	if err := json.Unmarshal(receipt.Payload, &payload); err != nil {
+		recordReplayWarning(result, receipt, replayWarningInvalidPayload, "dry-run replay could not decode delete-tab payload")
+		return false
+	}
+
+	entityID, ok := replayEntityID(receipt, result)
+	if !ok {
+		return false
+	}
+	if !replayTabPayloadIDMatchesEntity(entityID, payload.TabID) {
+		recordReplayWarning(result, receipt, replayWarningInvalidPayload, "dry-run replay skipped delete-tab because the tab id does not match the entity id")
+		return false
+	}
+
+	tabIndex := findReplayTabIndex(*tabs, entityID)
+	if tabIndex < 0 || len(*tabs) <= 1 {
+		return false
+	}
+	*tabs = append((*tabs)[:tabIndex], (*tabs)[tabIndex+1:]...)
+	return true
+}
+
+func replayReorderTabs(tabs *[]replayTab, receipt SyncMutationReceipt, result *SyncMutationDryRunResult) bool {
+	var payload struct {
+		TabIDs []string `json:"tabIds"`
+	}
+	if err := json.Unmarshal(receipt.Payload, &payload); err != nil {
+		recordReplayWarning(result, receipt, replayWarningInvalidPayload, "dry-run replay could not decode reorder-tabs payload")
+		return false
+	}
+
+	order, ok := normalizeReplayTabOrder(*tabs, payload.TabIDs)
+	if !ok {
+		recordReplayWarning(result, receipt, replayWarningInvalidPayload, "dry-run replay skipped reorder-tabs because the tab ids do not match the current snapshot")
+		return false
+	}
+	if replayTabOrderAlreadyMatches(*tabs, order) {
+		return false
+	}
+
+	tabByID := make(map[string]replayTab, len(*tabs))
+	for _, tab := range *tabs {
+		tabByID[tab.ID] = tab
+	}
+	reordered := make([]replayTab, 0, len(order))
+	for _, tabID := range order {
+		reordered = append(reordered, tabByID[tabID])
+	}
+	*tabs = reordered
+	return true
+}
+
+func replayClearTabNodes(tabs []replayTab, receipt SyncMutationReceipt, result *SyncMutationDryRunResult) bool {
+	var payload struct {
+		TabID string `json:"tabId"`
+	}
+	if err := json.Unmarshal(receipt.Payload, &payload); err != nil {
+		recordReplayWarning(result, receipt, replayWarningInvalidPayload, "dry-run replay could not decode clear-tab-nodes payload")
+		return false
+	}
+
+	entityID, ok := replayEntityID(receipt, result)
+	if !ok {
+		return false
+	}
+	if !replayTabPayloadIDMatchesEntity(entityID, payload.TabID) {
+		recordReplayWarning(result, receipt, replayWarningInvalidPayload, "dry-run replay skipped clear-tab-nodes because the tab id does not match the entity id")
+		return false
+	}
+
+	tab := findReplayTab(tabs, entityID)
+	if tab == nil {
+		recordReplayWarning(result, receipt, replayWarningMissingTab, "dry-run replay skipped clear-tab-nodes because the tab is missing")
+		return false
+	}
+	if len(tab.Items) == 0 {
+		return false
+	}
+	tab.Items = []replayItem{}
+	return true
 }
 
 func replayCreateNode(tabs *[]replayTab, receipt SyncMutationReceipt, result *SyncMutationDryRunResult) bool {
@@ -3262,6 +3562,16 @@ func applyReplayMutationForAuthoritativePreview(tabs *[]replayTab, receipt SyncM
 		return replayCreateEdge(*tabs, receipt, &previewResult)
 	case "DeleteEdge":
 		return replayDeleteEdge(*tabs, receipt, &previewResult)
+	case "CreateTab":
+		return replayCreateTab(tabs, receipt, &previewResult)
+	case "UpdateTab":
+		return replayUpdateTab(*tabs, receipt, &previewResult)
+	case "DeleteTab":
+		return replayDeleteTab(tabs, receipt, &previewResult)
+	case "ReorderTabs":
+		return replayReorderTabs(tabs, receipt, &previewResult)
+	case "ClearTabNodes":
+		return replayClearTabNodes(*tabs, receipt, &previewResult)
 	default:
 		return false
 	}
@@ -3282,6 +3592,99 @@ func findReplayTab(tabs []replayTab, tabID string) *replayTab {
 		}
 	}
 	return nil
+}
+
+func findReplayTabIndex(tabs []replayTab, tabID string) int {
+	for index := range tabs {
+		if tabs[index].ID == tabID {
+			return index
+		}
+	}
+	return -1
+}
+
+func replayTabPayloadIDMatchesEntity(entityID, payloadTabID string) bool {
+	normalizedPayloadTabID := normalizeReplayIdentifier(payloadTabID)
+	return normalizedPayloadTabID == "" || normalizedPayloadTabID == entityID
+}
+
+func insertReplayTab(tabs *[]replayTab, tab replayTab, orderIndex *int) {
+	index := len(*tabs)
+	if orderIndex != nil {
+		index = *orderIndex
+		if index < 0 {
+			index = 0
+		}
+		if index > len(*tabs) {
+			index = len(*tabs)
+		}
+	}
+
+	*tabs = append(*tabs, replayTab{})
+	copy((*tabs)[index+1:], (*tabs)[index:])
+	(*tabs)[index] = tab
+}
+
+func normalizeReplayTabColorIndex(value *int) int {
+	if value == nil || *value < 0 {
+		return 0
+	}
+	return *value
+}
+
+func normalizeReplayTabGridSetting(value string) string {
+	switch strings.TrimSpace(value) {
+	case "kanban", "importance", "eisenhower", "priority", "smartgoals", "swot", "calendar", "nowlater", "week", "graphpaper":
+		return strings.TrimSpace(value)
+	default:
+		return "none"
+	}
+}
+
+func normalizeReplayTabOrder(tabs []replayTab, tabIDs []string) ([]string, bool) {
+	if len(tabIDs) != len(tabs) {
+		return nil, false
+	}
+
+	existing := make(map[string]struct{}, len(tabs))
+	for _, tab := range tabs {
+		tabID := normalizeReplayIdentifier(tab.ID)
+		if tabID == "" {
+			return nil, false
+		}
+		existing[tabID] = struct{}{}
+	}
+
+	seen := make(map[string]struct{}, len(tabIDs))
+	order := make([]string, 0, len(tabIDs))
+	for _, tabID := range tabIDs {
+		normalizedID := normalizeReplayIdentifier(tabID)
+		if normalizedID == "" {
+			return nil, false
+		}
+		if _, ok := existing[normalizedID]; !ok {
+			return nil, false
+		}
+		if _, ok := seen[normalizedID]; ok {
+			return nil, false
+		}
+		seen[normalizedID] = struct{}{}
+		order = append(order, normalizedID)
+	}
+
+	return order, true
+}
+
+func replayTabOrderAlreadyMatches(tabs []replayTab, order []string) bool {
+	if len(tabs) != len(order) {
+		return false
+	}
+	for index := range tabs {
+		if tabs[index].ID != order[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func findReplayItem(tab *replayTab, itemID string) *replayItem {

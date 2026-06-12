@@ -500,6 +500,92 @@ func TestReplaySyncMutationReceiptsDryRunMissingTabAndUnknownOperation(t *testin
 	}
 }
 
+func TestReplaySyncMutationReceiptsDryRunTabStructuralOperations(t *testing.T) {
+	t.Parallel()
+
+	docStore := openTestStore(t)
+	ctx := context.Background()
+	seedReplayDocument(t, docStore, "owner", "postbaby-web", []replayTab{
+		{
+			ID:   "tab-1",
+			Name: "Main",
+			Items: []replayItem{
+				{ID: "item-1", Name: "First", Color: "yellow", Position: replayPosition{Top: "0px", Left: "0px"}},
+				{ID: "item-2", Name: "Second", Color: "blue", Position: replayPosition{Top: "20px", Left: "20px"}},
+			},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges: []replayEdge{
+				{ID: "edge-1", FromItemID: "item-1", ToItemID: "item-2", Kind: "arrow"},
+			},
+		},
+		{
+			ID:          "tab-2",
+			Name:        "Scratch",
+			Items:       []replayItem{},
+			ColorIndex:  0,
+			GridSetting: "none",
+			Edges:       []replayEdge{},
+		},
+	})
+
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z",
+		buildReplayReceiptInput("mut-create-tab", "Tab", "tab-3", "CreateTab", `{"name":"Triage","colorIndex":0,"gridSetting":"none","orderIndex":1}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:01Z", "2026-06-01T12:00:01Z",
+		buildReplayReceiptInput("mut-update-tab", "Tab", "tab-3", "UpdateTab", `{"tabId":"tab-3","changes":{"name":"Planning"}}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:02Z", "2026-06-01T12:00:02Z",
+		buildReplayReceiptInput("mut-reorder-tabs", "TabOrder", "postbaby-web:tabs", "ReorderTabs", `{"tabIds":["tab-3","tab-1","tab-2"],"tabCount":3}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:03Z", "2026-06-01T12:00:03Z",
+		buildReplayReceiptInput("mut-clear-tab", "Tab", "tab-1", "ClearTabNodes", `{"tabId":"tab-1","nodeCount":2,"nodeIds":["item-1","item-2"],"nodeIdsTruncated":false,"edgePolicy":"preserve_existing_edges"}`),
+	)
+	insertAcceptedReplayReceipt(t, docStore, "owner", "postbaby-web", "2026-06-01T12:00:04Z", "2026-06-01T12:00:04Z",
+		buildReplayReceiptInput("mut-delete-tab", "Tab", "tab-2", "DeleteTab", `{"tabId":"tab-2","name":"Scratch","orderIndex":2,"itemCount":0,"edgeCount":0,"itemIds":[],"edgeIds":[]}`),
+	)
+
+	result, err := docStore.ReplaySyncMutationReceiptsDryRun(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("dry-run replay: %v", err)
+	}
+	if result.AppliedCount != 5 || result.SkippedCount != 0 {
+		t.Fatalf("unexpected dry-run counts: %+v", result)
+	}
+
+	tabs := extractReplayPreviewTabs(t, result.PreviewBody)
+	if len(tabs) != 2 || tabs[0].ID != "tab-3" || tabs[1].ID != "tab-1" {
+		t.Fatalf("unexpected structural tab order: %+v", tabs)
+	}
+	if tabs[0].Name != "Planning" || len(tabs[0].Items) != 0 || len(tabs[0].Edges) != 0 {
+		t.Fatalf("unexpected created/updated tab preview: %+v", tabs[0])
+	}
+	if len(tabs[1].Items) != 0 {
+		t.Fatalf("expected clear-tab-nodes to remove tab-1 items, got %+v", tabs[1].Items)
+	}
+	if len(tabs[1].Edges) != 1 || tabs[1].Edges[0].ID != "edge-1" {
+		t.Fatalf("expected clear-tab-nodes replay to preserve existing edges, got %+v", tabs[1].Edges)
+	}
+
+	observation, err := docStore.RecordSyncMutationReplayDryRunObservation(ctx, "owner", "postbaby-web")
+	if err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+	preview, err := docStore.EvaluateSyncMutationReplayAuthoritativePreview(ctx, "owner", "postbaby-web", observation.ID)
+	if err != nil {
+		t.Fatalf("evaluate authoritative preview: %v", err)
+	}
+	if preview.Status != SyncMutationReplayAuthoritativePreviewStatusAvailable {
+		t.Fatalf("expected available authoritative preview, got %+v", preview)
+	}
+	if !preview.AuthoritativePreviewHashMatchesDryRun {
+		t.Fatalf("expected authoritative preview to match dry-run preview, got %+v", preview)
+	}
+	if preview.ApplicationStatusCounts[SyncMutationReplayApplicationStatusApplied] != 5 {
+		t.Fatalf("expected five applied structural receipts, got %+v", preview.ApplicationStatusCounts)
+	}
+}
+
 func TestReplaySyncMutationReceiptsDryRunOrderingAndScope(t *testing.T) {
 	t.Parallel()
 
