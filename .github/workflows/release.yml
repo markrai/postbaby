@@ -167,6 +167,9 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # GHCR rejects attestation blobs with 403 on a brand-new package's first push.
+          provenance: false
+          sbom: false
 
   release:
     name: Attest and Publish Signed Release
