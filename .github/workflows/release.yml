@@ -146,8 +146,10 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # Prefer a PAT with write:packages when GITHUB_TOKEN cannot write an
+          # existing package that was first created outside Actions.
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GHCR_TOKEN || github.token }}
 
       - name: Extract metadata
         id: meta
@@ -173,7 +175,8 @@ jobs:
 
   release:
     name: Attest and Publish Signed Release
-    needs: [build, publish-image]
+    # Do not block Portainer tars / GitHub Release on GHCR ACL issues.
+    needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
