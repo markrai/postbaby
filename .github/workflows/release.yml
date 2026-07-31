@@ -196,6 +196,8 @@ jobs:
         with:
           path: ${{ runner.temp }}/release-assets
           merge-multiple: true
+          # Exclude buildx/dockerbuild summary artifacts from the publish-image job.
+          pattern: postbaby-linux-*
 
       - name: Resolve release assets
         id: resolve
