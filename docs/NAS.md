@@ -79,18 +79,31 @@ If you want NAS users to hit `9170` instead of `8080`, set `POSTBABY_PORT=9170`.
 
 ## Option C: Portainer stack from an imported image tar
 
-Use this when you want to build the image on another machine and only run it on the NAS.
+Use this when you want to import a prebuilt image on the NAS instead of building there.
 
-### 1. Build the image tar
+### 1. Get the image tar
+
+**From GitHub Releases (recommended):**
+
+1. Open the [Postbaby releases](https://github.com/markrai/postbaby/releases) page for your version.
+2. Download the tar for your NAS CPU:
+   - `postbaby-linux-amd64.tar` for x86_64 / amd64 NAS hardware
+   - `postbaby-linux-arm64.tar` for ARM64 NAS hardware
+3. Optional: verify the matching `.sha256` checksum file from the same release.
+
+Each tar contains a Docker image tagged `postbaby:local`, ready for Portainer import.
+
+**Build locally (offline or custom):**
 
 On a machine with Docker:
 
-- Windows: run [`../tools/generate_tar.bat`](../tools/generate_tar.bat)
+- Windows: run [`../generate_tar.bat`](../generate_tar.bat)
+- Linux/macOS: run [`../generate_tar.sh`](../generate_tar.sh)
 - Or manually run:
 
 ```powershell
 docker build -t postbaby:local .
-docker save -o postbaby.tar postbaby:local
+docker save -o postbaby-linux-amd64.tar postbaby:local
 ```
 
 Build the image for the same CPU architecture as the NAS that will run it.
@@ -99,7 +112,7 @@ Build the image for the same CPU architecture as the NAS that will run it.
 
 1. In Portainer, open **Images**.
 2. Choose **Import**.
-3. Upload `postbaby.tar`.
+3. Upload `postbaby-linux-amd64.tar` or `postbaby-linux-arm64.tar` (or your locally built tar).
 4. Confirm the imported image tag is `postbaby:local`.
 
 ### 3. Deploy the Portainer stack

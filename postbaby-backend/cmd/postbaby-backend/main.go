@@ -49,7 +49,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("configure billing: %v", err)
 	}
-	apiHandler := httpapi.NewHandler(sqliteStore, authManager, entitlementManager, cfg.DeploymentMode)
+	apiHandler := httpapi.NewHandler(sqliteStore, authManager, entitlementManager, cfg.DeploymentMode, cfg.EnableSyncDeltaMetadata)
 	handler := appserver.NewHandler(apiHandler, authManager, entitlementManager, billingService, staticDir, cfg.DeploymentMode)
 
 	server := &http.Server{

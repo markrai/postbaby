@@ -1,0 +1,342 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache-dependency-path: postbaby-backend/go.sum
+
+      - name: Test
+        working-directory: postbaby-backend
+        run: go test ./...
+
+  build:
+    name: Build linux/${{ matrix.arch }} tar
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+
+    steps:
+      - name: Prepare artifact names
+        id: names
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must match vMAJOR.MINOR.PATCH, for example v1.1.0. Actual: $tag" >&2
+            exit 1
+          fi
+
+          arch="${{ matrix.arch }}"
+          artifact_stem="postbaby-linux-${arch}"
+          artifact_dir="${RUNNER_TEMP}/postbaby-artifacts-${arch}"
+          mkdir -p "$artifact_dir"
+
+          tar_path="${artifact_dir}/${artifact_stem}.tar"
+          sha_path="${tar_path}.sha256"
+
+          {
+            echo "artifact_stem=${artifact_stem}"
+            echo "artifact_dir=${artifact_dir}"
+            echo "tar_path=${tar_path}"
+            echo "sha_path=${sha_path}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --platform "linux/${{ matrix.arch }}" \
+            --load \
+            -t postbaby:local \
+            .
+
+      - name: Export Portainer image tar
+        run: |
+          set -euo pipefail
+          docker save -o "${{ steps.names.outputs.tar_path }}" postbaby:local
+
+      - name: Generate SHA256 checksum
+        run: |
+          set -euo pipefail
+          tar_path="${{ steps.names.outputs.tar_path }}"
+          sha_path="${{ steps.names.outputs.sha_path }}"
+          file_name="$(basename "$tar_path")"
+          hash="$(sha256sum "$tar_path" | awk '{print $1}')"
+          printf '%s  %s\n' "$hash" "$file_name" > "$sha_path"
+
+      - name: Upload image tar artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.names.outputs.artifact_stem }}.tar
+          path: ${{ steps.names.outputs.tar_path }}
+          if-no-files-found: error
+          archive: false
+
+      - name: Upload checksum artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.names.outputs.artifact_stem }}.tar.sha256
+          path: ${{ steps.names.outputs.sha_path }}
+          if-no-files-found: error
+          archive: false
+
+  publish-image:
+    name: Publish multi-arch GHCR image
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  release:
+    name: Attest and Publish Signed Release
+    needs: [build, publish-image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Download image tar artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: ${{ runner.temp }}/release-assets
+          merge-multiple: true
+
+      - name: Resolve release assets
+        id: resolve
+        run: |
+          set -euo pipefail
+
+          asset_dir="${RUNNER_TEMP}/release-assets"
+          for arch in amd64 arm64; do
+            stem="postbaby-linux-${arch}"
+            tar_files=()
+            sha_files=()
+
+            while IFS= read -r -d '' file; do
+              tar_files+=("$file")
+            done < <(find "$asset_dir" -type f -name "${stem}.tar" -print0)
+
+            while IFS= read -r -d '' file; do
+              sha_files+=("$file")
+            done < <(find "$asset_dir" -type f -name "${stem}.tar.sha256" -print0)
+
+            if [ "${#tar_files[@]}" -ne 1 ]; then
+              echo "Expected exactly one image tar for ${arch}, found ${#tar_files[@]}." >&2
+              exit 1
+            fi
+            if [ "${#sha_files[@]}" -ne 1 ]; then
+              echo "Expected exactly one checksum for ${arch}, found ${#sha_files[@]}." >&2
+              exit 1
+            fi
+
+            tar_path="${tar_files[0]}"
+            sha_path="${sha_files[0]}"
+            provenance_path="${tar_path}.intoto.jsonl"
+
+            {
+              echo "linux_${arch}_tar_path=${tar_path}"
+              echo "linux_${arch}_sha_path=${sha_path}"
+              echo "linux_${arch}_provenance_path=${provenance_path}"
+            } >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Attest linux-amd64 image tar
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: ${{ steps.resolve.outputs.linux_amd64_tar_path }}
+
+      - name: Attest linux-arm64 image tar
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: ${{ steps.resolve.outputs.linux_arm64_tar_path }}
+
+      - name: Export and verify provenance bundles
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          LINUX_AMD64_TAR_PATH: ${{ steps.resolve.outputs.linux_amd64_tar_path }}
+          LINUX_AMD64_PROVENANCE_PATH: ${{ steps.resolve.outputs.linux_amd64_provenance_path }}
+          LINUX_ARM64_TAR_PATH: ${{ steps.resolve.outputs.linux_arm64_tar_path }}
+          LINUX_ARM64_PROVENANCE_PATH: ${{ steps.resolve.outputs.linux_arm64_provenance_path }}
+        run: |
+          set -euo pipefail
+
+          export_provenance() {
+            local subject_path="$1"
+            local provenance_path="$2"
+            local export_dir
+            export_dir="$(mktemp -d "${RUNNER_TEMP}/attestation-export-XXXXXX")"
+
+            cleanup() {
+              rm -rf "$export_dir"
+            }
+            trap cleanup EXIT
+
+            pushd "$export_dir" >/dev/null
+            gh attestation download "$subject_path" \
+              -R "$GH_REPO" \
+              --predicate-type "https://slsa.dev/provenance/v1"
+
+            mapfile -d '' bundle_files < <(find "$export_dir" -maxdepth 1 -type f \( -name 'sha256-*.jsonl' -o -name 'sha256:*.jsonl' \) -print0)
+            if [ "${#bundle_files[@]}" -ne 1 ]; then
+              echo "Expected exactly one attestation bundle for '${subject_path}', found ${#bundle_files[@]}." >&2
+              exit 1
+            fi
+
+            bundle_path="${bundle_files[0]}"
+            if [ ! -s "$bundle_path" ]; then
+              echo "Attestation bundle '${bundle_path}' is empty." >&2
+              exit 1
+            fi
+
+            cp "$bundle_path" "$provenance_path"
+            if [ ! -s "$provenance_path" ]; then
+              echo "Provenance file '${provenance_path}' is empty." >&2
+              exit 1
+            fi
+            case "$provenance_path" in
+              *.intoto.jsonl) ;;
+              *)
+                echo "Provenance filename must end with .intoto.jsonl." >&2
+                exit 1
+                ;;
+            esac
+
+            gh attestation verify "$subject_path" \
+              -R "$GH_REPO" \
+              --bundle "$provenance_path" \
+              --predicate-type "https://slsa.dev/provenance/v1" \
+              --signer-workflow "$GH_REPO/.github/workflows/release.yml" \
+              --deny-self-hosted-runners
+            popd >/dev/null
+          }
+
+          export_provenance "$LINUX_AMD64_TAR_PATH" "$LINUX_AMD64_PROVENANCE_PATH"
+          export_provenance "$LINUX_ARM64_TAR_PATH" "$LINUX_ARM64_PROVENANCE_PATH"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          LINUX_AMD64_TAR_PATH: ${{ steps.resolve.outputs.linux_amd64_tar_path }}
+          LINUX_AMD64_SHA_PATH: ${{ steps.resolve.outputs.linux_amd64_sha_path }}
+          LINUX_AMD64_PROVENANCE_PATH: ${{ steps.resolve.outputs.linux_amd64_provenance_path }}
+          LINUX_ARM64_TAR_PATH: ${{ steps.resolve.outputs.linux_arm64_tar_path }}
+          LINUX_ARM64_SHA_PATH: ${{ steps.resolve.outputs.linux_arm64_sha_path }}
+          LINUX_ARM64_PROVENANCE_PATH: ${{ steps.resolve.outputs.linux_arm64_provenance_path }}
+          PORTAINER_COMPOSE_PATH: docker-compose.portainer.yml
+        run: |
+          set -euo pipefail
+
+          asset_paths=(
+            "$LINUX_AMD64_TAR_PATH"
+            "$LINUX_AMD64_SHA_PATH"
+            "$LINUX_AMD64_PROVENANCE_PATH"
+            "$LINUX_ARM64_TAR_PATH"
+            "$LINUX_ARM64_SHA_PATH"
+            "$LINUX_ARM64_PROVENANCE_PATH"
+            "$PORTAINER_COMPOSE_PATH"
+          )
+
+          for path in "${asset_paths[@]}"; do
+            if [ ! -f "$path" ]; then
+              echo "Required release asset missing: '$path'." >&2
+              exit 1
+            fi
+          done
+
+          gh release create "$RELEASE_TAG" \
+            --generate-notes \
+            --title "$RELEASE_TAG" \
+            "${asset_paths[@]}"
