@@ -262,51 +262,55 @@ jobs:
           export_provenance() {
             local subject_path="$1"
             local provenance_path="$2"
-            local export_dir
+            local export_dir status=0
             export_dir="$(mktemp -d "${RUNNER_TEMP}/attestation-export-XXXXXX")"
 
-            cleanup() {
-              rm -rf "$export_dir"
-            }
-            trap cleanup EXIT
+            # Cleanup must run while export_dir is still in scope. EXIT traps fire
+            # after function locals are discarded, which breaks under set -u.
+            if ! (
+              set -euo pipefail
+              cd "$export_dir"
+              gh attestation download "$subject_path" \
+                -R "$GH_REPO" \
+                --predicate-type "https://slsa.dev/provenance/v1"
 
-            pushd "$export_dir" >/dev/null
-            gh attestation download "$subject_path" \
-              -R "$GH_REPO" \
-              --predicate-type "https://slsa.dev/provenance/v1"
-
-            mapfile -d '' bundle_files < <(find "$export_dir" -maxdepth 1 -type f \( -name 'sha256-*.jsonl' -o -name 'sha256:*.jsonl' \) -print0)
-            if [ "${#bundle_files[@]}" -ne 1 ]; then
-              echo "Expected exactly one attestation bundle for '${subject_path}', found ${#bundle_files[@]}." >&2
-              exit 1
-            fi
-
-            bundle_path="${bundle_files[0]}"
-            if [ ! -s "$bundle_path" ]; then
-              echo "Attestation bundle '${bundle_path}' is empty." >&2
-              exit 1
-            fi
-
-            cp "$bundle_path" "$provenance_path"
-            if [ ! -s "$provenance_path" ]; then
-              echo "Provenance file '${provenance_path}' is empty." >&2
-              exit 1
-            fi
-            case "$provenance_path" in
-              *.intoto.jsonl) ;;
-              *)
-                echo "Provenance filename must end with .intoto.jsonl." >&2
+              mapfile -t bundle_files < <(find "$export_dir" -maxdepth 1 -type f \( -name 'sha256-*.jsonl' -o -name 'sha256:*.jsonl' \) | sort)
+              if [ "${#bundle_files[@]}" -ne 1 ]; then
+                echo "Expected exactly one attestation bundle for '${subject_path}', found ${#bundle_files[@]}." >&2
                 exit 1
-                ;;
-            esac
+              fi
 
-            gh attestation verify "$subject_path" \
-              -R "$GH_REPO" \
-              --bundle "$provenance_path" \
-              --predicate-type "https://slsa.dev/provenance/v1" \
-              --signer-workflow "$GH_REPO/.github/workflows/release.yml" \
-              --deny-self-hosted-runners
-            popd >/dev/null
+              bundle_path="${bundle_files[0]}"
+              if [ ! -s "$bundle_path" ]; then
+                echo "Attestation bundle '${bundle_path}' is empty." >&2
+                exit 1
+              fi
+
+              cp "$bundle_path" "$provenance_path"
+              if [ ! -s "$provenance_path" ]; then
+                echo "Provenance file '${provenance_path}' is empty." >&2
+                exit 1
+              fi
+              case "$provenance_path" in
+                *.intoto.jsonl) ;;
+                *)
+                  echo "Provenance filename must end with .intoto.jsonl." >&2
+                  exit 1
+                  ;;
+              esac
+
+              gh attestation verify "$subject_path" \
+                -R "$GH_REPO" \
+                --bundle "$provenance_path" \
+                --predicate-type "https://slsa.dev/provenance/v1" \
+                --signer-workflow "$GH_REPO/.github/workflows/release.yml" \
+                --deny-self-hosted-runners
+            ); then
+              status=1
+            fi
+
+            rm -rf -- "$export_dir"
+            return "$status"
           }
 
           export_provenance "$LINUX_AMD64_TAR_PATH" "$LINUX_AMD64_PROVENANCE_PATH"
